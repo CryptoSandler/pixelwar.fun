@@ -102,6 +102,29 @@ describe("war lifecycle", () => {
     expect(current!.status).toBe("live");
   });
 
+  it("surfaces the next war when the running one's clock has just run out", async () => {
+    // Wars run back to back, so the instant one ends is when the next one
+    // matters most — and it is also when the most people are refreshing.
+    // Looking at only the oldest candidate ends that war and reports that
+    // there is nothing on, hiding the war queued behind it.
+    await insertWar({
+      slug: "expired",
+      status: "live",
+      startsAt: hoursFromNow(-50),
+      endsAt: hoursFromNow(-1),
+    });
+    await insertWar({
+      slug: "next-up",
+      status: "scheduled",
+      startsAt: hoursFromNow(2),
+      endsAt: hoursFromNow(50),
+    });
+
+    const current = await currentWar();
+    expect(current?.slug).toBe("next-up");
+    expect((await warBySlug("expired"))!.status).toBe("ended");
+  });
+
   it("has no current war once the only war has ended", async () => {
     await insertWar({
       slug: "w7",
