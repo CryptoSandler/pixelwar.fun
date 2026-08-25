@@ -181,7 +181,10 @@ CREATE UNIQUE INDEX entry_orders_token_unique ON entry_orders (war_token_id);
 CREATE INDEX entry_orders_status ON entry_orders (status, expires_at);
 ```
 
-`consumed_signatures`, `payments`, `unmatched_payments` and
+`consumed_signatures` marks a signature **spent** — claimed on success, and on a
+verdict that the transaction never paid us at all, but never on one the payer is
+told to retry and never on one that may be valid for a different order. See §5.
+It, `payments`, `unmatched_payments` and
 `verification_attempts` come from bidoor unchanged except that `bid_id` becomes
 `order_id`. `payments.signature` stays `UNIQUE`, and that constraint is the
 thing that makes a signature single-use across the whole system.

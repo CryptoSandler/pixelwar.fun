@@ -319,9 +319,27 @@ CREATE UNIQUE INDEX payments_order_unique ON payments (order_id);
 it is what a payment is looked up by, and a collision would attach one payment
 to two orders.
 
-`consumed_signatures` records every signature ever offered, with its outcome, so
-a signature that failed verification cannot be retried against a different
-order.
+`consumed_signatures` records a signature as **spent**, and spending it is not
+the same as having seen it.
+
+Claim it only when it can never settle anything: on success, and on a verdict
+saying the transaction did not pay us at all — it failed on chain, moved the
+wrong asset, or credited another wallet. Leave it unclaimed on everything else.
+
+Getting that backwards costs money twice. A wallet hands the browser its
+signature before the cluster confirms it, so `not_confirmed` is the *expected*
+first answer on the ordinary path — claim there and the retry we just asked the
+payer to make is refused as a reuse, while their USDC sits in our wallet
+crediting nobody. And `wrong_payer` or `insufficient_amount` describe a transfer
+that may be perfectly valid for a *different* order, so claiming on those lets
+anyone watching the chain post a stranger's signature against an order of their
+own and burn it.
+
+The replay guarantee never depended on this. `payments.signature UNIQUE` is what
+makes one signature settle at most one order, atomically, on the only path where
+settlement happens. `consumed_signatures` is an audit trail and a brake on
+pointless retries; `verification_attempts` is where an attempt that resolved
+nothing belongs.
 
 - [ ] **Step 2: Apply and assert the constraints hold**
 
