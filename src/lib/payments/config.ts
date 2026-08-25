@@ -1,3 +1,5 @@
+import { validateAddress } from "../tokens/addresses";
+
 /**
  * Payment configuration. We only ever RECEIVE: there is no private key, no
  * signing and no withdrawal path anywhere in this project. The wallet is
@@ -83,75 +85,17 @@ export function supportContact(): string | null {
   return process.env.SUPPORT_CONTACT?.trim() || null;
 }
 
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/;
-
-const BASE58_INDEX: Record<string, number> = {};
-for (let i = 0; i < BASE58_ALPHABET.length; i++) BASE58_INDEX[BASE58_ALPHABET[i]] = i;
-
-/**
- * Decodes a base58 string to bytes, or null when a character falls outside
- * the alphabet.
- *
- * This project speaks one chain. The sibling project's address checker covers
- * EVM, TRON and TON too, because it lists tokens across all of them; nothing
- * here ever needs those, so only the Solana case is carried across.
- */
-function base58Decode(input: string): Uint8Array | null {
-  const bytes: number[] = [0];
-  for (const char of input) {
-    const value = BASE58_INDEX[char];
-    if (value === undefined) return null;
-
-    let carry = value;
-    for (let i = 0; i < bytes.length; i++) {
-      carry += bytes[i] * 58;
-      bytes[i] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
-  }
-
-  // Every leading '1' is a leading zero byte.
-  for (const char of input) {
-    if (char !== BASE58_ALPHABET[0]) break;
-    bytes.push(0);
-  }
-
-  return Uint8Array.from(bytes.reverse());
-}
-
-type AddressCheck = { ok: true; address: string } | { ok: false; reason: string };
-
-/**
- * Shape-checks a Solana address: base58 that decodes to exactly 32 bytes.
- * Note: base58 is dense enough that lopping one character off a 44-character
- * address can still decode to 32 bytes, so this cannot catch every
- * truncation — only an on-chain lookup can.
- */
-function checkSolanaAddress(raw: string): AddressCheck {
-  if (!BASE58_RE.test(raw)) {
-    return {
-      ok: false,
-      reason: "A Solana address is base58: no 0, O, I or l, and no 0x prefix.",
-    };
-  }
-  const decoded = base58Decode(raw);
-  if (!decoded || decoded.length !== 32) {
-    return { ok: false, reason: "A Solana address decodes to 32 bytes (usually 32-44 characters)." };
-  }
-  return { ok: true, address: raw };
-}
-
 export type PaymentWalletResult = { ok: true; address: string } | { ok: false; reason: string };
 
 /**
  * Read and validate the receiving wallet. Deliberately has no fallback: a
  * default here would mean a misconfigured deploy quietly collects payments to
  * somebody else's address.
+ *
+ * Address validation itself is not duplicated here. It used to be a private
+ * base58 checker that had already drifted from the one in `solana.ts` — see
+ * `src/lib/tokens/addresses.ts` for the shared check both this and every
+ * chain's address input now go through.
  */
 export function paymentWallet(): PaymentWalletResult {
   const raw = process.env.PAYMENT_WALLET?.trim();
@@ -162,12 +106,12 @@ export function paymentWallet(): PaymentWalletResult {
     };
   }
 
-  const checked = checkSolanaAddress(raw);
+  const checked = validateAddress("solana", raw);
   if (!checked.ok) {
     return { ok: false, reason: `PAYMENT_WALLET is not a valid Solana address: ${checked.reason}` };
   }
 
-  return { ok: true, address: checked.address };
+  return { ok: true, address: checked.canonical };
 }
 
 /**
