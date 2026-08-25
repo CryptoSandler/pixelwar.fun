@@ -1,0 +1,63 @@
+{
+  "$comment": "Vendored agent skills. Downloaded by hand from the upstream repository, audited, committed, and hashed. Never installed from a registry at runtime. Verify with: node scripts/skills-lock.mjs verify",
+  "policy": {
+    "install": "git clone the upstream repo, read every file, copy into .claude/skills/ by hand",
+    "forbidden": "npx skills add, install.sh, or any installer that writes outside this repo",
+    "mcp": "An agent never adds an MCP server. Skills that instruct one to are patched before install.",
+    "audit": "docs/skills.md records authorship, licence, upstream commit, what was read, and every local modification."
+  },
+  "skills": {
+    "solana-dev": {
+      "source": "https://github.com/solana-foundation/solana-dev-skill",
+      "author": "Solana Foundation",
+      "authorVerification": "GitHub org solana-foundation, created 2019-12-10, 102 public repos, links solana.org and @SolanaFndn. Not domain-verified by GitHub.",
+      "license": "MIT",
+      "skillVersion": "2.4.0",
+      "upstreamCommit": "68ee828a6c25af0d834d07559c3b4a7fc3343321",
+      "upstreamPath": "skills/solana-dev",
+      "retrievedAt": "2026-08-25",
+      "installedPath": ".claude/skills/solana-dev",
+      "modified": true,
+      "modifications": [
+        "SKILL.md: the 'Solana MCP server' section, which told the agent to run `claude mcp add` before any Solana task without asking, is replaced with a prohibition. No other content changed."
+      ],
+      "treeSha256": "89a129cd51137382759091213c7f104058d430fca293b73c17e750bf71d19c35",
+      "files": {
+        "LICENSE": "1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685",
+        "SKILL.md": "b9585947a30740084e710d1f076682d848db8a7a7e226b5b5045681de682fa55",
+        "references/anchor/migrating-v0.32-to-v1.md": "53a29433fe066c8f616bced8a7f31c08c87e34a92175d96e714742352c0bf745",
+        "references/common-errors.md": "7a48d320b3781296bb7fe8024b61e3fdf3ee7e19e5ad3b986fc48a44f6d13a06",
+        "references/compatibility-matrix.md": "55a69a0c089ac35594ea765e25386df6ffb062c4d88c0d1622d1403f75f56ba3",
+        "references/concepts.md": "f3f0cb5b1ddbb7ad8d2e398425377e25d01049a1078b9445de8a205fcb142293",
+        "references/confidential-transfers.md": "6e5d2200a38619b29bfa245ef41511c5d972268ae0481d357425b2b9ab44e8c0",
+        "references/frontend.md": "cbadd8cdad06c1115fb025d7e7f26d9b4da6e592246abbcf83908de5bef29b24",
+        "references/idl-codegen.md": "f4a784d33a99dd3fa2283433381aa9595e6a605ec80cc7e866e1b355bbfdca75",
+        "references/kit-web3-interop.md": "36d8294fdf22d02da19be68818aff3ff08f03779a1ea92396146446e2718c1ba",
+        "references/kit/accounts.md": "9d891a3a18ec45a6c23af279171085a16bca5b305faaf4963dcfb6b24eff7c78",
+        "references/kit/advanced.md": "9818cac4a077c2cb5844593fb0e93b57b2ebfd1d4f785b7113d432ae3ab19cee",
+        "references/kit/codama.md": "ac18ec9c89ecde7934d43ee16a4f0e47b0fe03367007fcb142522b4754adecdd",
+        "references/kit/codecs.md": "8c81a9d44098c63f4daf9d53ec5b4416c18365c4886cce1358a17ec4e5be26bf",
+        "references/kit/gotchas.md": "67069beef3017cc2e8fe7ba0ff4a883845f333d7e7ad393ce76f7c26e1e648b4",
+        "references/kit/overview.md": "df2150106fc7299a0bd3910ce3c6d01131b3f31c23529efb1245f0bc6e047482",
+        "references/kit/plugins.md": "19cf5ecb491613530bf096aac7bd377643b0c78a74f0f3e03e15dbe204fa09d7",
+        "references/kit/programs/compute-budget.md": "adb4f75f714d92dec9e557dda95b0024650f599c563eae66be2bc4fc14472812",
+        "references/kit/programs/system.md": "a6d61084bd3d5192f9e37b3f3b0c16b95e2ea02b98cb87725688162a50b50d3d",
+        "references/kit/programs/token-2022.md": "26a841a3c7edfaff8898de2f32e18130f56d1584274ca3432458e1cfa47d1f8d",
+        "references/kit/programs/token.md": "4f3c5052be7169497dae7d6c1f2e72b7a067a5908472133cc2b1cdf388d0ca87",
+        "references/kit/react.md": "ed18ba39f40df884e40e096fbd7f785386bbb20de47aa142dec90391328ede46",
+        "references/payments.md": "80a5963d409714f5502b850ea272397fbc7d7e10490a8d8bab7c6edc8261e823",
+        "references/programs/anchor.md": "5578155abe4ba8e51832fd9f1c78cd2d1a9b178d1119a5c368bc13440207eeb2",
+        "references/programs/design-patterns.md": "531307a685b514f1a6e91e76cf0e76d987dd78a6fd2aa3e0afe6e3c58298d2cb",
+        "references/programs/pinocchio.md": "326740d5fc3e5d11c0bbe0dfbae5509c73bb5762759094634453cf4b27c78289",
+        "references/resources.md": "df14b7346b4ae6fb738b4647768d8da1b0b0e81bcf89aa0ffcfaebe7b06bb3a6",
+        "references/rpc-quick-lookups.md": "79f7f1be09af529261d7320aa9d9df78c40ee9647902d78bb1b8b007472f194d",
+        "references/security.md": "0bbdc8bd6cdb43fcf498fe8935a5dcb2d06615f62ff06b3e454641797f9112a5",
+        "references/surfpool/cheatcodes.md": "c288fbe2fb27fe214081ddac552e8a220d2c4040089c3a1fdaa40f27a1e70164",
+        "references/surfpool/kit-plugin.md": "71db8b85d65e4ff5dfffe2736007b1d37c3abc379aaaaaf887346193acbba512",
+        "references/surfpool/overview.md": "e004f6facdce132531c13758119d605bd6268b9ad3489468bea26f56f0234cde",
+        "references/testing.md": "823905325e3d3d48728237cfc8437c2929a0e1d6fb0bf2a6e9167aa157ebefec",
+        "references/transactions-v1.md": "538f5f85bcbe83f0f75b343274a9b29deda825126685b4e5fcbe69c39198c78b"
+      }
+    }
+  }
+}

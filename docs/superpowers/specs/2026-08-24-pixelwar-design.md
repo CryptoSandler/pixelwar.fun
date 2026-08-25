@@ -397,6 +397,18 @@ Pasting a signature by hand is a collapsed fallback, not the main path.
 There are no automatic refunds. The rules say what happens when we cancel a
 war, and it is an operator sending USDC back by hand.
 
+**Open for Batch B: a per-order reference key.** Solana Pay's convention is to
+attach a unique, unguessable pubkey to the transfer as a read-only account, and
+then find the payment server-side with `getSignaturesForAddress(reference)`.
+That is a third binding alongside the signature and the payer pubkey, and it
+fixes the one case the other two cannot: a payer who signs and then closes the
+tab never sends us the signature, so the payment reaches our wallet and no
+order ever learns about it. Today that ends in `unmatched_payments` and a
+manual refund. With a reference key the reconcile job finds it unaided. Cheap
+to add — one extra account on the instruction, one column on the order — and
+worth deciding on before the payment flow is written rather than after. See
+[docs/skills.md](../../skills.md) for where this came from.
+
 ## 6. Canvas API
 
 Three endpoints, no websockets.
