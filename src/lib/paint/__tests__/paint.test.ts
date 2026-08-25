@@ -12,7 +12,13 @@ beforeEach(() => {
 });
 
 describe("paintPixel", () => {
-  it("paints, allocates sequence 1, and reports the cooldown", async () => {
+  // Creating a war, creating a token, and painting are each their own
+  // sequential round trips to a remote Neon database, and several tests
+  // below add more paints or extra queries on top -- comfortably close
+  // enough to the suite's 5000ms default to fail intermittently on a
+  // slower hop. This and the other slow tests in the file get their own
+  // ceiling rather than raising the suite default for everything in it.
+  it("paints, allocates sequence 1, and reports the cooldown", { timeout: 20_000 }, async () => {
     const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 30 });
     const token = await makeToken(war.id, 5);
 
@@ -23,7 +29,7 @@ describe("paintPixel", () => {
     expect(Date.parse(result.cooldownUntil)).toBeGreaterThan(Date.now());
   });
 
-  it("records the pixel, the event, and the count together", async () => {
+  it("records the pixel, the event, and the count together", { timeout: 20_000 }, async () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 5);
     await paintPixel({ war, x: 0, y: 0, tokenId: token, ...KEYS });
@@ -239,7 +245,7 @@ describe("paintPixel", () => {
     expect(await query(`SELECT 1 FROM paint_cooldowns`)).toHaveLength(0);
   });
 
-  it("ignores a ban that has already expired", async () => {
+  it("ignores a ban that has already expired", { timeout: 20_000 }, async () => {
     const war = await makeWar();
     const token = await makeToken(war.id, 5);
     await execute(

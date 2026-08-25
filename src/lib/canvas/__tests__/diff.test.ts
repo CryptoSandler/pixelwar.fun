@@ -3,7 +3,10 @@ import { changesSince } from "../diff";
 import { makeToken, makeWar, paintRaw } from "./fixtures";
 
 describe("changesSince", () => {
-  it("returns nothing when the client is up to date", async () => {
+  // makeWar/makeToken/paintRaw are each their own sequential round trip to a
+  // remote Neon database, and this test's multiple paints land close enough
+  // to the suite's 5000ms default to fail intermittently on a slower hop.
+  it("returns nothing when the client is up to date", { timeout: 20_000 }, async () => {
     const war = await makeWar();
     const red = await makeToken(war.id, 1);
     await paintRaw(war.id, 1, red, 1, 1);
@@ -12,25 +15,29 @@ describe("changesSince", () => {
     expect(result).toEqual({ resync: false, seq: 1, changes: [] });
   });
 
-  it("returns only what happened after the given sequence, in order", async () => {
-    const war = await makeWar();
-    const red = await makeToken(war.id, 1);
-    const blue = await makeToken(war.id, 13);
+  it(
+    "returns only what happened after the given sequence, in order",
+    { timeout: 20_000 },
+    async () => {
+      const war = await makeWar();
+      const red = await makeToken(war.id, 1);
+      const blue = await makeToken(war.id, 13);
 
-    await paintRaw(war.id, 1, red, 1, 1);
-    await paintRaw(war.id, 2, blue, 13, 2);
-    await paintRaw(war.id, 3, red, 1, 3);
+      await paintRaw(war.id, 1, red, 1, 1);
+      await paintRaw(war.id, 2, blue, 13, 2);
+      await paintRaw(war.id, 3, red, 1, 3);
 
-    const result = await changesSince(war, 1);
-    expect(result).toEqual({
-      resync: false,
-      seq: 3,
-      changes: [
-        [2, 13],
-        [3, 1],
-      ],
-    });
-  });
+      const result = await changesSince(war, 1);
+      expect(result).toEqual({
+        resync: false,
+        seq: 3,
+        changes: [
+          [2, 13],
+          [3, 1],
+        ],
+      });
+    },
+  );
 
   // Twelve sequential writes to a remote database, so this one test gets a
   // wider ceiling. Raising the suite default instead would cost every other
@@ -53,7 +60,7 @@ describe("changesSince", () => {
     expect(result).toEqual({ resync: false, seq: 1, changes: [] });
   });
 
-  it("carries the colour of a cleared pixel as slot 0", async () => {
+  it("carries the colour of a cleared pixel as slot 0", { timeout: 20_000 }, async () => {
     const war = await makeWar();
     const red = await makeToken(war.id, 1);
     await paintRaw(war.id, 4, red, 1, 1);
