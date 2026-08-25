@@ -339,6 +339,17 @@ order.
 - Produces: `createOrder(input): Promise<CreateOrderResult>`, `orderById(id)`, `expireStaleOrders(): Promise<number>`, `freeColours(warId): Promise<number[]>`.
 - `CreateOrderResult` is `{ ok: true; order: Order }` or `{ ok: false; reason: "colour_taken" | "already_entered" | "war_full" | "war_closed" }`.
 
+**Which war statuses may be bought into.** `live` and `scheduled` yes — entry
+opens before a war starts and stays open while it runs. `draft`, `cancelled` and
+`ended` no, all reported as `war_closed`. A draft is an operator's unpublished
+work with no page a payer could even see it on; taking money for a war that may
+never run is how you end up owing refunds.
+
+**Colour slots are not capacity.** A war with five seats may hold slots 3, 9,
+14, 20 and 24. The palette is a fixed twenty-four identities and `max_tokens`
+caps how many are handed out, not which. Do not constrain a slot to
+`1..max_tokens`.
+
 **This is the subtle task of the batch.** The four `war_tokens` statuses are not interchangeable and the partial unique indexes from migration 001 encode the difference:
 
 - `reserved` — holds a colour, nobody has paid.
@@ -361,11 +372,31 @@ it("keeps a removed token's colour retired for the rest of the war", ...)
 it("lets exactly one of two simultaneous orders take a colour", ...)  // the index decides
 it("lets exactly one of two simultaneous orders take a token", ...)
 it("refuses once every colour is spoken for", ...)                    // war_full
+it("seats no more than max_tokens when two orders race the last seat", ...)
+it("reports war_full rather than colour_taken when both are true", ...)
 it("refuses an order on a war that has ended", ...)                   // war_closed
+it("refuses an order on a war that is still a draft", ...)            // war_closed
+it("accepts an order on a scheduled war", ...)   // entry opens before the war
 it("accepts an order while the war is running", ...)  // entry stays open mid-war
 ```
 
-The two concurrency tests must use `Promise.all` and assert exactly one success. Resolve the race with the unique index and translate the violation by constraint name — `isUniqueViolation` and `violatedConstraint` from `src/lib/db.ts` exist for this. Do not pre-check with a SELECT and then insert: two callers would both read "free" and both proceed.
+The concurrency tests must use `Promise.all` and assert exactly one success.
+
+**Colour and contract are arbitrated by the unique indexes. Capacity is not, and
+that is the trap.** `max_tokens` has no index behind it, so a `count(*) < max`
+condition — whether in a preceding SELECT or inside the INSERT's own WHERE — is
+not atomic under READ COMMITTED: two callers taking different colours each see
+the same pre-race count, both pass, and the war seats one token more than it
+allows. Take `SELECT ... FROM wars WHERE id = $1 FOR UPDATE` at the top of the
+transaction, the same way the paint path in Batch A serialises on that row to
+allocate its sequence. Order creation happens at most twenty-four times per war;
+serialising it costs nothing and is the only thing that makes the count mean
+what it says.
+
+Resolve the colour and contract races with the unique index and translate the
+violation by constraint name — `isUniqueViolation` and `violatedConstraint` from
+`src/lib/db.ts` exist for this. Do not pre-check with a SELECT and then insert:
+two callers would both read "free" and both proceed.
 
 - [ ] **Step 2: Implement, run, commit**
 
