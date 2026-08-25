@@ -1731,6 +1731,29 @@ describe("war lifecycle", () => {
     expect(current!.status).toBe("live");
   });
 
+  it("surfaces the next war when the running one's clock has just run out", async () => {
+    // Wars run back to back, so the instant one ends is when the next one
+    // matters most — and it is also when the most people are refreshing.
+    // Looking at only the oldest candidate ends that war and reports that
+    // there is nothing on, hiding the war queued behind it.
+    await insertWar({
+      slug: "expired",
+      status: "live",
+      startsAt: hoursFromNow(-50),
+      endsAt: hoursFromNow(-1),
+    });
+    await insertWar({
+      slug: "next-up",
+      status: "scheduled",
+      startsAt: hoursFromNow(2),
+      endsAt: hoursFromNow(50),
+    });
+
+    const current = await currentWar();
+    expect(current?.slug).toBe("next-up");
+    expect((await warBySlug("expired"))!.status).toBe("ended");
+  });
+
   it("has no current war once the only war has ended", async () => {
     await insertWar({
       slug: "w7",
@@ -1884,16 +1907,30 @@ export async function advanceWar(war: War): Promise<War> {
  * to do it.
  */
 export async function currentWar(): Promise<War | null> {
-  const row = await queryOne<WarRow>(
+  // Every candidate, oldest first — not just the oldest one.
+  //
+  // Taking a single row and giving up when it turns out to have ended hides
+  // the war queued behind it. Wars are meant to run back to back, so the
+  // moment one clock runs out is exactly when the next one matters, and that
+  // is also when the most people are looking. Advancing in order and
+  // returning the first war still standing costs one extra query in the
+  // common case and answers correctly in the case that actually hurts.
+  //
+  // The limit is a guard against a pathological backlog, not a real bound:
+  // v1 runs one war at a time with at most one scheduled behind it.
+  const rows = await query<WarRow>(
     `SELECT ${WAR_COLUMNS} FROM wars
       WHERE status IN ('live', 'scheduled')
       ORDER BY starts_at ASC
-      LIMIT 1`,
+      LIMIT 10`,
   );
-  if (!row) return null;
 
-  const advanced = await advanceWar(toWar(row));
-  return advanced.status === "ended" ? null : advanced;
+  for (const row of rows) {
+    const advanced = await advanceWar(toWar(row));
+    if (advanced.status !== "ended") return advanced;
+  }
+
+  return null;
 }
 
 export async function activeTokens(warId: string): Promise<WarToken[]> {
