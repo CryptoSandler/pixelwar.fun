@@ -108,9 +108,18 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [tokens]);
 
+  // The round trip is measured at 2.3-2.5s, and cooldownUntil only updates
+  // once the response arrives — so a button gated on cooldownUntil alone
+  // stays clickable for seconds after the first click. This flag closes that
+  // window: it is set before the request goes out and cleared in `finally`,
+  // so it covers every response path (200, 429, 409, and anything else)
+  // without duplicating the reset in each branch.
+  const [inFlight, setInFlight] = useState(false);
+
   const paintAt = useCallback(
     async (x: number, y: number) => {
-      if (!selectedId || warEnded || warNotStarted) return;
+      if (!selectedId || warEnded || warNotStarted || inFlight) return;
+      setInFlight(true);
       setError(null);
       try {
         const response = await fetch("/api/paint", {
@@ -160,9 +169,11 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         setError(message ?? "That pixel could not be painted. Please try again.");
       } catch {
         setError("Could not reach the server. Check your connection and try again.");
+      } finally {
+        setInFlight(false);
       }
     },
-    [selectedId, warEnded, warNotStarted, war.slug, applyLocal],
+    [selectedId, warEnded, warNotStarted, inFlight, war.slug, applyLocal],
   );
 
   const handleHover = useCallback((point: { x: number; y: number } | null, nextScale: number) => {
@@ -214,7 +225,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         <div className="flex flex-col items-center gap-2">
           <PaintButton
             cooldownUntil={cooldownUntil}
-            disabled={warEnded || warNotStarted || !selectedId || !target}
+            disabled={warEnded || warNotStarted || !selectedId || !target || inFlight}
             label="Paint"
             onPaint={() => target && paintAt(target.x, target.y)}
           />
