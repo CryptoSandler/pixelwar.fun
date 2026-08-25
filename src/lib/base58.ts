@@ -1,13 +1,15 @@
 /**
- * Base58 encode/decode, shared by every chain-address check in this
- * directory (and, via `validateAddress`, by `paymentWallet` in
- * `src/lib/payments/config.ts`).
+ * Base58 encode/decode. Lives here, outside `lib/tokens/`, because it is not
+ * a token concern: it backs `lib/tokens/addresses.ts`'s address checks (and,
+ * via `validateAddress`, `paymentWallet` in `lib/payments/config.ts`), and it
+ * separately backs `lib/payments/solana.ts`'s signature-shape check, which
+ * has nothing to do with what a token is called.
  *
- * This is the one copy. Before this module existed, `config.ts` and
- * `src/lib/payments/solana.ts` each carried their own private decoder, and
- * they had already drifted from each other inside a single batch — one
- * rejected empty input, the other did not. Duplicated logic like that does
- * not stay identical; it stays until someone hits the difference.
+ * This is the one copy. Before this module existed, `config.ts` carried a
+ * private decoder that had already drifted from `solana.ts`'s own private
+ * copy inside a single batch — one rejected empty input, the other did not.
+ * Duplicated logic like that does not stay identical; it stays until someone
+ * hits the difference.
  */
 
 const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";

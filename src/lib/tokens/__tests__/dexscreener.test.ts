@@ -74,6 +74,37 @@ describe("the token must be the base token of the pair", () => {
   });
 });
 
+// sameAddress is deliberately asymmetric: it folds case for EVM addresses
+// but not for Solana/TON/TRON ones. Both halves need their own test, or a
+// "simplification" that lowercases everything would pass the EVM half and
+// silently break the other three chains, with the suite staying green.
+describe("matching our address to the pair (sameAddress)", () => {
+  it("matches an EVM address to its own checksummed/mixed-case spelling", async () => {
+    // EVM addresses are case-insensitive: 0xdAC1... and 0xdac1... name the
+    // same account, so a lowercase query must still match a checksummed
+    // baseToken.address.
+    const lower = HYPE_ADDR.toLowerCase();
+    const result = await resolveToken(
+      "base",
+      lower,
+      serve([pair({ chainId: "base", baseToken: { address: HYPE_ADDR, name: "Tether", symbol: "USDT" } })]),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("does NOT match a Solana address to a case-variant of itself", async () => {
+    // Solana (like TON and TRON) is case-sensitive base58: lowercasing a
+    // mint can address a genuinely different account, so unlike EVM this
+    // must NOT match, and the lookup should behave as if the address were
+    // simply not on this chain.
+    const variant = MINT.toLowerCase();
+    const result = await resolveToken("solana", variant, serve([pair()]));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.kind).toBe("not_found");
+  });
+});
+
 describe("the token must be on the selected chain", () => {
   it("rejects a pair from a different chain", async () => {
     const wrongChain = pair({ chainId: "pulsechain" });

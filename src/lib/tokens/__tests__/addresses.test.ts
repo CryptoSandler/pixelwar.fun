@@ -115,6 +115,19 @@ describe("checkAddress: ton", () => {
     expect(checkAddress("ton", TON_EQ.slice(0, -1) + "t").ok).toBe(false);
   });
 
+  // The raw form is workchain ':' exactly 64 hex characters (32 bytes). The
+  // regex is anchored at both ends, so one character short or long must both
+  // fail rather than being truncated/padded and accepted.
+  it("rejects a raw address one hex character short (63)", () => {
+    const short = "0:b113a994cd5025016719f691393928eb75959b0e28975902c51d0feccc3621d";
+    expect(checkAddress("ton", short).ok).toBe(false);
+  });
+
+  it("rejects a raw address one hex character long (65)", () => {
+    const long = "0:b113a994cd5025016719f691393928eb75959b0e28975902c51d0feccc3621d10";
+    expect(checkAddress("ton", long).ok).toBe(false);
+  });
+
   it("collapses bounceable and non-bounceable into one canonical entry", () => {
     const eq = checkAddress("ton", TON_EQ);
     const uq = checkAddress("ton", TON_UQ);

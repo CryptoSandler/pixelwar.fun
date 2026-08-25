@@ -1,4 +1,4 @@
-import { base58Decode } from "./base58";
+import { base58Decode } from "../base58";
 import { getChain } from "./chains";
 
 export type AddressFamily = "evm" | "solana" | "ton" | "tron";

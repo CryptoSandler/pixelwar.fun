@@ -1,3 +1,4 @@
+import { base58Decode } from "../base58";
 import {
   BLOCKTIME_SKEW_SECONDS,
   RPC_BACKOFF_MAX_MS,
@@ -90,48 +91,13 @@ export type SolanaTransaction = {
 /** Injected so tests can drive the verifier with fixture transactions. */
 export type TransactionFetcher = (signature: string) => Promise<SolanaTransaction>;
 
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const BASE58_INDEX: Record<string, number> = {};
-for (let i = 0; i < BASE58_ALPHABET.length; i++) BASE58_INDEX[BASE58_ALPHABET[i]] = i;
-
-/** Decodes a base58 string to bytes, or null when a character falls outside the alphabet. */
-function base58Decode(input: string): Uint8Array | null {
-  if (input.length === 0) return null;
-
-  const bytes: number[] = [0];
-  for (const char of input) {
-    const value = BASE58_INDEX[char];
-    if (value === undefined) return null;
-
-    let carry = value;
-    for (let i = 0; i < bytes.length; i++) {
-      carry += bytes[i] * 58;
-      bytes[i] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
-  }
-
-  // Every leading '1' is a leading zero byte.
-  for (const char of input) {
-    if (char !== BASE58_ALPHABET[0]) break;
-    bytes.push(0);
-  }
-
-  return Uint8Array.from(bytes.reverse());
-}
-
 /**
  * A Solana signature is 64 bytes of base58 — usually 87 or 88 characters.
  *
- * This is a small local copy of the decoder rather than a shared module:
- * nothing else in this codebase validates signature shape yet — `config.ts`
- * carries its own local copy of the same decoder for the same reason, to
- * check addresses — and the paste-a-signature input path that would want to
- * share this belongs to a later task, not this one.
+ * The decoder itself lives in `lib/base58.ts`, shared with the address
+ * checks in `lib/tokens/addresses.ts`. What stays here is this shape check:
+ * a signature is not an address, and nothing else in this codebase judges
+ * "is this 64 bytes of base58" but this function.
  */
 function isSignatureShaped(signature: string): boolean {
   const decoded = base58Decode(signature.trim());
