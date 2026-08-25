@@ -134,11 +134,14 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
-    // One fork. Later tasks add tests that truncate shared tables, and running
-    // files in parallel would have them delete each other's fixtures
+    // One worker. Later tasks add tests that truncate shared tables, and
+    // running files in parallel would have them delete each other's fixtures
     // mid-assertion.
+    //
+    // Vitest 4 removed `poolOptions.forks.singleFork`; `fileParallelism: false`
+    // is its top-level replacement.
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    fileParallelism: false,
   },
 });
 ```
