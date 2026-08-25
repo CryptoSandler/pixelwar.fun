@@ -642,11 +642,11 @@ touch. A pointer-up only paints if total movement stayed under a threshold —
 without it every pan on a phone ends in an accidental pixel, which is the
 single most valuable detail in the reference reading.
 
-**Painting.** Pick a token from the rail (each entry: colour chip, logo,
-ticker, current pixel count), tap a pixel, confirm. Number keys `1`–`9` and
+**Painting.** Pick a token from the rail (each entry: colour chip, ticker,
+current pixel count), tap a pixel to paint it, or aim and use the paint button.
+The token logo is not shown in the rail today. Number keys `1`–`9` and
 then letters select tokens directly. The cooldown renders **inside the paint
-button** — the button is the timer: `MM:SS` above a second, milliseconds in the
-final second, then back to its label. The client predicts its own cooldown on
+button** — the button is the timer, counting `MM:SS` down to its label. The client predicts its own cooldown on
 paint and reconciles with `cooldownUntil` from the response.
 
 **HUD.** Coordinates and zoom at the top centre, `(x, y) 4.0x`. Time remaining
@@ -708,7 +708,9 @@ Optional: `SITE_URL` (defaults to `https://pixelwar.fun`),
 (1), `PAINT_SUBNET_BURST` and `PAINT_SUBNET_WINDOW_SECONDS`,
 `DIFF_MAX_CHANGES` (8000), `TURNSTILE_SECRET` (unset; the hook is inert).
 
-Must not be set in production: `ALLOW_UNTRUSTED_CLIENT_IP`, `LOAD_DEMO_SEED`.
+Must not be set in production: `ALLOW_UNTRUSTED_CLIENT_IP`. The demo seed is
+gated on `NODE_ENV` rather than a variable of its own — one less switch that
+can be left in the wrong position.
 
 Entry price and duration are deliberately **not** here. They live on the war
 row and are set by an operator.
