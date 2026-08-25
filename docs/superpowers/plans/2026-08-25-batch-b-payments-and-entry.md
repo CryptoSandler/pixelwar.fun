@@ -91,7 +91,7 @@ src/components/ColourPicker.tsx            free colours only
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `USDC_MINT: string`, `USDC_DECIMALS: 6`, `PAYMENT_WINDOW_MINUTES: 30`, `LATE_CONFIRM_GRACE_MINUTES: 10`, `BLOCKTIME_SKEW_SECONDS: 120`, `RPC_COMMITMENT: "confirmed"`, `RPC_MAX_ATTEMPTS`, `RPC_BACKOFF_MS`, `RPC_BACKOFF_MAX_MS`, `VERIFY_LIMITS`, `solanaRpcUrls(): string[]`, `paymentWallet(): { ok: true; address: string } | { ok: false; reason: string }`, `usdToBaseUnits(amountUsd: number): bigint`, `formatUsdc(baseUnits: bigint): string`, `supportContact(): string | null`.
+- Produces: `USDC_MINT: string`, `USDC_DECIMALS: 6`, `PAYMENT_WINDOW_MINUTES: 30`, `LATE_CONFIRM_GRACE_MINUTES: 10` (see below), `BLOCKTIME_SKEW_SECONDS: 120`, `RPC_COMMITMENT: "confirmed"`, `RPC_MAX_ATTEMPTS`, `RPC_BACKOFF_MS`, `RPC_BACKOFF_MAX_MS`, `VERIFY_LIMITS`, `solanaRpcUrls(): string[]`, `paymentWallet(): { ok: true; address: string } | { ok: false; reason: string }`, `usdToBaseUnits(amountUsd: number): bigint`, `formatUsdc(baseUnits: bigint): string`, `supportContact(): string | null`.
 
 - [ ] **Step 1: Read the source before copying it**
 
@@ -100,6 +100,16 @@ sed -n '1,120p' ~/proyectos/outbid-tokens/src/lib/payments/config.ts
 ```
 
 Carry across the USDC constants, the RPC settings, `solanaRpcUrls`, `paymentWallet`, `usdToBaseUnits`, `formatUsdc`, `supportContact` and `VERIFY_LIMITS`, with their comments intact. **Do not carry** `FRACTION_MIN`, `FRACTION_MAX`, `FRACTION_UNIT_BASE`, `paymentBaseUnits` or `RATE_LIMITS` — those implement bidoor's unique-amount matching, which this product replaces with signature-plus-pubkey binding, and dead payment code is worse than none.
+
+**What `LATE_CONFIRM_GRACE_MINUTES` means**, because Task 7 must not have to
+guess: a reservation frees its colour the moment it expires — that is settled in
+§5 and does not change. This constant governs only whether a `/confirm` arriving
+after expiry still *tries* to take the colour back. Inside
+`PAYMENT_WINDOW_MINUTES + LATE_CONFIRM_GRACE_MINUTES` of the order's creation, a
+verified payment attempts the flip to `active` and is offered the remaining
+colours if its own was taken. Past that, it goes straight to
+`unmatched_payments` for an operator, because somebody who surfaces forty
+minutes later is in a conversation with support, not in a checkout.
 
 Batch A's `src/lib/config.ts` already holds `rateLimitSalt`, `trustedProxyHops`, `trustedPlatformHeader` and `allowUntrustedClientIp`. Do not duplicate them here; import them if you need them.
 
@@ -120,7 +130,20 @@ describe("USDC amounts", () => {
     // is inventing a price, and rounding it silently would take the wrong sum.
     expect(() => usdToBaseUnits(1.005)).toThrow();
     expect(() => usdToBaseUnits(-1)).toThrow();
+    expect(() => usdToBaseUnits(-0)).toThrow();
     expect(() => usdToBaseUnits(Number.NaN)).toThrow();
+    expect(() => usdToBaseUnits(Number.POSITIVE_INFINITY)).toThrow();
+  });
+
+  it("refuses an amount too large for a JS number to hold exactly", () => {
+    // The guard must be Number.isSafeInteger, not Number.isInteger. Past 2^53
+    // a float no longer has a neighbour: 2**60 and 2**60 + 1 are the SAME
+    // value, so two different intended amounts arrive as one and neither the
+    // caller nor we can tell which was meant. Refusing is the only honest
+    // answer a money function has there.
+    expect(() => usdToBaseUnits(2 ** 60)).toThrow();
+    expect(() => usdToBaseUnits(Number.MAX_SAFE_INTEGER + 2)).toThrow();
+    expect(usdToBaseUnits(Number.MAX_SAFE_INTEGER - 1)).toBeTypeOf("bigint");
   });
 
   it("round-trips through formatUsdc", () => {
@@ -338,6 +361,12 @@ for f in chains addresses links dexscreener; do
   cp ~/proyectos/outbid-tokens/src/lib/$f.ts src/lib/tokens/$f.ts
 done
 ```
+
+**Task 1 left you a duplicate to remove.** It wrote a private Solana base58
+checker inline in `src/lib/payments/config.ts` because no address utility
+existed yet. Now one does: delete that private checker and have `paymentWallet`
+call `validateAddress("solana", …)`. Two independent address validators in one
+codebase will drift, and the one that drifts is the one nobody remembers exists.
 
 Read each. Keep the comments — particularly the one on `pickPair`, which explains that DexScreener returns pairs and the token you asked about is not always the pair's base token, so reading `baseToken` blindly lists the wrong token's name and logo.
 
