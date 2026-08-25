@@ -1,0 +1,236 @@
+import type { PoolClient } from "pg";
+import { subnetBurst } from "../config";
+import { transaction } from "../db";
+import type { War } from "../wars/lifecycle";
+import { isBanned } from "./bans";
+
+/**
+ * One pixel, one transaction.
+ *
+ * Everything that decides whether a paint is allowed happens inside it: the
+ * war's own clock, the bans, the cooldowns, the sequence allocation and the
+ * counts. Any check made outside is a check a second request can race past.
+ */
+
+export type PaintFailure =
+  | "war_not_live"
+  | "out_of_bounds"
+  | "unknown_token"
+  | "banned"
+  | "cooldown";
+
+export type PaintResult =
+  | { ok: true; seq: number; idx: number; colourSlot: number; cooldownUntil: string }
+  | { ok: false; reason: PaintFailure; message: string; retryAfterSeconds?: number };
+
+export type PaintInput = {
+  war: War;
+  x: number;
+  y: number;
+  tokenId: string;
+  painterKey: string;
+  ipHash: string;
+  subnetKey: string;
+};
+
+/**
+ * Takes one cooldown key. Returns false when the caller must wait.
+ *
+ * The condition lives in the UPDATE's WHERE clause rather than in a SELECT
+ * followed by an UPDATE, so two concurrent paints cannot both read "clear" and
+ * both proceed — the second one updates zero rows and loses.
+ */
+async function takeInterval(
+  client: PoolClient,
+  warId: string,
+  keyType: "painter" | "ip",
+  key: string,
+  seconds: number,
+): Promise<boolean> {
+  const result = await client.query(
+    `INSERT INTO paint_cooldowns AS c (war_id, key_type, key, last_painted_at, window_start, window_count)
+     VALUES ($1, $2, $3, now(), now(), 1)
+     ON CONFLICT (war_id, key_type, key) DO UPDATE
+       SET last_painted_at = now(), window_count = c.window_count + 1
+       WHERE c.last_painted_at <= now() - ($4 || ' seconds')::interval
+     RETURNING last_painted_at`,
+    [warId, keyType, key, String(seconds)],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** The subnet key is gated on a count per window, not on an interval. */
+async function takeBurst(
+  client: PoolClient,
+  warId: string,
+  key: string,
+): Promise<boolean> {
+  const { cap, windowSeconds } = subnetBurst();
+  const result = await client.query(
+    `INSERT INTO paint_cooldowns AS c (war_id, key_type, key, last_painted_at, window_start, window_count)
+     VALUES ($1, 'subnet', $2, now(), now(), 1)
+     ON CONFLICT (war_id, key_type, key) DO UPDATE
+       SET last_painted_at = now(),
+           window_start = CASE WHEN c.window_start <= now() - ($3 || ' seconds')::interval
+                               THEN now() ELSE c.window_start END,
+           window_count = CASE WHEN c.window_start <= now() - ($3 || ' seconds')::interval
+                               THEN 1 ELSE c.window_count + 1 END
+       WHERE c.window_start <= now() - ($3 || ' seconds')::interval OR c.window_count < $4
+     RETURNING window_count`,
+    [warId, key, String(windowSeconds), cap],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+async function secondsUntilFree(
+  client: PoolClient,
+  warId: string,
+  painterKey: string,
+  ipHash: string,
+  cooldownSeconds: number,
+): Promise<number> {
+  const result = await client.query<{ wait: string }>(
+    `SELECT MAX(EXTRACT(EPOCH FROM (last_painted_at + ($4 || ' seconds')::interval - now()))) AS wait
+       FROM paint_cooldowns
+      WHERE war_id = $1 AND ((key_type = 'painter' AND key = $2) OR (key_type = 'ip' AND key = $3))`,
+    [warId, painterKey, ipHash, String(cooldownSeconds)],
+  );
+  return Math.max(1, Math.ceil(Number(result.rows[0]?.wait ?? 1)));
+}
+
+export async function paintPixel(input: PaintInput): Promise<PaintResult> {
+  const { war, x, y, tokenId, painterKey, ipHash, subnetKey } = input;
+
+  if (
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    y < 0 ||
+    x >= war.width ||
+    y >= war.height
+  ) {
+    return { ok: false, reason: "out_of_bounds", message: "That pixel is not on the board." };
+  }
+
+  const idx = y * war.width + x;
+
+  return transaction(async (client) => {
+    // The war's own clock, read inside the transaction: a war that ended while
+    // the request was in flight must not accept this paint.
+    const warRow = await client.query<{ status: string; ended: boolean; cooldown_seconds: number }>(
+      `SELECT status, (ends_at <= now()) AS ended, cooldown_seconds FROM wars WHERE id = $1`,
+      [war.id],
+    );
+    const current = warRow.rows[0];
+    if (!current || current.status !== "live" || current.ended) {
+      return {
+        ok: false as const,
+        reason: "war_not_live" as const,
+        message: "This war is not accepting pixels.",
+      };
+    }
+
+    if (await isBanned(client, { painterKey, ipHash, subnetKey })) {
+      return {
+        ok: false as const,
+        reason: "banned" as const,
+        message: "You cannot paint in this war.",
+      };
+    }
+
+    const token = await client.query<{ colour_slot: number }>(
+      `SELECT colour_slot FROM war_tokens
+        WHERE id = $1 AND war_id = $2 AND status = 'active'`,
+      [tokenId, war.id],
+    );
+    if (token.rowCount === 0) {
+      return {
+        ok: false as const,
+        reason: "unknown_token" as const,
+        message: "That token is not in this war.",
+      };
+    }
+    const colourSlot = token.rows[0].colour_slot;
+
+    // Always painter, then ip, then subnet. A fixed order means two concurrent
+    // paints can never hold one key each and wait on the other.
+    const cooldown = current.cooldown_seconds;
+    if (
+      !(await takeInterval(client, war.id, "painter", painterKey, cooldown)) ||
+      !(await takeInterval(client, war.id, "ip", ipHash, cooldown)) ||
+      !(await takeBurst(client, war.id, subnetKey))
+    ) {
+      const wait = await secondsUntilFree(client, war.id, painterKey, ipHash, cooldown);
+      // Roll back: a refused paint must not leave a half-taken cooldown behind.
+      throw new CooldownError(wait);
+    }
+
+    const seqRow = await client.query<{ last_seq: string }>(
+      `UPDATE wars SET last_seq = last_seq + 1 WHERE id = $1 RETURNING last_seq`,
+      [war.id],
+    );
+    const seq = Number(seqRow.rows[0].last_seq);
+
+    const previous = await client.query<{ war_token_id: string }>(
+      `SELECT war_token_id FROM pixels WHERE war_id = $1 AND idx = $2`,
+      [war.id, idx],
+    );
+
+    await client.query(
+      `INSERT INTO pixels (war_id, idx, war_token_id, seq, painted_at, painter_key, ip_hash)
+       VALUES ($1, $2, $3, $4, now(), $5, $6)
+       ON CONFLICT (war_id, idx) DO UPDATE
+         SET war_token_id = $3, seq = $4, painted_at = now(), painter_key = $5, ip_hash = $6`,
+      [war.id, idx, tokenId, seq, painterKey, ipHash],
+    );
+
+    await client.query(
+      `INSERT INTO pixel_events (war_id, seq, idx, colour_slot, painted_at)
+       VALUES ($1, $2, $3, $4, now())`,
+      [war.id, seq, idx, colourSlot],
+    );
+
+    const previousOwner = previous.rows[0]?.war_token_id;
+    if (previousOwner && previousOwner !== tokenId) {
+      await client.query(
+        `UPDATE token_pixel_counts SET owned = GREATEST(0, owned - 1)
+          WHERE war_id = $1 AND war_token_id = $2`,
+        [war.id, previousOwner],
+      );
+    }
+
+    await client.query(
+      `INSERT INTO token_pixel_counts (war_id, war_token_id, owned, placed)
+       VALUES ($1, $2, 1, 1)
+       ON CONFLICT (war_id, war_token_id) DO UPDATE
+         SET owned = token_pixel_counts.owned + $3, placed = token_pixel_counts.placed + 1`,
+      [war.id, tokenId, previousOwner === tokenId ? 0 : 1],
+    );
+
+    return {
+      ok: true as const,
+      seq,
+      idx,
+      colourSlot,
+      cooldownUntil: new Date(Date.now() + cooldown * 1000).toISOString(),
+    };
+  }).catch((error: unknown) => {
+    if (error instanceof CooldownError) {
+      return {
+        ok: false as const,
+        reason: "cooldown" as const,
+        retryAfterSeconds: error.retryAfterSeconds,
+        message: `Wait ${error.retryAfterSeconds} second${error.retryAfterSeconds === 1 ? "" : "s"} before painting again.`,
+      };
+    }
+    throw error;
+  });
+}
+
+/** Thrown to roll the transaction back; translated to a result by the caller. */
+class CooldownError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super("cooldown");
+    this.name = "CooldownError";
+  }
+}
