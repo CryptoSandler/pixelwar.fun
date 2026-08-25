@@ -144,3 +144,88 @@ describe("shortenAddress", () => {
     expect(shortenAddress("abc")).toBe("abc");
   });
 });
+
+/**
+ * Fix round 1, Finding 1 (Critical): `base58Decode` is O(n^2) — it walks the
+ * growing byte accumulator once per input character — and neither
+ * `checkSolana` nor `checkAddress`'s dispatcher used to reject an oversized
+ * input before reaching it. A caller who wants an unclaimed CPU-second only
+ * has to send one very long string.
+ *
+ * These tests are load-bearing on TIME, not just on the boolean result: an
+ * assertion that merely checks `ok === false` would keep passing even if
+ * someone reintroduced the quadratic path, as long as it eventually finished
+ * — these tests would not, they use the suite's ordinary 5s default (no
+ * `{ timeout: 20_000 }` override) and their own explicit wall-clock bound, so
+ * a regression to quadratic behaviour fails loudly instead of just being
+ * slow. 200,000 characters was measured by the reviewer at ~1s pre-fix for
+ * Solana alone with the OLD, unbounded regex; this is comfortably past that.
+ */
+describe("length is rejected before any decoding runs", () => {
+  const HUGE = 200_000;
+
+  it("rejects an oversized Solana address quickly", () => {
+    const huge = "A".repeat(HUGE); // valid base58 characters throughout
+    const started = Date.now();
+    const result = checkAddress("solana", huge);
+    const elapsedMs = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("rejects an oversized EVM address quickly", () => {
+    const huge = "0x" + "0".repeat(HUGE);
+    const started = Date.now();
+    const result = checkAddress("evm", huge);
+    const elapsedMs = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("rejects an oversized TRON address quickly", () => {
+    const huge = "T" + "A".repeat(HUGE);
+    const started = Date.now();
+    const result = checkAddress("tron", huge);
+    const elapsedMs = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("rejects an oversized TON address quickly", () => {
+    const huge = "0:" + "0".repeat(HUGE);
+    const started = Date.now();
+    const result = checkAddress("ton", huge);
+    const elapsedMs = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("uses each family's ordinary shape reason, not a separate 'too long' message", () => {
+    // Confirms the length gate answers with the SAME reason the family's own
+    // checker gives for a malformed address of ordinary size, per the fix's
+    // instruction: refuse with "the family's normal 'not a valid address'
+    // answer".
+    const solanaLong = checkAddress("solana", "A".repeat(HUGE));
+    const solanaBadShape = checkAddress("solana", "0xnotsolana");
+    expect(!solanaLong.ok && !solanaBadShape.ok && solanaLong.reason).toBe(
+      "A Solana address decodes to 32 bytes (usually 32–44 characters).",
+    );
+
+    const evmLong = checkAddress("evm", "0x" + "0".repeat(HUGE));
+    expect(!evmLong.ok && evmLong.reason).toBe(
+      "An EVM address is 0x followed by exactly 40 hex characters.",
+    );
+  });
+
+  it("still rejects a merely wrong-length address the same as before", () => {
+    // The new gate must not swallow the ordinary "too short"/"too long by a
+    // little" cases into some new blanket answer — those still go through
+    // the family's own check unchanged.
+    expect(checkAddress("solana", "short").ok).toBe(false);
+    expect(checkAddress("evm", "0x1234").ok).toBe(false);
+  });
+});

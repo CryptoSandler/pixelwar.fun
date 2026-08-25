@@ -20,6 +20,16 @@ const FAILURE_STATUS: Record<CreateOrderFailureReason, number> = {
 };
 
 /**
+ * A defensive bound on `contract` and `payerPubkey`, checked before either
+ * ever reaches `validateAddress`. Generous for every chain's real address
+ * shape (the longest, TON's raw form, is 67 characters) — this exists only
+ * to stop an oversized string from being handed to an address checker at
+ * all, on top of the length gate `validateAddress` now enforces itself for
+ * every future caller, not only this one.
+ */
+const MAX_RAW_ADDRESS_LENGTH = 128;
+
+/**
  * Orders allowed per `ip_hash` inside the window below.
  *
  * A function, not a constant, for the same reason as everything in
@@ -122,6 +132,21 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // Capped before `validateAddress` is ever reached: the decoder behind it
+  // is O(n^2) on a long enough input (see addresses.ts), and there is no
+  // legitimate address anywhere near this long. A free, early rejection
+  // here protects this route even if a future address family's shape check
+  // were ever looser than it should be.
+  if (
+    contract.length > MAX_RAW_ADDRESS_LENGTH ||
+    (payerPubkey !== undefined && payerPubkey.length > MAX_RAW_ADDRESS_LENGTH)
+  ) {
+    return json(
+      { error: `contract and payerPubkey must be at most ${MAX_RAW_ADDRESS_LENGTH} characters.` },
+      { status: 400, headers: NO_STORE },
+    );
+  }
+
   // Checked before anything else costs a round trip: a deployment with no
   // receiving wallet cannot quote a payTo address, so there is nothing an
   // order created now could tell a payer. The specific reason is for the
@@ -152,6 +177,11 @@ export async function POST(request: Request): Promise<Response> {
   // Solana address family specifically, not against `chainId`.
   let checkedPayer: string | undefined;
   if (payerPubkey !== undefined) {
+    if (payerPubkey.trim() === "") {
+      // validateAddress's empty-input message says "contract address" —
+      // right for the token address, wrong for a wallet.
+      return json({ error: "Enter a payer wallet address." }, { status: 400, headers: NO_STORE });
+    }
     const result = validateAddress("solana", payerPubkey);
     if (!result.ok) return json({ error: result.reason }, { status: 400, headers: NO_STORE });
     checkedPayer = result.canonical;

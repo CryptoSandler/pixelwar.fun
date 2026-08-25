@@ -342,6 +342,74 @@ describe("POST /api/orders", () => {
   );
 
   it(
+    "gives an empty payerPubkey its own message, not the contract-address one",
+    { timeout: 20_000 },
+    async () => {
+      const war = await makeWar();
+
+      const response = await ordersRoute(
+        post("/api/orders", orderBody({ warSlug: war.slug, payerPubkey: "" })),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(body.error).toMatch(/payer/i);
+      expect(body.error).not.toMatch(/contract/i);
+    },
+  );
+
+  /**
+   * Fix round 1, Finding 1 (Critical): `validateAddress` is called on both
+   * `contract` and `payerPubkey` with no length check before it, and
+   * `base58Decode` behind it is O(n^2) — the reviewer measured ~1s at
+   * 50,000 characters and ~3.6s at 100,000, scaling quadratically, against
+   * this exact route before the fix. An ordinary 1-2MB POST body is well
+   * within any platform's request-size limit and comfortably carries a
+   * 200,000-character string, so a handful of concurrent requests like this
+   * used to pin a serverless function's budget on the endpoint that takes
+   * money. Both fields are timed here, not just checked for a 400: the DB
+   * fixture (`makeWar`) is allowed the suite's usual 20s ceiling for a slow
+   * network hop, but the route call itself is asserted well under a second,
+   * so a regression back to quadratic behaviour fails on time, not just
+   * eventually returns the right status.
+   */
+  it(
+    "400s promptly for an enormous contract address",
+    { timeout: 20_000 },
+    async () => {
+      const war = await makeWar();
+      const huge = "A".repeat(200_000);
+
+      const started = Date.now();
+      const response = await ordersRoute(
+        post("/api/orders", orderBody({ warSlug: war.slug, contract: huge })),
+      );
+      const elapsedMs = Date.now() - started;
+
+      expect(response.status).toBe(400);
+      expect(elapsedMs).toBeLessThan(1_000);
+    },
+  );
+
+  it(
+    "400s promptly for an enormous payerPubkey",
+    { timeout: 20_000 },
+    async () => {
+      const war = await makeWar();
+      const huge = "A".repeat(200_000);
+
+      const started = Date.now();
+      const response = await ordersRoute(
+        post("/api/orders", orderBody({ warSlug: war.slug, payerPubkey: huge })),
+      );
+      const elapsedMs = Date.now() - started;
+
+      expect(response.status).toBe(400);
+      expect(elapsedMs).toBeLessThan(1_000);
+    },
+  );
+
+  it(
     "404s for a war that does not exist",
     { timeout: 20_000 },
     async () => {

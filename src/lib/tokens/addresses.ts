@@ -12,6 +12,43 @@ const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/;
 const TON_FRIENDLY_RE = /^[A-Za-z0-9_-]{48}$/;
 const TON_RAW_RE = /^(-1|0):[0-9a-fA-F]{64}$/;
 
+const EVM_SHAPE_REASON = "An EVM address is 0x followed by exactly 40 hex characters.";
+const SOLANA_LENGTH_REASON = "A Solana address decodes to 32 bytes (usually 32–44 characters).";
+const TRON_SHAPE_REASON = "A TRON address starts with T and is 34 characters.";
+const TON_SHAPE_REASON =
+  "A TON address is 48 characters (usually starting EQ or UQ) or raw 0:<64 hex>.";
+
+/**
+ * Longest input each family's real addresses can ever be, checked before any
+ * family-specific parsing runs.
+ *
+ * `base58Decode` (behind Solana and TRON) is O(n^2) — it walks the growing
+ * byte accumulator once per input character — so an oversized string has to
+ * be refused by length alone, before the decoder (or any other per-family
+ * work) ever touches it. Every family has a fixed shape; nothing legitimate
+ * is ever longer than this, so the reason given is each family's ordinary
+ * "not a valid address" answer, not a separate "too long" message.
+ *
+ * - solana: base58 encoding 32 bytes, 32–44 characters.
+ * - evm: "0x" + 40 hex characters = 42.
+ * - tron: fixed-width base58check, 34 characters.
+ * - ton: the longer of its two accepted forms — raw "-1:" + 64 hex = 67
+ *   characters; the friendly form is a fixed 48.
+ */
+const MAX_ADDRESS_LENGTH: Record<AddressFamily, number> = {
+  solana: 44,
+  evm: 42,
+  tron: 34,
+  ton: 67,
+};
+
+const SHAPE_REASON: Record<AddressFamily, string> = {
+  solana: SOLANA_LENGTH_REASON,
+  evm: EVM_SHAPE_REASON,
+  tron: TRON_SHAPE_REASON,
+  ton: TON_SHAPE_REASON,
+};
+
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -46,10 +83,7 @@ function checkEvm(raw: string): AddressCheck {
     return { ok: false, reason: "EVM addresses start with 0x." };
   }
   if (!EVM_RE.test(raw)) {
-    return {
-      ok: false,
-      reason: "An EVM address is 0x followed by exactly 40 hex characters.",
-    };
+    return { ok: false, reason: EVM_SHAPE_REASON };
   }
   // Canonical key is lowercase: 0xAbC… and 0xabc… are the same contract.
   // Note: we validate shape only. EIP-55 checksum casing is not verified here.
@@ -65,20 +99,14 @@ function checkSolana(raw: string): AddressCheck {
   }
   const decoded = base58Decode(raw);
   if (!decoded || decoded.length !== 32) {
-    return {
-      ok: false,
-      reason: "A Solana address decodes to 32 bytes (usually 32–44 characters).",
-    };
+    return { ok: false, reason: SOLANA_LENGTH_REASON };
   }
   return { ok: true, canonical: raw, display: raw };
 }
 
 function checkTron(raw: string): AddressCheck {
   if (!raw.startsWith("T") || raw.length !== 34 || !BASE58_RE.test(raw)) {
-    return {
-      ok: false,
-      reason: "A TRON address starts with T and is 34 characters.",
-    };
+    return { ok: false, reason: TRON_SHAPE_REASON };
   }
   const decoded = base58Decode(raw);
   // 1 version byte + 20 address bytes + 4 checksum bytes.
@@ -100,11 +128,7 @@ function checkTon(raw: string): AddressCheck {
   }
 
   if (!TON_FRIENDLY_RE.test(raw)) {
-    return {
-      ok: false,
-      reason:
-        "A TON address is 48 characters (usually starting EQ or UQ) or raw 0:<64 hex>.",
-    };
+    return { ok: false, reason: TON_SHAPE_REASON };
   }
 
   const decoded = decodeBase64Url(raw);
@@ -135,6 +159,14 @@ function checkTon(raw: string): AddressCheck {
 export function checkAddress(family: AddressFamily, input: string): AddressCheck {
   const raw = input.trim();
   if (!raw) return { ok: false, reason: "Enter a contract address." };
+
+  // See MAX_ADDRESS_LENGTH's comment: this has to run before any
+  // family-specific parsing, not after — the whole point is that the
+  // decoder behind Solana and TRON is too slow to be the thing that notices
+  // an oversized input.
+  if (raw.length > MAX_ADDRESS_LENGTH[family]) {
+    return { ok: false, reason: SHAPE_REASON[family] };
+  }
 
   switch (family) {
     case "evm":
