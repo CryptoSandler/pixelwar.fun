@@ -139,34 +139,39 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   }, []);
 
   return (
-    <main className="relative flex h-screen flex-col gap-3 bg-zinc-950 p-3 text-zinc-50">
-      <WarHud hovered={hovered} scale={scale} endsAt={war.endsAt} />
-
-      <div className="relative flex-1 overflow-hidden rounded-lg bg-zinc-800">
-        {image ? (
-          <Board image={image} version={version} onPaint={paintAt} onHover={handleHover} />
-        ) : (
-          <div className="grid h-full place-items-center text-sm opacity-70">Loading the canvas...</div>
-        )}
-
-        {warEnded ? (
-          <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
-            <div>
-              <h2 className="text-xl font-semibold">This war has ended.</h2>
-              <p className="opacity-80">Painting is closed for {war.title}.</p>
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="flex items-center justify-between gap-4">
+    <main className="relative flex h-screen flex-col bg-zinc-950 text-zinc-50 md:flex-row">
+      <aside className="flex shrink-0 gap-3 overflow-x-auto border-b border-zinc-800 p-3 md:h-full md:w-56 md:flex-col md:overflow-x-visible md:overflow-y-auto md:border-b-0 md:border-r">
         <TokenRail tokens={tokens} selectedId={selectedId} onSelect={setSelectedId} />
-        <PaintButton
-          cooldownUntil={cooldownUntil}
-          disabled={warEnded || !selectedId || !hovered}
-          label="Paint"
-          onPaint={() => hovered && paintAt(hovered.x, hovered.y)}
-        />
+      </aside>
+
+      <div className="relative flex flex-1 flex-col gap-3 p-3">
+        <WarHud hovered={hovered} scale={scale} endsAt={war.endsAt} />
+
+        <div className="relative flex-1 overflow-hidden rounded-lg bg-zinc-800">
+          {image ? (
+            <Board image={image} version={version} onPaint={paintAt} onHover={handleHover} />
+          ) : (
+            <div className="grid h-full place-items-center text-sm opacity-70">Loading the canvas...</div>
+          )}
+
+          {warEnded ? (
+            <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
+              <div>
+                <h2 className="text-xl font-semibold">This war has ended.</h2>
+                <p className="opacity-80">Painting is closed for {war.title}.</p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex justify-center">
+          <PaintButton
+            cooldownUntil={cooldownUntil}
+            disabled={warEnded || !selectedId || !hovered}
+            label="Paint"
+            onPaint={() => hovered && paintAt(hovered.x, hovered.y)}
+          />
+        </div>
       </div>
     </main>
   );
