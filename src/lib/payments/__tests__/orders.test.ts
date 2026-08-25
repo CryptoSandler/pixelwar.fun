@@ -298,6 +298,59 @@ describe("createOrder", () => {
   );
 
   it(
+    "seats no more than max_tokens when two orders race the last seat",
+    { timeout: 20_000 },
+    async () => {
+      // Fix round 1: without locking the war row for the length of the
+      // transaction, two concurrent createOrder calls for two DIFFERENT
+      // colours each read the same pre-race count under READ COMMITTED and
+      // both pass the capacity check — no unique index arbitrates capacity
+      // the way one arbitrates colour or contract. This reproduced 4 times
+      // in 5 before the FOR UPDATE fix, so the race is run several times
+      // here rather than once, against a fresh war each time.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const w = await war({ maxTokens: 1 });
+
+        const [a, b] = await Promise.all([
+          createOrder(orderInput({ warId: w.id, colourSlot: 1 })),
+          createOrder(orderInput({ warId: w.id, colourSlot: 2 })),
+        ]);
+
+        const outcomes = [a, b];
+        const winners = outcomes.filter((r) => r.ok);
+        const losers = outcomes.filter((r) => !r.ok);
+        expect(winners).toHaveLength(1);
+        expect(losers).toHaveLength(1);
+        expect(losers[0]).toEqual({ ok: false, reason: "war_full" });
+
+        const seated = await query<{ id: string }>(
+          `SELECT id FROM war_tokens WHERE war_id = $1 AND status <> 'released'`,
+          [w.id],
+        );
+        expect(seated).toHaveLength(1);
+      }
+    },
+  );
+
+  it(
+    "reports war_full rather than colour_taken when both are true",
+    { timeout: 20_000 },
+    async () => {
+      // Pins the priority: when a war is already full AND the specific
+      // colour requested is also separately taken, war_full wins — the
+      // capacity check short-circuits before the insert (and its unique
+      // indexes) is ever attempted.
+      const w = await war({ maxTokens: 1 });
+      const first = await createOrder(orderInput({ warId: w.id, colourSlot: 1 }));
+      expect(first.ok).toBe(true);
+
+      const second = await createOrder(orderInput({ warId: w.id, colourSlot: 1 }));
+
+      expect(second).toEqual({ ok: false, reason: "war_full" });
+    },
+  );
+
+  it(
     "refuses an order on a war that has ended",
     { timeout: 20_000 },
     async () => {
@@ -310,6 +363,38 @@ describe("createOrder", () => {
       const result = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
 
       expect(result).toEqual({ ok: false, reason: "war_closed" });
+    },
+  );
+
+  it(
+    "refuses an order on a war that is still a draft",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war({
+        status: "draft",
+        startsAt: new Date(Date.now() + 3_600_000),
+        endsAt: new Date(Date.now() + 7_200_000),
+      });
+
+      const result = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
+
+      expect(result).toEqual({ ok: false, reason: "war_closed" });
+    },
+  );
+
+  it(
+    "accepts an order on a scheduled war",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war({
+        status: "scheduled",
+        startsAt: new Date(Date.now() + 3_600_000),
+        endsAt: new Date(Date.now() + 7_200_000),
+      });
+
+      const result = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
+
+      expect(result.ok).toBe(true);
     },
   );
 

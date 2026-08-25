@@ -19,9 +19,14 @@ import { PAYMENT_WINDOW_MINUTES } from "./config";
  *   concurrent callers would both read "free" and both proceed — it inserts
  *   and lets the constraint decide, then translates the violation by
  *   constraint name.
- * - `war_full` — the war's own `max_tokens` cap, checked in the same INSERT
- *   statement as the row it would add, not in a SELECT beforehand.
- * - `war_closed` — the war has ended (by status or by its own clock).
+ * - `war_full` — the war's own `max_tokens` cap. Unlike colour and contract,
+ *   there is no index behind this one, so a WHERE clause inside the INSERT
+ *   is not on its own race-safe — two concurrent inserts for two different
+ *   colours can each see the same pre-race count under READ COMMITTED. The
+ *   war row is locked with `FOR UPDATE` for the length of the transaction so
+ *   the count this check reads is always the true one.
+ * - `war_closed` — the war has ended (by status or by its own clock), was
+ *   cancelled, or is still a draft.
  */
 
 export type OrderStatus = "pending" | "paid" | "expired" | "failed";
@@ -127,6 +132,21 @@ export async function orderById(id: string): Promise<Order | null> {
  */
 export async function createOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
   return transaction(async (client) => {
+    // FOR UPDATE: the colour and contract races are safe without this —
+    // each is decided by a partial unique index, so two concurrent inserts
+    // can only ever produce one winner no matter what either transaction
+    // saw beforehand. Capacity has no index behind it. A plain `WHERE
+    // count(*) < max_tokens` inside the INSERT below is still just a read
+    // followed by a write from Postgres's point of view: under READ
+    // COMMITTED (this project's default and Postgres's), two concurrent
+    // createOrder calls for two DIFFERENT colours each take their own
+    // snapshot, each see the same pre-race count, and both pass the check —
+    // a war with max_tokens = 1 can end up seating two. Locking this war row
+    // for the length of the transaction serialises order creation on it, so
+    // the second caller's count query blocks until the first has committed
+    // (or rolled back) and then sees the true, post-insert count. Order
+    // creation happens at most twenty-four times per war, so this costs
+    // nothing.
     const warRow = await client.query<{
       status: string;
       ended: boolean;
@@ -134,11 +154,21 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
       max_tokens: number;
     }>(
       `SELECT status, (ends_at <= now()) AS ended, entry_price_usd, max_tokens
-         FROM wars WHERE id = $1`,
+         FROM wars WHERE id = $1 FOR UPDATE`,
       [input.warId],
     );
     const war = warRow.rows[0];
-    if (!war || war.ended || war.status === "ended" || war.status === "cancelled") {
+    if (
+      !war ||
+      war.ended ||
+      war.status === "ended" ||
+      war.status === "cancelled" ||
+      war.status === "draft"
+    ) {
+      // 'draft' is an operator's unpublished war: there is no page a payer
+      // could see it from, so taking money against it risks owing a refund
+      // for a war that never runs. 'scheduled' is deliberately NOT refused
+      // here — entry opens before a war starts.
       return { ok: false as const, reason: "war_closed" as const };
     }
 
@@ -150,7 +180,9 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     // between the read and the write. A token counts against capacity
     // whenever it is not 'released' — the same predicate the two partial
     // unique indexes use, and for the same reason: a 'removed' token's slot
-    // is gone for the rest of the war, so it still occupies a seat.
+    // is gone for the rest of the war, so it still occupies a seat. This is
+    // made race-safe by the FOR UPDATE above, not by anything in the WHERE
+    // clause itself — see the comment there.
     let insertResult;
     try {
       insertResult = await client.query<{ id: string }>(
