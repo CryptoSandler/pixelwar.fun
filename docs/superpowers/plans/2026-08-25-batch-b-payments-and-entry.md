@@ -21,6 +21,8 @@
 - **This is Next 16, not the Next in your training data.** Read the guides under `node_modules/next/dist/docs/` before writing a route handler or a component.
 - **The database is Neon**: branch `production` (`DATABASE_URL`), branch `tests` (`TEST_DATABASE_URL`). **One suite at a time per branch** — every test truncates every table, and two suites against one branch deadlock on that truncate, surfacing as failures in whatever test happened to be running.
 - **TDD.** Test first, watch it fail, implement minimally, watch it pass, commit. Commit each task separately; a task that dies uncommitted is a task redone.
+- **Any test that touches the database gets its own `{ timeout: 20_000 }`, from the moment you write it.** The database is remote and a round trip costs roughly 200ms, so a test that creates a war, a token and runs two transactions is a dozen trips and lives against the 5-second default. Three tests in Batch A were found sitting at that ceiling, failing perhaps one run in four, and each was called a flake before somebody measured. Do not raise the suite default instead: that would take hang detection away from every pure test to accommodate the slow ones. Annotate the slow test, not the suite.
+- **Never background the test suite.** Run `npm test` in the foreground and wait the three minutes. Three agents in this project stalled waiting on a suite they had backgrounded, and two of them lost uncommitted work when they died.
 - **The suite does not cover the browser.** Batch A shipped three defects invisible to `tsc`, ESLint, `next build` and every test. Anything in `src/components/` or `src/hooks/` is unverified until someone has driven it and looked at a screenshot.
 
 ---
