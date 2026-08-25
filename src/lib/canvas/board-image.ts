@@ -1,4 +1,4 @@
-import { rgba } from "../wars/palette";
+import { PALETTE_SIZE, rgba } from "../wars/palette";
 
 /**
  * The board as pixels, kept as two parallel buffers: the palette slot per
@@ -29,18 +29,31 @@ export class BoardImage {
     if (bytes.length !== this.slots.length) {
       throw new Error(`Board is ${this.width}x${this.height}: expected ${this.slots.length} bytes, got ${bytes.length}`);
     }
-    this.slots.set(bytes);
+    for (let idx = 0; idx < bytes.length; idx++) {
+      // Replace unrenderable bytes with 0 (unpainted). A slot outside the
+      // palette would produce a stale colour in the RGBA buffer while the slots
+      // array claims otherwise. A corrupt board degrades to holes, not lies.
+      this.slots[idx] = this.isKnownSlot(bytes[idx]) ? bytes[idx] : 0;
+    }
     this.repaintAll();
   }
 
   applyChange(idx: number, slot: number): void {
     if (idx < 0 || idx >= this.slots.length) return;
+    // Drop changes to unrenderable slots. Writing the slot but failing the
+    // palette lookup would leave the pixel showing its old colour while slotAt()
+    // claims otherwise: a canvas that lies rather than one with a hole in it.
+    if (!this.isKnownSlot(slot)) return;
     this.slots[idx] = slot;
     this.paintOne(idx);
   }
 
   slotAt(idx: number): number {
     return this.slots[idx] ?? 0;
+  }
+
+  private isKnownSlot(slot: number): boolean {
+    return Number.isInteger(slot) && slot >= 0 && slot <= PALETTE_SIZE;
   }
 
   private repaintAll(): void {

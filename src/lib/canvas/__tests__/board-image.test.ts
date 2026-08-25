@@ -50,4 +50,25 @@ describe("BoardImage", () => {
     const image = new BoardImage(2, 2);
     expect(() => image.setBase(new Uint8Array(3))).toThrow(/expected 4 bytes/);
   });
+
+  it("ignores a slot outside the palette, keeping slots and pixels in step", () => {
+    // Writing the slot but failing the palette lookup would leave the pixel
+    // showing its old colour while slotAt() claims otherwise: a canvas that
+    // lies rather than one with a hole in it.
+    const image = new BoardImage(2, 2);
+    image.setBase(new Uint8Array([7, 7, 7, 7]));
+    image.applyChange(0, 255);
+
+    expect(image.slotAt(0)).toBe(7);
+    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([...image.rgbaBuffer.slice(4, 8)]);
+  });
+
+  it("turns an unrenderable byte in the base into unpainted, not a stale colour", () => {
+    const image = new BoardImage(2, 2);
+    image.setBase(new Uint8Array([1, 200, 1, 1]));
+
+    expect(image.slotAt(1)).toBe(0);
+    const [r, g, b] = toRgb("#2E2E38");
+    expect([...image.rgbaBuffer.slice(4, 8)]).toEqual([r, g, b, 255]);
+  });
 });
