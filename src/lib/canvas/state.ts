@@ -10,7 +10,12 @@ import type { War } from "../wars/lifecycle";
  * before, and the worst case is that the board already contains a change the
  * client also receives in its first diff, which writes the same value twice.
  *
- * Over-deliver, never under-deliver.
+ * Over-deliver, never under-deliver: this ordering is deliberate, and it is
+ * safe only because re-delivering a change is a no-op — a client that applies
+ * the same (idx, slot) pair twice ends up exactly where it started. The other
+ * ordering has no safe failure mode at all: a pixel missing from the board
+ * but already below the reported sequence is never requested again, and is
+ * gone from that client's screen for the rest of the war.
  */
 export async function canvasBytes(war: War): Promise<{ seq: number; bytes: Uint8Array }> {
   const head = await queryOne<{ last_seq: string }>(`SELECT last_seq FROM wars WHERE id = $1`, [
