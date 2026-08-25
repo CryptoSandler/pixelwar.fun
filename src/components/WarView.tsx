@@ -38,6 +38,13 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   const [selectedId, setSelectedId] = useState<string | null>(initialTokens[0]?.id ?? null);
   const [cooldownUntil, setCooldownUntil] = useState<string | null>(null);
   const [hovered, setHovered] = useState<{ x: number; y: number } | null>(null);
+  // The last pixel the pointer was actually over — distinct from `hovered`,
+  // which the HUD needs to go blank the instant the pointer leaves the
+  // canvas. `target` does NOT clear on pointer-leave: it is what the paint
+  // button aims at, and a button gated on `hovered` disables itself the
+  // moment the mouse moves off the canvas toward the button, making it
+  // unclickable by mouse. `target` survives that trip.
+  const [target, setTarget] = useState<{ x: number; y: number } | null>(null);
   const [scale, setScale] = useState(3);
   const [warEnded, setWarEnded] = useState(false);
 
@@ -136,6 +143,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   const handleHover = useCallback((point: { x: number; y: number } | null, nextScale: number) => {
     setHovered(point);
     setScale(nextScale);
+    if (point) setTarget(point);
   }, []);
 
   return (
@@ -167,9 +175,9 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         <div className="flex justify-center">
           <PaintButton
             cooldownUntil={cooldownUntil}
-            disabled={warEnded || !selectedId || !hovered}
+            disabled={warEnded || !selectedId || !target}
             label="Paint"
-            onPaint={() => hovered && paintAt(hovered.x, hovered.y)}
+            onPaint={() => target && paintAt(target.x, target.y)}
           />
         </div>
       </div>
