@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clientIp, hashIp, subnetKey } from "../client-ip";
 
 function request(headers: Record<string, string>): Request {
@@ -6,9 +6,22 @@ function request(headers: Record<string, string>): Request {
 }
 
 describe("clientIp", () => {
+  // Snapshot and restore rather than leaving the environment as we found it by
+  // luck: the suite is single-fork, so what one file deletes another inherits.
+  const original = { ...process.env };
+
   beforeEach(() => {
     process.env.TRUSTED_PROXY_HOPS = "1";
     delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+  });
+
+  afterEach(() => {
+    process.env.TRUSTED_PROXY_HOPS = original.TRUSTED_PROXY_HOPS;
+    if (original.ALLOW_UNTRUSTED_CLIENT_IP === undefined) {
+      delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+    } else {
+      process.env.ALLOW_UNTRUSTED_CLIENT_IP = original.ALLOW_UNTRUSTED_CLIENT_IP;
+    }
   });
 
   it("prefers a platform header a caller cannot forge", () => {

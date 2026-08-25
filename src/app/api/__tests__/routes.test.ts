@@ -86,6 +86,16 @@ describe("GET /api/diff", () => {
     const war = await makeWar();
     expect((await diffRoute(get(`/api/diff?war=${war.slug}&since=abc`))).status).toBe(400);
   });
+
+  it("rejects a since it cannot trust rather than guessing at it", async () => {
+    const war = await makeWar();
+    for (const since of ["", " ", "+1", "1.5", "-1", "1e9", "9007199254740993"]) {
+      const response = await diffRoute(
+        get(`/api/diff?war=${war.slug}&since=${encodeURIComponent(since)}`),
+      );
+      expect(response.status).toBe(400);
+    }
+  });
 });
 
 describe("POST /api/paint", () => {
@@ -132,17 +142,28 @@ describe("POST /api/paint", () => {
   });
 
   it("refuses to paint when no client address can be trusted", async () => {
+    // Put it back. The suite runs in a single fork, so a variable deleted here
+    // stays deleted for every file that runs afterwards — and which files those
+    // are depends on alphabetical filename order, which is not a thing any test
+    // should silently depend on.
+    const previous = process.env.ALLOW_UNTRUSTED_CLIENT_IP;
     delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
-    const war = await makeWar();
-    const token = await makeToken(war.id, 2);
-    const response = await paintRoute(
-      new Request("https://pixelwar.fun/api/paint", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
-      }),
-    );
-    expect(response.status).toBe(400);
+
+    try {
+      const war = await makeWar();
+      const token = await makeToken(war.id, 2);
+      const response = await paintRoute(
+        new Request("https://pixelwar.fun/api/paint", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
+        }),
+      );
+      expect(response.status).toBe(400);
+    } finally {
+      if (previous === undefined) delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+      else process.env.ALLOW_UNTRUSTED_CLIENT_IP = previous;
+    }
   });
 });
 

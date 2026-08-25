@@ -10,8 +10,12 @@ export async function GET(request: Request): Promise<Response> {
   const rawSince = params.get("since");
   if (!slug) return json({ error: "war is required" }, { status: 400 });
 
+  // Digits only. `Number("")` is 0 and `Number(" 7 ")` is 7, so parsing first
+  // and validating after quietly accepts a caller who sent nothing and serves
+  // them the whole board's history as if they had asked for it. Anything past
+  // the safe-integer range cannot be compared reliably either.
   const since = Number(rawSince);
-  if (rawSince === null || !Number.isInteger(since) || since < 0) {
+  if (rawSince === null || !/^\d+$/.test(rawSince) || !Number.isSafeInteger(since)) {
     return json({ error: "since must be a non-negative integer" }, { status: 400 });
   }
 
