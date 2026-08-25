@@ -17,11 +17,15 @@ export const USDC_DECIMALS = 6;
 export const PAYMENT_WINDOW_MINUTES = 30;
 
 /**
- * How long after an order's payment window closes a late-arriving transfer
- * still gets a chance to settle against it, instead of going straight to
- * unmatched_payments. The colour is not held during this grace period — a
- * released reservation frees it immediately — so a late confirm still races
- * whoever else takes that colour in the meantime.
+ * How long after an order's payment window closes a `/confirm` arriving late
+ * still attempts to take its reservation's colour back, instead of going
+ * straight to unmatched_payments.
+ *
+ * The colour frees the instant the reservation expires — this constant does
+ * not hold it. A late confirm inside this window still tries to flip the
+ * released row back to active, and loses the race if someone else already
+ * took the colour; a late confirm outside this window skips the attempt
+ * entirely and goes to unmatched_payments right away.
  */
 export const LATE_CONFIRM_GRACE_MINUTES = 10;
 
@@ -171,13 +175,21 @@ export function paymentWallet(): PaymentWalletResult {
  *
  * Entry prices are whole dollars. A fractional amount here means a caller is
  * inventing a price, and rounding it silently would take the wrong sum, so
- * anything that is not a non-negative integer throws rather than being
- * coerced.
+ * anything that is not a non-negative whole dollar amount throws rather than
+ * being coerced.
+ *
+ * The guard is Number.isSafeInteger, not Number.isInteger: past 2**53 a
+ * float no longer has a neighbour (2**60 === 2**60 + 1), so two different
+ * intended dollar amounts would arrive as the same number and nothing
+ * downstream could tell which was meant. Number.isSafeInteger already rejects
+ * Infinity and NaN, since neither is an integer; -0 needs an explicit check,
+ * since it IS a safe integer and `-0 < 0` is false, and a zero-dollar entry
+ * is not a thing.
  */
 export function usdToBaseUnits(amountUsd: number): bigint {
-  if (!Number.isInteger(amountUsd) || amountUsd < 0) {
+  if (!Number.isSafeInteger(amountUsd) || amountUsd < 0 || Object.is(amountUsd, -0)) {
     throw new RangeError(
-      `usdToBaseUnits expects a non-negative whole-dollar amount, got ${amountUsd}.`,
+      `usdToBaseUnits expects a non-negative, whole-dollar amount that a JS number can hold exactly, got ${amountUsd}.`,
     );
   }
   return BigInt(amountUsd) * 10n ** BigInt(USDC_DECIMALS);

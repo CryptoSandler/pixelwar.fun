@@ -13,6 +13,19 @@ describe("USDC amounts", () => {
     expect(() => usdToBaseUnits(1.005)).toThrow();
     expect(() => usdToBaseUnits(-1)).toThrow();
     expect(() => usdToBaseUnits(Number.NaN)).toThrow();
+    expect(() => usdToBaseUnits(-0)).toThrow();
+    expect(() => usdToBaseUnits(Number.POSITIVE_INFINITY)).toThrow();
+  });
+
+  it("refuses an amount too large for a JS number to hold exactly", () => {
+    // The guard must be Number.isSafeInteger, not Number.isInteger. Past 2^53
+    // a float no longer has a neighbour: 2**60 and 2**60 + 1 are the SAME
+    // value, so two different intended amounts arrive as one and neither the
+    // caller nor we can tell which was meant. Refusing is the only honest
+    // answer a money function has there.
+    expect(() => usdToBaseUnits(2 ** 60)).toThrow();
+    expect(() => usdToBaseUnits(Number.MAX_SAFE_INTEGER + 2)).toThrow();
+    expect(usdToBaseUnits(Number.MAX_SAFE_INTEGER - 1)).toBeTypeOf("bigint");
   });
 
   it("round-trips through formatUsdc", () => {
