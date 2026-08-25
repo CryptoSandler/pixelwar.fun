@@ -715,6 +715,14 @@ row and are set by an operator.
 
 ## 15. Testing
 
+**One suite at a time against one branch.** The `tests` branch is a single
+shared resource and every test begins with `TRUNCATE ... CASCADE`. Two suites,
+or a suite and a scratch script, running against it at once deadlock each other
+on that statement — which surfaces as an intermittent failure in whichever test
+happened to be running, including tests that touch no database at all. CI must
+not run parallel jobs against one branch; give each concurrent job its own Neon
+branch or run them in sequence.
+
 vitest against a real Postgres, with `TEST_DATABASE_URL` required to differ
 from `DATABASE_URL` and the suite refusing to start otherwise — bidoor's rule,
 inherited, because the suite truncates tables.
