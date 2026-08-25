@@ -31,6 +31,17 @@ export function Board({
     scale: 3,
   });
   const drag = useRef<{ x: number; y: number; travelled: number } | null>(null);
+  // Every pointer currently down, by id. One entry: a mouse drag or a single
+  // finger. Two: a pinch. `drag` above tracks only the single-pointer case;
+  // once a second pointer joins, panning stops and `pinch` below takes over
+  // so the two gestures never write to the same state at once.
+  const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinch = useRef<{ distance: number } | null>(null);
+  // True for the rest of a gesture the moment a second pointer joins it, even
+  // after that pointer lifts again. A pinch that ends with one finger still
+  // down must never be mistaken for the tap that finger's own pointerup
+  // would otherwise look like.
+  const wasMultiTouch = useRef(false);
   // Bumped by the ResizeObserver below. The draw effect's own deps only ever
   // see the board and the viewport move — nothing tells it the element's own
   // box changed size, so without this the backing store keeps whatever
@@ -105,11 +116,40 @@ export function Board({
       className="h-full w-full touch-none"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
-        drag.current = { ...pointOf(event), travelled: 0 };
+        const point = pointOf(event);
+        pointers.current.set(event.pointerId, point);
+
+        if (pointers.current.size === 1) {
+          drag.current = { ...point, travelled: 0 };
+        } else if (pointers.current.size === 2) {
+          // A second finger joined a drag already in progress: stop panning
+          // — zoomAt and panBy must never both apply to the same move — and
+          // start the pinch from the two points as they are right now.
+          wasMultiTouch.current = true;
+          drag.current = null;
+          const [a, b] = Array.from(pointers.current.values());
+          pinch.current = { distance: Math.hypot(a.x - b.x, a.y - b.y) };
+        }
       }}
       onPointerMove={(event) => {
         const point = pointOf(event);
         onHover(pixelAt(viewport, screen(), point, image), viewport.scale);
+
+        if (!pointers.current.has(event.pointerId)) return;
+        pointers.current.set(event.pointerId, point);
+
+        if (pointers.current.size >= 2) {
+          const [a, b] = Array.from(pointers.current.values());
+          const distance = Math.hypot(a.x - b.x, a.y - b.y);
+          const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          if (pinch.current) {
+            const factor = distance / pinch.current.distance;
+            setViewport((v) => clampToBoard(zoomAt(v, screen(), midpoint, factor, ZOOM_LIMITS), image));
+          }
+          pinch.current = { distance };
+          return;
+        }
+
         if (!drag.current) return;
 
         const dx = point.x - drag.current.x;
@@ -121,15 +161,37 @@ export function Board({
         setViewport((v) => clampToBoard(panBy(v, -dx / v.scale, -dy / v.scale), image));
       }}
       onPointerUp={(event) => {
-        const state = drag.current;
-        drag.current = null;
-        if (!state || !isTap(state.travelled)) return;
+        const point = pointOf(event);
+        // Whether THIS gesture ever involved a second pointer, decided before
+        // this pointer leaves the map — a pinch must never paint, even when
+        // it ends with only one finger still down.
+        const singlePointerTap = drag.current !== null && !wasMultiTouch.current && isTap(drag.current.travelled);
+        pointers.current.delete(event.pointerId);
 
-        const pixel = pixelAt(viewport, screen(), pointOf(event), image);
+        if (pointers.current.size > 0) {
+          // One finger of a pinch lifted; the other is still down. Stop the
+          // pinch rather than guess at resuming a pan from a stale anchor.
+          pinch.current = null;
+          return;
+        }
+
+        drag.current = null;
+        pinch.current = null;
+        wasMultiTouch.current = false;
+        if (!singlePointerTap) return;
+
+        const pixel = pixelAt(viewport, screen(), point, image);
         if (pixel) onPaint(pixel.x, pixel.y);
       }}
-      onPointerLeave={() => {
-        drag.current = null;
+      onPointerLeave={(event) => {
+        pointers.current.delete(event.pointerId);
+        if (pointers.current.size === 0) {
+          drag.current = null;
+          pinch.current = null;
+          wasMultiTouch.current = false;
+        } else {
+          pinch.current = null;
+        }
         onHover(null, viewport.scale);
       }}
       onWheel={(event) => {
