@@ -718,7 +718,7 @@ limit and a header anyone can forge to get their own bucket.
 Create `src/lib/paint/__tests__/client-ip.test.ts`:
 
 ```ts
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clientIp, hashIp, subnetKey } from "../client-ip";
 
 function request(headers: Record<string, string>): Request {
@@ -726,9 +726,22 @@ function request(headers: Record<string, string>): Request {
 }
 
 describe("clientIp", () => {
+  // Snapshot and restore rather than leaving the environment as we found it by
+  // luck: the suite is single-fork, so what one file deletes another inherits.
+  const original = { ...process.env };
+
   beforeEach(() => {
     process.env.TRUSTED_PROXY_HOPS = "1";
     delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+  });
+
+  afterEach(() => {
+    process.env.TRUSTED_PROXY_HOPS = original.TRUSTED_PROXY_HOPS;
+    if (original.ALLOW_UNTRUSTED_CLIENT_IP === undefined) {
+      delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+    } else {
+      process.env.ALLOW_UNTRUSTED_CLIENT_IP = original.ALLOW_UNTRUSTED_CLIENT_IP;
+    }
   });
 
   it("prefers a platform header a caller cannot forge", () => {
@@ -3085,17 +3098,28 @@ describe("POST /api/paint", () => {
   });
 
   it("refuses to paint when no client address can be trusted", async () => {
+    // Put it back. The suite runs in a single fork, so a variable deleted here
+    // stays deleted for every file that runs afterwards — and which files those
+    // are depends on alphabetical filename order, which is not a thing any test
+    // should silently depend on.
+    const previous = process.env.ALLOW_UNTRUSTED_CLIENT_IP;
     delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
-    const war = await makeWar();
-    const token = await makeToken(war.id, 2);
-    const response = await paintRoute(
-      new Request("https://pixelwar.fun/api/paint", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
-      }),
-    );
-    expect(response.status).toBe(400);
+
+    try {
+      const war = await makeWar();
+      const token = await makeToken(war.id, 2);
+      const response = await paintRoute(
+        new Request("https://pixelwar.fun/api/paint", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
+        }),
+      );
+      expect(response.status).toBe(400);
+    } finally {
+      if (previous === undefined) delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+      else process.env.ALLOW_UNTRUSTED_CLIENT_IP = previous;
+    }
   });
 });
 
@@ -3268,8 +3292,12 @@ export async function GET(request: Request): Promise<Response> {
   const rawSince = params.get("since");
   if (!slug) return json({ error: "war is required" }, { status: 400 });
 
+  // Digits only. `Number("")` is 0 and `Number(" 7 ")` is 7, so parsing first
+  // and validating after quietly accepts a caller who sent nothing and serves
+  // them the whole board's history as if they had asked for it. Anything past
+  // the safe-integer range cannot be compared reliably either.
   const since = Number(rawSince);
-  if (rawSince === null || !Number.isInteger(since) || since < 0) {
+  if (rawSince === null || !/^\d+$/.test(rawSince) || !Number.isSafeInteger(since)) {
     return json({ error: "since must be a non-negative integer" }, { status: 400 });
   }
 
