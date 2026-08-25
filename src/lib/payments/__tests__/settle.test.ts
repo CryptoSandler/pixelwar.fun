@@ -4,7 +4,7 @@ import { execute, query, queryOne } from "../../db";
 import type { War } from "../../wars/lifecycle";
 import { orderById } from "../orders";
 import { recordVerificationAttempt, settlePayment, verifyRateLimited } from "../settle";
-import type { PaymentFailure, VerifyResult } from "../solana";
+import type { PaymentFailure, SenderInfo, VerifyResult } from "../solana";
 
 /**
  * Settlement: where a verified payment becomes a paid order and an active
@@ -116,11 +116,11 @@ async function insertOrder(overrides: {
 }
 
 const okVerified = (amountBaseUnits: bigint): VerifyResult => ({ ok: true, amountBaseUnits });
-const failVerified = (reason: PaymentFailure, message = "verification failed"): VerifyResult => ({
-  ok: false,
-  reason,
-  message,
-});
+const failVerified = (
+  reason: PaymentFailure,
+  message = "verification failed",
+  extra: { receivedBaseUnits?: bigint; sender?: SenderInfo } = {},
+): VerifyResult => ({ ok: false, reason, message, ...extra });
 
 describe("settlePayment: the normal path", () => {
   it(
@@ -191,8 +191,18 @@ describe("settlePayment: the normal path", () => {
 });
 
 describe("settlePayment: verification failure", () => {
+  /**
+   * `consumed_signatures` was, in an earlier version of this code, claimed
+   * for EVERY failure — including this one. That was wrong, and dangerously
+   * so: `not_confirmed` is the ordinary, expected first answer on the normal
+   * path (a wallet hands the browser its signature before the cluster
+   * confirms it), and its own message tells the payer to retry. Claiming the
+   * signature there meant the retry could only ever come back
+   * `signature_reused`, with real USDC sitting in our wallet and nothing
+   * crediting it. This is the regression test for that bug.
+   */
   it(
-    "leaves nothing behind when verification fails",
+    "a not_confirmed first attempt followed by a successful retry with the same signature settles",
     { timeout: 20_000 },
     async () => {
       const w = await war();
@@ -200,42 +210,100 @@ describe("settlePayment: verification failure", () => {
       const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
       const signature = randomUUID();
 
-      const result = await settlePayment({
+      const first = await settlePayment({
         order,
         signature,
-        verified: failVerified("insufficient_amount", "That transaction did not send enough."),
+        verified: failVerified("not_confirmed", "That transaction is not confirmed yet. Wait a few seconds and try again."),
       });
-
-      expect(result).toEqual({
+      expect(first).toEqual({
         ok: false,
-        reason: "insufficient_amount",
-        message: "That transaction did not send enough.",
+        reason: "not_confirmed",
+        message: "That transaction is not confirmed yet. Wait a few seconds and try again.",
       });
 
-      // The trio a real settlement would touch: none of it moved.
+      // Nothing at all was left behind by the first attempt — not even a
+      // consumed_signatures row — because the transaction may simply not
+      // have landed on the cluster yet, and the SAME signature has to still
+      // be usable once it does.
+      const noClaim = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+      expect(noClaim).toHaveLength(0);
+
+      // The cluster confirms it a moment later; the payer's client retries
+      // with the exact same signature.
+      const second = await settlePayment({ order, signature, verified: okVerified(25_000_000n) });
+
+      expect(second).toEqual({ ok: true, amountBaseUnits: 25_000_000n });
       const refreshed = await orderById(order.id);
-      expect(refreshed?.status).toBe("pending");
+      expect(refreshed?.status).toBe("paid");
       const [tokenRow] = await query<{ status: string }>(`SELECT status FROM war_tokens WHERE id = $1`, [
         tokenId,
       ]);
-      expect(tokenRow.status).toBe("reserved");
-      const payments = await query(`SELECT 1 FROM payments WHERE order_id = $1`, [order.id]);
-      expect(payments).toHaveLength(0);
-      const unmatched = await query(`SELECT 1 FROM unmatched_payments WHERE order_id = $1`, [order.id]);
-      expect(unmatched).toHaveLength(0);
-
-      // What IS left behind, deliberately: the signature is claimed, so it
-      // cannot be tried again here or against a different order.
-      const [consumedRow] = await query<{ outcome: string }>(
-        `SELECT outcome FROM consumed_signatures WHERE signature = $1`,
-        [signature],
-      );
-      expect(consumedRow.outcome).toBe("insufficient_amount");
+      expect(tokenRow.status).toBe("active");
     },
   );
 
   it(
-    "refuses when the payer is not the order's wallet",
+    "leaves nothing behind for every retryable verdict: rpc_unavailable, no_block_time, outside_bid_window, invalid_signature",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      for (const reason of ["rpc_unavailable", "no_block_time", "outside_bid_window", "invalid_signature"] as const) {
+        const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+        const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
+        const signature = randomUUID();
+
+        const result = await settlePayment({ order, signature, verified: failVerified(reason, `${reason} message`) });
+
+        expect(result).toEqual({ ok: false, reason, message: `${reason} message` });
+        const refreshed = await orderById(order.id);
+        expect(refreshed?.status).toBe("pending");
+        const claimed = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+        expect(claimed).toHaveLength(0);
+        const unmatched = await query(`SELECT 1 FROM unmatched_payments WHERE signature = $1`, [signature]);
+        expect(unmatched).toHaveLength(0);
+
+        await execute(`UPDATE war_tokens SET status = 'released' WHERE id = $1`, [tokenId]);
+      }
+    },
+  );
+
+  it(
+    "permanently claims a signature that could never pay any order: failed_tx, wrong_token, wrong_destination",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      for (const reason of ["failed_tx", "wrong_token", "wrong_destination"] as const) {
+        const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+        const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
+        const signature = randomUUID();
+
+        const result = await settlePayment({ order, signature, verified: failVerified(reason, `${reason} message`) });
+
+        expect(result).toEqual({ ok: false, reason, message: `${reason} message` });
+        const [consumedRow] = await query<{ outcome: string }>(
+          `SELECT outcome FROM consumed_signatures WHERE signature = $1`,
+          [signature],
+        );
+        expect(consumedRow.outcome).toBe(reason);
+
+        // A second attempt with the same signature, however it verifies,
+        // cannot ever settle anything — the claim already fired.
+        const replay = await settlePayment({ order, signature, verified: okVerified(25_000_000n) });
+        expect(replay).toEqual({
+          ok: false,
+          reason: "signature_reused",
+          message: "That transaction signature has already been used.",
+        });
+
+        await execute(`UPDATE war_tokens SET status = 'released' WHERE id = $1`, [tokenId]);
+      }
+    },
+  );
+
+  const CHAIN_SENDER: SenderInfo = { feePayer: "OnChainFeePayer1111111111111111111111111111", debited: [] };
+
+  it(
+    "refuses when the payer is not the order's wallet, and files the real payment with the sender the chain names",
     { timeout: 20_000 },
     async () => {
       const w = await war();
@@ -245,11 +313,16 @@ describe("settlePayment: verification failure", () => {
         warTokenId: tokenId,
         payerPubkey: "ExpectedPayerWalletAddress11111111111111111",
       });
+      const signature = randomUUID();
 
       const result = await settlePayment({
         order,
-        signature: randomUUID(),
-        verified: failVerified("wrong_payer", "That transaction was not paid from the wallet this order was opened with."),
+        signature,
+        verified: failVerified(
+          "wrong_payer",
+          "That transaction was not paid from the wallet this order was opened with.",
+          { receivedBaseUnits: 25_000_000n, sender: CHAIN_SENDER },
+        ),
       });
 
       expect(result.ok).toBe(false);
@@ -258,6 +331,113 @@ describe("settlePayment: verification failure", () => {
 
       const refreshed = await orderById(order.id);
       expect(refreshed?.status).toBe("pending");
+
+      // Real USDC reached our wallet; it is on record, with the sender the
+      // chain reported — never the order's own asserted payerPubkey.
+      const [unmatchedRow] = await query<{
+        reason: string;
+        received_base_units: string;
+        sender_fee_payer: string | null;
+      }>(
+        `SELECT reason, received_base_units, sender_fee_payer FROM unmatched_payments WHERE signature = $1`,
+        [signature],
+      );
+      expect(unmatchedRow).toMatchObject({
+        reason: "wrong_payer",
+        received_base_units: "25000000",
+        sender_fee_payer: "OnChainFeePayer1111111111111111111111111111",
+      });
+
+      // And, unlike the never-payable reasons above, the signature itself
+      // was NOT claimed — see the Critical 2 regression test below for why
+      // that matters.
+      const claimed = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+      expect(claimed).toHaveLength(0);
+    },
+  );
+
+  it(
+    "records real USDC that underpaid an order, without spending the signature, and does not duplicate the record on retry",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId, amountUsd: 25 });
+      const signature = randomUUID();
+      const verified = failVerified("insufficient_amount", "underpaid", {
+        receivedBaseUnits: 10_000_000n,
+        sender: CHAIN_SENDER,
+      });
+
+      await settlePayment({ order, signature, verified });
+      await settlePayment({ order, signature, verified }); // same signature, retried
+
+      const unmatchedRows = await query(`SELECT 1 FROM unmatched_payments WHERE signature = $1`, [signature]);
+      expect(unmatchedRows).toHaveLength(1);
+      const claimed = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+      expect(claimed).toHaveLength(0);
+    },
+  );
+
+  /**
+   * Critical 2: because the old code claimed a signature before it even
+   * read which order it was up against, the claim succeeded no matter whose
+   * order it was tried on. An attacker watching our wallet could take a
+   * bystander's in-flight signature, post it against an order THEY control,
+   * collect wrong_payer — and the signature was spent, permanently, before
+   * its real owner ever got a turn. This proves the fix: a losing attempt
+   * against the wrong order leaves the right order still able to settle it.
+   */
+  it(
+    "a wrong_payer attempt against an attacker's order leaves the victim able to settle the same signature on theirs",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const victimTokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const victimOrder = await insertOrder({
+        warId: w.id,
+        warTokenId: victimTokenId,
+        payerPubkey: "VictimWalletAddress1111111111111111111111",
+      });
+      const attackerTokenId = await insertToken({ warId: w.id, colourSlot: 6, status: "reserved" });
+      const attackerOrder = await insertOrder({
+        warId: w.id,
+        warTokenId: attackerTokenId,
+        payerPubkey: "AttackerWalletAddress111111111111111111111",
+      });
+      // The victim's real, valid transaction signature.
+      const signature = randomUUID();
+
+      // The attacker posts it against their own order. Checked against
+      // THEIR expected wallet, it comes back wrong_payer.
+      const attackerAttempt = await settlePayment({
+        order: attackerOrder,
+        signature,
+        verified: failVerified("wrong_payer", "wrong wallet", {
+          receivedBaseUnits: 25_000_000n,
+          sender: { feePayer: "VictimWalletAddress1111111111111111111111", debited: [] },
+        }),
+      });
+      expect(attackerAttempt.ok).toBe(false);
+      if (attackerAttempt.ok) return;
+      expect(attackerAttempt.reason).toBe("wrong_payer");
+
+      // The attacker's order is untouched — no colour, no seat, taken from
+      // this.
+      const attackerRefreshed = await orderById(attackerOrder.id);
+      expect(attackerRefreshed?.status).toBe("pending");
+
+      // The victim's own order can still be settled with the exact same
+      // signature: it was never spent.
+      const victimSettle = await settlePayment({
+        order: victimOrder,
+        signature,
+        verified: okVerified(25_000_000n),
+      });
+
+      expect(victimSettle).toEqual({ ok: true, amountBaseUnits: 25_000_000n });
+      const victimRefreshed = await orderById(victimOrder.id);
+      expect(victimRefreshed?.status).toBe("paid");
     },
   );
 });
@@ -364,14 +544,16 @@ describe("settlePayment: a second confirm of the same order", () => {
       const payments = await query(`SELECT 1 FROM payments WHERE order_id = $1`, [order.id]);
       expect(payments).toHaveLength(1);
 
+      // No chain-derived sender is available on this path (verification
+      // succeeded; VerifyResult's success branch carries only the amount) —
+      // left honestly null rather than filled in from the order's own
+      // payerPubkey, which is not something the chain itself ever asserted
+      // about this second transaction.
       const [unmatchedRow] = await query<{ reason: string; sender_fee_payer: string | null }>(
         `SELECT reason, sender_fee_payer FROM unmatched_payments WHERE order_id = $1`,
         [order.id],
       );
-      expect(unmatchedRow).toMatchObject({
-        reason: "order_already_paid",
-        sender_fee_payer: "PayerWalletAddress111111111111111111111111",
-      });
+      expect(unmatchedRow).toMatchObject({ reason: "order_already_paid", sender_fee_payer: null });
     },
   );
 
@@ -480,11 +662,14 @@ describe("settlePayment: late confirmation", () => {
       const refreshed = await orderById(order.id);
       expect(refreshed?.status).toBe("expired");
 
-      const [unmatchedRow] = await query<{ reason: string }>(
-        `SELECT reason FROM unmatched_payments WHERE order_id = $1`,
+      // No chain-derived sender is available on this path — see the
+      // "second confirm" test's identical assertion for why it stays null
+      // rather than being filled from anything the order itself asserts.
+      const [unmatchedRow] = await query<{ reason: string; sender_fee_payer: string | null }>(
+        `SELECT reason, sender_fee_payer FROM unmatched_payments WHERE order_id = $1`,
         [order.id],
       );
-      expect(unmatchedRow.reason).toBe("colour_taken");
+      expect(unmatchedRow).toMatchObject({ reason: "colour_taken", sender_fee_payer: null });
     },
   );
 
@@ -545,10 +730,39 @@ describe("settlePayment: late confirmation", () => {
   );
 
   it(
-    "goes straight to unmatched once the grace period has passed, without touching the colour",
+    "refuses a late confirm onto a war that is still an unpublished draft",
     { timeout: 20_000 },
     async () => {
-      const { tokenId, order } = await expiredReservation({ expiredMinutesAgo: 120 });
+      // Same reasoning createOrder already applies: a draft war has no page
+      // a payer could ever have seen, so taking money against it risks
+      // owing a refund for a war that never runs.
+      const { order } = await expiredReservation();
+      await execute(`UPDATE wars SET status = 'draft' WHERE id = $1`, [order.warId]);
+
+      const result = await settlePayment({
+        order,
+        signature: randomUUID(),
+        verified: okVerified(25_000_000n),
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("unmatched");
+      expect(result.freeColours).toEqual([]);
+
+      const [unmatchedRow] = await query<{ reason: string }>(
+        `SELECT reason FROM unmatched_payments WHERE order_id = $1`,
+        [order.id],
+      );
+      expect(unmatchedRow.reason).toBe("war_closed");
+    },
+  );
+
+  it(
+    "goes straight to unmatched once the grace period has passed, without touching the colour, and says so honestly",
+    { timeout: 20_000 },
+    async () => {
+      const { tokenId, order } = await expiredReservation({ expiredMinutesAgo: 120, colourSlot: 5 });
 
       const result = await settlePayment({
         order,
@@ -560,17 +774,51 @@ describe("settlePayment: late confirmation", () => {
       if (result.ok) return;
       expect(result.reason).toBe("unmatched");
 
-      // The colour was never touched: still released, free for anyone.
+      // The colour was never touched: still released, free for anyone —
+      // including a fresh order for this exact slot, which is why the
+      // message must not claim the colour is "no longer available": it is
+      // right there in freeColours.
       const [tokenRow] = await query<{ status: string }>(`SELECT status FROM war_tokens WHERE id = $1`, [
         tokenId,
       ]);
       expect(tokenRow.status).toBe("released");
+      expect(result.freeColours).toContain(5);
+      expect(result.message).not.toMatch(/no longer available/i);
+      expect(result.message).toMatch(/window closed|not reclaimed automatically/i);
 
       const [unmatchedRow] = await query<{ reason: string }>(
         `SELECT reason FROM unmatched_payments WHERE order_id = $1`,
         [order.id],
       );
       expect(unmatchedRow.reason).toBe("late_confirm_past_grace");
+    },
+  );
+
+  it(
+    "tells the truth when no SUPPORT_CONTACT is configured, rather than promising a channel that does not exist",
+    { timeout: 20_000 },
+    async () => {
+      const original = process.env.SUPPORT_CONTACT;
+      delete process.env.SUPPORT_CONTACT;
+      try {
+        const { war: w, order } = await expiredReservation({ maxTokens: 1, colourSlot: 1 });
+        await insertToken({ warId: w.id, colourSlot: 2, status: "active" });
+
+        const result = await settlePayment({
+          order,
+          signature: randomUUID(),
+          verified: okVerified(25_000_000n),
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.supportContact).toBeNull();
+        expect(result.message).not.toMatch(/filed for support to match manually/i);
+        expect(result.message).toMatch(/no support contact configured/i);
+      } finally {
+        if (original === undefined) delete process.env.SUPPORT_CONTACT;
+        else process.env.SUPPORT_CONTACT = original;
+      }
     },
   );
 });
