@@ -141,6 +141,44 @@ describe("POST /api/paint", () => {
     }
   });
 
+  it("rejects a POST whose Origin is a different site", async () => {
+    const war = await makeWar();
+    const token = await makeToken(war.id, 2);
+    const response = await paintRoute(
+      new Request("https://pixelwar.fun/api/paint", {
+        method: "POST",
+        headers: {
+          "cf-connecting-ip": "1.2.3.4",
+          "content-type": "text/plain",
+          origin: "https://evil.example",
+        },
+        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
+      }),
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("allows a same-origin POST that sends an Origin header", async () => {
+    const war = await makeWar();
+    const token = await makeToken(war.id, 2);
+    const response = await paintRoute(
+      new Request("https://pixelwar.fun/api/paint", {
+        method: "POST",
+        headers: {
+          "cf-connecting-ip": "1.2.3.4",
+          "content-type": "application/json",
+          origin: "https://pixelwar.fun",
+        },
+        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
+      }),
+    );
+    expect(response.status).toBe(200);
+  });
+
+  // "paints and answers with the new sequence", above, already covers a POST
+  // with no Origin header at all — the ordinary same-origin case — getting
+  // through unaffected.
+
   it("refuses to paint when no client address can be trusted", async () => {
     // Put it back. The suite runs in a single fork, so a variable deleted here
     // stays deleted for every file that runs afterwards — and which files those
