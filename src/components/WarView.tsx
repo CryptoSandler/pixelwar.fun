@@ -47,6 +47,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   const [target, setTarget] = useState<{ x: number; y: number } | null>(null);
   const [scale, setScale] = useState(3);
   const [warEnded, setWarEnded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Pick up the painter cookie and any cooldown already in progress.
   useEffect(() => {
@@ -105,6 +106,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   const paintAt = useCallback(
     async (x: number, y: number) => {
       if (!selectedId || warEnded) return;
+      setError(null);
       try {
         const response = await fetch("/api/paint", {
           method: "POST",
@@ -132,9 +134,20 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         // rather than let the button keep failing silently.
         if (response.status === 409) {
           setWarEnded(true);
+          return;
         }
+
+        // Everything else (403 ban, 400 bad input, 404 unknown war, or
+        // anything unexpected) is a real failure the painter has to be
+        // told about — a button that does nothing and says nothing is
+        // exactly what the 409 handling above exists to avoid.
+        const message = await response
+          .json()
+          .then((body: { error?: string }) => body?.error)
+          .catch(() => undefined);
+        setError(message ?? "That pixel could not be painted. Please try again.");
       } catch {
-        // A dropped request just leaves the board to the next poll.
+        setError("Could not reach the server. Check your connection and try again.");
       }
     },
     [selectedId, warEnded, war.slug, applyLocal],
@@ -172,13 +185,22 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
           ) : null}
         </div>
 
-        <div className="flex justify-center">
+        <div className="flex flex-col items-center gap-2">
           <PaintButton
             cooldownUntil={cooldownUntil}
             disabled={warEnded || !selectedId || !target}
             label="Paint"
             onPaint={() => target && paintAt(target.x, target.y)}
           />
+          {error ? (
+            <p
+              role="status"
+              aria-live="polite"
+              className="rounded-md bg-red-950 px-3 py-1.5 text-sm text-red-200"
+            >
+              {error}
+            </p>
+          ) : null}
         </div>
       </div>
     </main>
