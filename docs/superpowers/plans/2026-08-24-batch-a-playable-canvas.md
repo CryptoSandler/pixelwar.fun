@@ -920,9 +920,7 @@ export function normaliseIp(ip: string): string {
 }
 
 function prefixOf(ip: string): string {
-  if (ip.includes(":")) {
-    return `${expandIpv6(withEmbeddedIpv4AsHex(ip)).slice(0, 4).join(":")}::/64`;
-  }
+  if (ip.includes(":")) return `${expandIpv6(ip).slice(0, 4).join(":")}::/64`;
 
   const octets = ip.split(".");
   if (octets.length !== 4) return ip; // not an address we recognise; group it alone
@@ -930,24 +928,20 @@ function prefixOf(ip: string): string {
 }
 
 /**
- * Rewrites a trailing dotted quad as two hex groups.
+ * A known limit, recorded rather than fixed: clients behind one NAT64 gateway
+ * share a bucket.
  *
- * Without this, splitting on ":" leaves the IPv4 octets in one final group and
- * they never reach the first four groups the prefix is built from — so every
- * address of this shape collapses to the same /64 and unrelated strangers land
- * in one burst bucket.
+ * An IPv6 address with an embedded IPv4 tail — `64:ff9b::1.2.3.4` — carries
+ * that IPv4 in its last 32 bits, which are inside the /64. So every client
+ * behind one NAT64 prefix groups together no matter how the address is
+ * expanded, and no rewriting of the tail can change that.
+ *
+ * This is left alone deliberately, because it is the same trade the IPv4 side
+ * already makes: a /24 lumps a CGNAT pool together too. `::ffff:a.b.c.d` is
+ * the case that IS handled, in `normaliseIp` — not by adjusting the prefix,
+ * but by recognising that such an address is simply an IPv4 client wearing an
+ * IPv6 spelling, and sending it down the /24 path.
  */
-function withEmbeddedIpv4AsHex(ip: string): string {
-  const match = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
-  if (!match) return ip;
-
-  const octets = match.slice(2).map(Number);
-  if (octets.some((octet) => octet > 255)) return ip;
-
-  const high = ((octets[0] << 8) | octets[1]).toString(16);
-  const low = ((octets[2] << 8) | octets[3]).toString(16);
-  return `${match[1]}${high}:${low}`;
-}
 
 /** Eight lowercase, unpadded groups. "2001:db8::1" and "2001:0db8:0:0::1" agree. */
 function expandIpv6(ip: string): string[] {
