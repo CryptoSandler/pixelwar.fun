@@ -14,6 +14,7 @@ import { isBanned } from "./bans";
 
 export type PaintFailure =
   | "war_not_live"
+  | "war_not_started"
   | "out_of_bounds"
   | "unknown_token"
   | "banned"
@@ -132,14 +133,37 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
   const idx = y * war.width + x;
 
   return transaction(async (client) => {
-    // The war's own clock, read inside the transaction: a war that ended while
-    // the request was in flight must not accept this paint.
-    const warRow = await client.query<{ status: string; ended: boolean; cooldown_seconds: number }>(
-      `SELECT status, (ends_at <= now()) AS ended, cooldown_seconds FROM wars WHERE id = $1`,
+    // The war's own clock, read inside the transaction: a war that has not
+    // started yet, or that ended while the request was in flight, must not
+    // accept this paint. Checked as two separate wall-clock comparisons
+    // rather than folded into one "not live" answer, because "come back
+    // later" and "this is over" are different messages to a caller.
+    const warRow = await client.query<{
+      status: string;
+      not_started: boolean;
+      ended: boolean;
+      cooldown_seconds: number;
+    }>(
+      `SELECT status, (starts_at > now()) AS not_started, (ends_at <= now()) AS ended, cooldown_seconds
+         FROM wars WHERE id = $1`,
       [war.id],
     );
     const current = warRow.rows[0];
-    if (!current || current.status !== "live" || current.ended) {
+    if (!current) {
+      return {
+        ok: false as const,
+        reason: "war_not_live" as const,
+        message: "This war is not accepting pixels.",
+      };
+    }
+    if (current.not_started) {
+      return {
+        ok: false as const,
+        reason: "war_not_started" as const,
+        message: "This war has not started yet.",
+      };
+    }
+    if (current.status !== "live" || current.ended) {
       return {
         ok: false as const,
         reason: "war_not_live" as const,

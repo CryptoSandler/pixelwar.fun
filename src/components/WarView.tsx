@@ -13,6 +13,7 @@ export type WarSummary = {
   status: string;
   width: number;
   height: number;
+  startsAt: string;
   endsAt: string;
 };
 
@@ -47,6 +48,10 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   const [target, setTarget] = useState<{ x: number; y: number } | null>(null);
   const [scale, setScale] = useState(3);
   const [warEnded, setWarEnded] = useState(false);
+  // Seeded from the war's own status: a war the server already knows is
+  // scheduled has not started regardless of what any earlier paint attempt
+  // said. WarHud flips this back once its own countdown to startsAt expires.
+  const [warNotStarted, setWarNotStarted] = useState(war.status === "scheduled");
   const [error, setError] = useState<string | null>(null);
 
   // Pick up the painter cookie and any cooldown already in progress.
@@ -105,7 +110,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
 
   const paintAt = useCallback(
     async (x: number, y: number) => {
-      if (!selectedId || warEnded) return;
+      if (!selectedId || warEnded || warNotStarted) return;
       setError(null);
       try {
         const response = await fetch("/api/paint", {
@@ -130,10 +135,17 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
           return;
         }
 
-        // 409: the war ended while this tab was open. Freeze the canvas
-        // rather than let the button keep failing silently.
+        // 409: either the war ended while this tab was open, or it has not
+        // started yet — two different screens, told apart by the reason the
+        // server sent back. Freeze the canvas rather than let the button
+        // keep failing silently either way.
         if (response.status === 409) {
-          setWarEnded(true);
+          const body = await response
+            .json()
+            .then((value: { reason?: string }) => value)
+            .catch(() => null);
+          if (body?.reason === "war_not_started") setWarNotStarted(true);
+          else setWarEnded(true);
           return;
         }
 
@@ -150,7 +162,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         setError("Could not reach the server. Check your connection and try again.");
       }
     },
-    [selectedId, warEnded, war.slug, applyLocal],
+    [selectedId, warEnded, warNotStarted, war.slug, applyLocal],
   );
 
   const handleHover = useCallback((point: { x: number; y: number } | null, nextScale: number) => {
@@ -166,7 +178,14 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
       </aside>
 
       <div className="relative flex flex-1 flex-col gap-3 p-3">
-        <WarHud hovered={hovered} scale={scale} endsAt={war.endsAt} />
+        <WarHud
+          hovered={hovered}
+          scale={scale}
+          startsAt={war.startsAt}
+          endsAt={war.endsAt}
+          notStarted={warNotStarted}
+          onStart={() => setWarNotStarted(false)}
+        />
 
         <div className="relative flex-1 overflow-hidden rounded-lg bg-zinc-800">
           {image ? (
@@ -175,7 +194,14 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
             <div className="grid h-full place-items-center text-sm opacity-70">Loading the canvas...</div>
           )}
 
-          {warEnded ? (
+          {warNotStarted ? (
+            <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
+              <div>
+                <h2 className="text-xl font-semibold">This war has not started yet.</h2>
+                <p className="opacity-80">Painting opens for {war.title} soon.</p>
+              </div>
+            </div>
+          ) : warEnded ? (
             <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
               <div>
                 <h2 className="text-xl font-semibold">This war has ended.</h2>
@@ -188,7 +214,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         <div className="flex flex-col items-center gap-2">
           <PaintButton
             cooldownUntil={cooldownUntil}
-            disabled={warEnded || !selectedId || !target}
+            disabled={warEnded || warNotStarted || !selectedId || !target}
             label="Paint"
             onPaint={() => target && paintAt(target.x, target.y)}
           />

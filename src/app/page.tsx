@@ -26,6 +26,7 @@ export default async function Page() {
         status: war.status,
         width: war.width,
         height: war.height,
+        startsAt: war.startsAt.toISOString(),
         endsAt: war.endsAt.toISOString(),
       }}
       tokens={tokens.map((token) => ({

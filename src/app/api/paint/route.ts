@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 
 const STATUS: Record<string, number> = {
   war_not_live: 409,
+  war_not_started: 409,
   cooldown: 429,
   banned: 403,
   unknown_token: 400,

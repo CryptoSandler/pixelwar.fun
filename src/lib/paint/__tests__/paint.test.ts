@@ -211,6 +211,18 @@ describe("paintPixel", () => {
     expect(result).toMatchObject({ ok: false, reason: "war_not_live" });
   });
 
+  it("refuses to paint on a war that has not started yet, distinctly from one that has ended", async () => {
+    const war = await makeWar({
+      status: "scheduled",
+      startsAt: new Date(Date.now() + 3_600_000),
+      endsAt: new Date(Date.now() + 7_200_000),
+    });
+    const token = await makeToken(war.id, 5);
+
+    const result = await paintPixel({ war, x: 0, y: 0, tokenId: token, ...KEYS });
+    expect(result).toMatchObject({ ok: false, reason: "war_not_started" });
+  });
+
   it("refuses a banned painter, and leaves no trace of the attempt", async () => {
     const war = await makeWar();
     const token = await makeToken(war.id, 5);
