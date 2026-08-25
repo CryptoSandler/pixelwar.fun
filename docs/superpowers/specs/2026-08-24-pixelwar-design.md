@@ -307,7 +307,31 @@ distinguishability on our canvas ground.
 | 7 | `#00CC78` | 15 | `#493AC1` | 23 | `#000000` |
 | 8 | `#7EED56` | 16 | `#6A5CFF` | 24 | `#FFFFFF` |
 
-Slot `0` renders as the canvas ground, not as a colour anyone can pick.
+### Slot 0 is the canvas, not a colour
+
+Slot `0` means *unpainted*. It renders as the canvas ground and no token is
+ever assigned it, so it is not in the table above and never appears in a token
+picker.
+
+Its value is a neutral that belongs to the canvas itself — **`#2E2E38`**, a
+cool slate — and it is bound by three rules:
+
+- It must not equal any of the twenty-four token colours.
+- It must not be pure black or pure white. Both are real token colours (23 and
+  24), and beyond that, an empty board that is pure white reads as "broken
+  render" and one that is pure black reads as "nothing loaded".
+- It must stay far enough from every token colour to be unmistakable at one
+  pixel. The floor is a minimum RGB distance, asserted in a unit test over the
+  whole palette, so a future design pass cannot quietly pick a ground that
+  collides with a token.
+
+The point is that a viewer must never have to wonder whether a region is
+somebody's territory or empty space. The neutral is deliberately unlike
+anything a token can hold: no token colour in the table is desaturated, so a
+grey-slate ground can only mean nobody has been here.
+
+The same test guards the token palette against itself — twenty-four entries, no
+duplicates, all distinct from slot `0`.
 
 The palette is *not* a colour picker. A painter selects a **token**; the colour
 follows from which token they picked. This is the whole attribution model: the
