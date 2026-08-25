@@ -18,7 +18,7 @@
 - **Reuse bidoor, do not rewrite it.** Modules named as "copy from bidoor" are copied from `~/proyectos/outbid-tokens` and adapted, not reimplemented from memory.
 - **`SITE_URL` is `https://pixelwar.fun`.**
 - **No ORM.** Parameterised `pg` queries only; never string-interpolate a value into SQL.
-- **The database is Neon, and there is no local Postgres.** Branch `main` is the app database (`DATABASE_URL`); branch `tests` is a disposable copy the suite truncates (`TEST_DATABASE_URL`). Both strings live in `.env.local` and nowhere else — not in `.env.example`, not in a commit, not in a comment, not in a shell history you paste into a report.
+- **The database is Neon, and there is no local Postgres.** Branch `production` is the app database (`DATABASE_URL`); branch `tests` is a disposable copy the suite truncates (`TEST_DATABASE_URL`). Both strings use `sslmode=verify-full`. Both strings live in `.env.local` and nowhere else — not in `.env.example`, not in a commit, not in a comment, not in a shell history you paste into a report.
 - **Canvas is 200×200.** Palette slot `0` is unpainted and renders as `#2E2E38`; slots `1`–`24` are token colours.
 - **Required env vars have no defaults.** A missing `DATABASE_URL`, `RATE_LIMIT_SALT` or `PAINTER_COOKIE_SECRET` is a startup failure, not a fallback.
 - **This is Next 16, not the Next in your training data.** Before writing any route handler or page, read the relevant guide under `node_modules/next/dist/docs/`. The `AGENTS.md` block Next writes into the repo stays committed.
@@ -1161,8 +1161,8 @@ phone on mobile data gets a new address on every reconnect but keeps its prefix.
 - Produces: `pool()`, `query<T>(text, params): Promise<T[]>`, `queryOne<T>`, `execute(text, params): Promise<number>`, `transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>`, `isUniqueViolation(err): boolean`, `violatedConstraint(err): string`, `closePool(): Promise<void>` from `src/lib/db.ts`; the exported test helper `truncateAll()` from `vitest.setup.ts`; and the scripts `db:migrate`, `db:migrate:test`, `db:up`.
 
 **There is no local Postgres.** The database is Neon, exactly as in bidoor.
-Two branches of one Neon project: `main` holds the app database and `tests`
-holds a disposable copy. Both connection strings live in `.env.local` and
+Two branches of one Neon project: `production` holds the app database and
+`tests` holds a disposable copy. Both connection strings live in `.env.local` and
 nowhere else — never in `.env.example`, never in a commit, never in a comment.
 
 - [ ] **Step 1: Install the driver**
@@ -1292,10 +1292,11 @@ Following bidoor's style, where every variable explains why it has no default.
 The file carries names and reasons only — never a real connection string:
 
 ```bash
-# Postgres for the app, in every environment. Neon, branch `main`.
+# Postgres for the app, in every environment. Neon, branch `production`.
 #
 # Required, no default: a fallback would mean running against the wrong
-# database rather than failing. Keep ?sslmode=require.
+# database rather than failing. Keep sslmode=verify-full: `require` encrypts
+# but authenticates nothing, so it stops eavesdropping and not impersonation.
 DATABASE_URL=
 
 # Postgres for the TEST SUITE and nothing else. Neon, branch `tests`.
