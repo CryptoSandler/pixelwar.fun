@@ -1376,7 +1376,13 @@ beforeAll(() => {
  * An unparseable URL is treated as a match — refusing to run is the safe
  * answer when we cannot tell what we are pointed at.
  */
-function sameTarget(a: string, b: string): boolean {
+function sameTarget(a: string, b: string | undefined): boolean {
+  // No app database configured means there is nothing to collide with. Without
+  // this branch `new URL(undefined)` throws into the catch below and reports a
+  // match, blocking the suite with a message about a collision that does not
+  // exist.
+  if (!b) return false;
+
   try {
     const left = new URL(a);
     const right = new URL(b);
