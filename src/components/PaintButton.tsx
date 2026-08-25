@@ -22,17 +22,16 @@ export function PaintButton({
   onPaint: () => void;
 }) {
   const [remaining, setRemaining] = useState(0);
+  const tickIntervalMs = remaining > 1000 ? 500 : 100;
 
   useEffect(() => {
-    if (!cooldownUntil) {
-      setRemaining(0);
-      return;
-    }
-    const tick = () => setRemaining(Math.max(0, Date.parse(cooldownUntil) - Date.now()));
+    const tick = () =>
+      setRemaining(cooldownUntil ? Math.max(0, Date.parse(cooldownUntil) - Date.now()) : 0);
     tick();
-    const timer = setInterval(tick, remaining > 1000 ? 500 : 100);
+    if (!cooldownUntil) return;
+    const timer = setInterval(tick, tickIntervalMs);
     return () => clearInterval(timer);
-  }, [cooldownUntil, remaining > 1000]);
+  }, [cooldownUntil, tickIntervalMs]);
 
   const waiting = remaining > 0;
   const seconds = Math.ceil(remaining / 1000);
