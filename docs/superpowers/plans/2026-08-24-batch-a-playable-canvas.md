@@ -6,7 +6,7 @@
 
 **Architecture:** Next.js App Router over Postgres, no ORM. The canvas is one byte per pixel in a `pixels` table keyed by `(war_id, idx)`; every paint allocates a gapless sequence number from the war row inside the same transaction, which is what makes `/api/diff?since=` safe to poll. The browser fetches the full board once as binary and then polls a small JSON diff every 1.5 s. All coordinate maths and all pixel-buffer maths live in pure modules with unit tests; React is a thin shell over them.
 
-**Tech Stack:** Next 16.3.2, React 19.2.8, TypeScript, Tailwind v4, `pg`, vitest 4, tsx, Docker Compose for local Postgres.
+**Tech Stack:** Next 16.3.2, React 19.2.8, TypeScript, Tailwind v4, `pg`, vitest 4, tsx, Neon Postgres.
 
 **Spec:** [`docs/superpowers/specs/2026-08-24-pixelwar-design.md`](../specs/2026-08-24-pixelwar-design.md)
 
@@ -18,6 +18,7 @@
 - **Reuse bidoor, do not rewrite it.** Modules named as "copy from bidoor" are copied from `~/proyectos/outbid-tokens` and adapted, not reimplemented from memory.
 - **`SITE_URL` is `https://pixelwar.fun`.**
 - **No ORM.** Parameterised `pg` queries only; never string-interpolate a value into SQL.
+- **The database is Neon, and there is no local Postgres.** Branch `main` is the app database (`DATABASE_URL`); branch `tests` is a disposable copy the suite truncates (`TEST_DATABASE_URL`). Both strings live in `.env.local` and nowhere else — not in `.env.example`, not in a commit, not in a comment, not in a shell history you paste into a report.
 - **Canvas is 200×200.** Palette slot `0` is unpainted and renders as `#2E2E38`; slots `1`–`24` are token colours.
 - **Required env vars have no defaults.** A missing `DATABASE_URL`, `RATE_LIMIT_SALT` or `PAINTER_COOKIE_SECRET` is a startup failure, not a fallback.
 - **This is Next 16, not the Next in your training data.** Before writing any route handler or page, read the relevant guide under `node_modules/next/dist/docs/`. The `AGENTS.md` block Next writes into the repo stays committed.
@@ -28,9 +29,9 @@
 ## File Structure
 
 ```
-docker-compose.yml               Local Postgres on port 55432
 migrations/001_initial.sql       Batch A tables only
 scripts/migrate.mts              Migration runner; --test targets TEST_DATABASE_URL
+migrations/000_bootstrap.sql     A table for the harness to assert on
 scripts/seed-war.mts             Demo war with six tokens, development only
 
 src/lib/db.ts                    Pool, query, transaction (copied from bidoor)
@@ -70,162 +71,42 @@ one `lib/game.ts`.
 
 ---
 
-### Task 1: Project scaffold, Postgres, and the test harness
+### Task 1: Scaffold, the test harness, and the palette
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`, `eslint.config.mjs`, `.gitignore`, `.env.example`, `docker-compose.yml`, `vitest.config.mts`, `vitest.setup.ts`, `scripts/migrate.mts`, `migrations/000_bootstrap.sql`, `src/lib/db.ts`, `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`
-- Test: `src/lib/__tests__/db.test.ts`
+- Create: `package.json`, `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`, `eslint.config.mjs`, `.gitignore`, `vitest.config.mts`, `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`, `src/lib/wars/palette.ts`
+- Test: `src/lib/wars/__tests__/palette.test.ts`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `pool()`, `query<T>(text, params): Promise<T[]>`, `queryOne<T>`, `execute(text, params): Promise<number>`, `transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>`, `isUniqueViolation(err): boolean`, `violatedConstraint(err): string`, `closePool(): Promise<void>` from `src/lib/db.ts`. Test helper `truncateAll()` from `vitest.setup.ts`.
+- Produces: a working `npm test`, `npm run lint` and `npm run build`; and from `src/lib/wars/palette.ts`: `PALETTE: readonly string[]` (24 entries, array index 0 is colour slot 1), `CANVAS_GROUND: string`, `PALETTE_SIZE: 24`, `colourForSlot(slot: number): string`, `toRgb(hex: string): [number, number, number]`, `rgbDistance(a: string, b: string): number`, `rgba(): Uint8ClampedArray` (25 x 4 bytes, slot-indexed).
+
+**No database.** Nothing in this task connects to Postgres. The database
+arrives in Task 4, and the harness for it with it.
 
 - [ ] **Step 1: Scaffold the Next app**
 
 ```bash
 cd ~/proyectos/pixelwar
 npx create-next-app@16.3.2 . --typescript --tailwind --eslint --app --src-dir --no-import-alias --use-npm
-npm install pg
-npm install -D @types/pg tsx vitest@^4 @vitest/coverage-v8
+npm install -D tsx vitest@^4 dotenv
 ```
 
-Answer "yes" to keeping the existing `README.md` and `docs/`. If the generator
-refuses to run in a non-empty directory, scaffold into `/tmp/pw` and copy
-everything except `README.md` and `docs/` across.
+Keep the existing `README.md` and `docs/`. If the generator refuses to run in
+a non-empty directory, scaffold into `/tmp/pw` and copy everything except
+`README.md` and `docs/` across.
 
-- [ ] **Step 2: Read the Next 16 docs before touching anything else**
+- [ ] **Step 2: Read the Next 16 docs before writing anything**
 
 ```bash
 ls node_modules/next/dist/docs/
 ```
 
-Read the App Router and Route Handler guides there. This version differs from
-what you remember; the guides in `node_modules` are authoritative. Commit the
-`AGENTS.md` block Next generates.
+Read the App Router guide there. This version differs from what you remember;
+the guides in `node_modules` are authoritative, not your recollection. Commit
+the `AGENTS.md` block Next generates into the repo.
 
-- [ ] **Step 3: Add local Postgres**
-
-Create `docker-compose.yml`:
-
-```yaml
-services:
-  postgres:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_USER: pixelwar
-      POSTGRES_PASSWORD: pixelwar
-      POSTGRES_DB: pixelwar
-    ports:
-      - "55432:5432"
-    volumes:
-      - pixelwar-pg:/var/lib/postgresql/data
-volumes:
-  pixelwar-pg:
-```
-
-Port 55432 rather than 5432 so this never collides with another Postgres on the
-machine.
-
-```bash
-docker compose up -d
-docker compose exec postgres psql -U pixelwar -c "CREATE DATABASE pixelwar_test"
-```
-
-- [ ] **Step 4: Copy `db.ts` from bidoor**
-
-```bash
-cp ~/proyectos/outbid-tokens/src/lib/db.ts src/lib/db.ts
-```
-
-Read it. Change nothing: the pool caching on `globalThis`, the swallowed pool
-error, and `isUniqueViolation` are all load-bearing here too. Only the doc
-comment's mention of bidoor's board needs rewording to describe pixelwar.
-
-- [ ] **Step 5: Write the migration runner**
-
-Create `scripts/migrate.mts`:
-
-```ts
-import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
-import { Pool } from "pg";
-
-/**
- * Applies every unapplied migration, in filename order, each inside its own
- * transaction. A migration that throws leaves the database exactly as it was
- * and stops the run: applying half a schema and reporting success is the one
- * outcome a migration tool must never produce.
- */
-
-const useTest = process.argv.includes("--test");
-const url = useTest ? process.env.TEST_DATABASE_URL : process.env.DATABASE_URL;
-
-if (!url) {
-  console.error(
-    `${useTest ? "TEST_DATABASE_URL" : "DATABASE_URL"} is not set. There is no default: ` +
-      "a fallback would mean migrating the wrong database rather than failing.",
-  );
-  process.exit(1);
-}
-
-const pool = new Pool({ connectionString: url });
-const dir = join(process.cwd(), "migrations");
-
-await pool.query(`
-  CREATE TABLE IF NOT EXISTS schema_migrations (
-    version    TEXT PRIMARY KEY,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )
-`);
-
-const applied = new Set(
-  (await pool.query<{ version: string }>("SELECT version FROM schema_migrations")).rows.map(
-    (row) => row.version,
-  ),
-);
-
-const files = (await readdir(dir)).filter((name) => name.endsWith(".sql")).sort();
-let count = 0;
-
-for (const file of files) {
-  const version = file.replace(/\.sql$/, "");
-  if (applied.has(version)) continue;
-
-  const sql = await readFile(join(dir, file), "utf8");
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(sql);
-    await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [version]);
-    await client.query("COMMIT");
-    console.log(`applied ${version}`);
-    count++;
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    console.error(`failed on ${version}:`, error);
-    process.exit(1);
-  } finally {
-    client.release();
-  }
-}
-
-console.log(count === 0 ? "nothing to apply" : `applied ${count} migration(s)`);
-await pool.end();
-```
-
-- [ ] **Step 6: Add a bootstrap migration so there is something to migrate**
-
-Create `migrations/000_bootstrap.sql`:
-
-```sql
--- Nothing structural yet; 001 carries the schema. This file exists so the
--- runner has a migration to apply and the harness has something to assert on.
-CREATE TABLE IF NOT EXISTS bootstrap_check (
-  ok BOOLEAN NOT NULL DEFAULT TRUE
-);
-```
-
-- [ ] **Step 7: Wire the scripts**
+- [ ] **Step 3: Add the scripts**
 
 In `package.json`:
 
@@ -237,68 +118,12 @@ In `package.json`:
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "db:migrate": "tsx scripts/migrate.mts",
-    "db:migrate:test": "tsx scripts/migrate.mts --test",
-    "db:up": "docker compose up -d && npm run db:migrate && npm run db:migrate:test",
-    "db:reset": "docker compose down -v && docker compose up -d && sleep 3 && npm run db:up"
+    "test:watch": "vitest"
   }
 }
 ```
 
-- [ ] **Step 8: Write `.env.example` and `.env.local`**
-
-`.env.example` follows bidoor's style — every variable explains *why* it has no
-default:
-
-```bash
-# Postgres for the app, in every environment.
-#
-# Required, no default: a fallback would mean running against the wrong
-# database rather than failing.
-#
-# Local, with `docker compose up -d`:
-#   postgres://pixelwar:pixelwar@localhost:55432/pixelwar
-# Neon: keep ?sslmode=require
-DATABASE_URL=
-
-# Postgres for the TEST SUITE and nothing else.
-#
-# Deliberately a different variable. The suite truncates every table between
-# tests, so this must point at a throwaway database. The suite refuses to start
-# if it is the same as DATABASE_URL.
-#   postgres://pixelwar:pixelwar@localhost:55432/pixelwar_test
-TEST_DATABASE_URL=
-
-# Salt for hashing caller IP addresses.
-#
-# REQUIRED in production. An unsalted SHA-256 of an IPv4 address is reversible
-# by brute force — four billion preimages — so the stored hashes would be
-# visitor IP addresses in all but name. Generate with: openssl rand -hex 32
-RATE_LIMIT_SALT=
-
-# Secret that signs the painter cookie.
-#
-# REQUIRED in production, no default. Without it anyone can mint a painter
-# identity per pixel and the cooldown means nothing.
-# Generate with: openssl rand -hex 32
-PAINTER_COOKIE_SECRET=
-
-# Allow requests with no trustworthy client address. Local development only —
-# it must stay unset in production, where no client address means no rate
-# limiting at all.
-# ALLOW_UNTRUSTED_CLIENT_IP=true
-
-# How many proxies sit in front of this app and append to x-forwarded-for.
-# Default 1, which matches Vercel.
-# TRUSTED_PROXY_HOPS=1
-```
-
-Then write a real `.env.local` (gitignored) with the two local URLs, a
-`RATE_LIMIT_SALT` and a `PAINTER_COOKIE_SECRET` from `openssl rand -hex 32`,
-and `ALLOW_UNTRUSTED_CLIENT_IP=true`. Confirm `.env.local` is in `.gitignore`.
-
-- [ ] **Step 9: Write the vitest harness**
+- [ ] **Step 4: Configure vitest**
 
 Create `vitest.config.mts`:
 
@@ -309,136 +134,30 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
-    // One fork. Every test truncates the same tables, so running files in
-    // parallel would have them delete each other's fixtures mid-assertion.
+    // One fork. Later tasks add tests that truncate shared tables, and running
+    // files in parallel would have them delete each other's fixtures
+    // mid-assertion.
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },
   },
 });
 ```
 
-Create `vitest.setup.ts`:
+Create `vitest.setup.ts`. It only loads the environment for now; Task 4 adds
+the database guards to this same file:
 
 ```ts
 import { config } from "dotenv";
-import { afterAll, beforeAll, beforeEach } from "vitest";
-import { closePool, execute, query } from "./src/lib/db";
 
 config({ path: ".env.local" });
-
-beforeAll(() => {
-  const test = process.env.TEST_DATABASE_URL?.trim();
-  const app = process.env.DATABASE_URL?.trim();
-
-  if (!test) {
-    throw new Error(
-      "TEST_DATABASE_URL is not set. The suite truncates every table, so it " +
-        "refuses to run without a database that is explicitly disposable.",
-    );
-  }
-  if (test === app) {
-    throw new Error(
-      "TEST_DATABASE_URL equals DATABASE_URL. The suite truncates every table; " +
-        "pointing it at the app database would delete real data.",
-    );
-  }
-
-  // Everything under test reads DATABASE_URL. Redirect it once, here.
-  process.env.DATABASE_URL = test;
-});
-
-/** Empties every table except the migration ledger. */
-export async function truncateAll(): Promise<void> {
-  const tables = await query<{ tablename: string }>(
-    `SELECT tablename FROM pg_tables
-      WHERE schemaname = 'public' AND tablename <> 'schema_migrations'`,
-  );
-  if (tables.length === 0) return;
-  await execute(`TRUNCATE ${tables.map((t) => `"${t.tablename}"`).join(", ")} CASCADE`);
-}
-
-beforeEach(truncateAll);
-afterAll(closePool);
 ```
 
-```bash
-npm install -D dotenv
-```
+- [ ] **Step 5: Confirm `.gitignore` covers the secrets**
 
-- [ ] **Step 10: Write the failing test**
+`.env*.local` and `node_modules` must be ignored. Check with
+`git check-ignore -v .env.local`; it must print a matching rule.
 
-Create `src/lib/__tests__/db.test.ts`:
-
-```ts
-import { describe, expect, it } from "vitest";
-import { execute, query, transaction } from "../db";
-
-describe("database harness", () => {
-  it("runs against the test database, not the app database", async () => {
-    const [row] = await query<{ current_database: string }>("SELECT current_database()");
-    expect(row.current_database).toBe("pixelwar_test");
-  });
-
-  it("has applied the migrations", async () => {
-    const rows = await query<{ version: string }>("SELECT version FROM schema_migrations");
-    expect(rows.map((r) => r.version)).toContain("000_bootstrap");
-  });
-
-  it("rolls a transaction back when the work throws", async () => {
-    await execute("INSERT INTO bootstrap_check (ok) VALUES (TRUE)");
-
-    await expect(
-      transaction(async (client) => {
-        await client.query("INSERT INTO bootstrap_check (ok) VALUES (FALSE)");
-        throw new Error("boom");
-      }),
-    ).rejects.toThrow("boom");
-
-    const rows = await query<{ ok: boolean }>("SELECT ok FROM bootstrap_check");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].ok).toBe(true);
-  });
-});
-```
-
-- [ ] **Step 11: Run it and watch it fail**
-
-Run: `npm test`
-Expected: FAIL — the test database has no tables yet.
-
-- [ ] **Step 12: Apply the migrations**
-
-Run: `npm run db:up`
-Expected: `applied 000_bootstrap` twice, once per database.
-
-- [ ] **Step 13: Run the tests and watch them pass**
-
-Run: `npm test`
-Expected: 3 passed.
-
-- [ ] **Step 14: Commit**
-
-```bash
-git add -A
-git commit -m "Scaffold the app, local Postgres, and the test harness
-
-The suite refuses to run unless TEST_DATABASE_URL is set and differs from
-DATABASE_URL, because it truncates every table between tests."
-```
-
----
-
-### Task 2: The palette
-
-**Files:**
-- Create: `src/lib/wars/palette.ts`
-- Test: `src/lib/wars/__tests__/palette.test.ts`
-
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `PALETTE: readonly string[]` (24 entries, index 0 of the array is colour slot 1), `CANVAS_GROUND: string`, `PALETTE_SIZE: 24`, `colourForSlot(slot: number): string`, `rgba(): Uint8ClampedArray` (25 × 4 bytes, slot-indexed), `rgbDistance(a: string, b: string): number`.
-
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 6: Write the failing test**
 
 Create `src/lib/wars/__tests__/palette.test.ts`:
 
@@ -500,12 +219,12 @@ describe("palette", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [ ] **Step 7: Run it and watch it fail**
 
 Run: `npx vitest run src/lib/wars/__tests__/palette.test.ts`
 Expected: FAIL — cannot resolve `../palette`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 8: Write the implementation**
 
 Create `src/lib/wars/palette.ts`:
 
@@ -570,16 +289,21 @@ export function rgba(): Uint8ClampedArray {
 }
 ```
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [ ] **Step 9: Run the tests and watch them pass**
 
-Run: `npx vitest run src/lib/wars/__tests__/palette.test.ts`
+Run: `npm test`
 Expected: 8 passed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 10: Confirm the app still builds**
+
+Run: `npm run lint && npm run build`
+Expected: both clean.
+
+- [ ] **Step 11: Commit**
 
 ```bash
-git add src/lib/wars/palette.ts src/lib/wars/__tests__/palette.test.ts
-git commit -m "Add the palette and pin the canvas ground
+git add -A
+git commit -m "Scaffold the app and pin the palette
 
 Slot 0 is unpainted and is not a colour any token can hold. The tests hold the
 line a future design pass has to keep: 24 distinct colours, none of them the
@@ -588,7 +312,1048 @@ ground, and the ground far enough from all of them to be unmistakable."
 
 ---
 
-### Task 3: Schema and war lifecycle
+### Task 2: Viewport maths and the pixel buffer
+
+
+**Files:**
+- Create: `src/lib/canvas/viewport.ts`, `src/lib/canvas/board-image.ts`
+- Test: `src/lib/canvas/__tests__/viewport.test.ts`, `src/lib/canvas/__tests__/board-image.test.ts`
+
+**Interfaces:**
+- Consumes: `rgba` from `wars/palette.ts` (Task 1).
+- Produces:
+  - type `Viewport = { centreX: number; centreY: number; scale: number }`
+  - `boardToScreen(v: Viewport, screen: Size, board: { x: number; y: number }): { x: number; y: number }`
+  - `screenToBoard(v: Viewport, screen: Size, point: { x: number; y: number }): { x: number; y: number }`
+  - `pixelAt(v: Viewport, screen: Size, point, size: Size): { x: number; y: number } | null`
+  - `zoomAt(v: Viewport, screen: Size, point, factor: number, limits: { min: number; max: number }): Viewport`
+  - `panBy(v: Viewport, dx: number, dy: number): Viewport`
+  - `clampToBoard(v: Viewport, board: Size): Viewport`
+  - `isTap(totalMovement: number): boolean`, `TAP_SLOP_PX = 8`
+  - class `BoardImage` with `constructor(width, height)`, `setBase(bytes)`, `applyChange(idx, slot)`, `slotAt(idx)`, `rgbaBuffer: Uint8ClampedArray`
+
+- [ ] **Step 1: Write the failing viewport test**
+
+Create `src/lib/canvas/__tests__/viewport.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import {
+  TAP_SLOP_PX,
+  clampToBoard,
+  isTap,
+  panBy,
+  pixelAt,
+  screenToBoard,
+  zoomAt,
+} from "../viewport";
+
+const SCREEN = { width: 800, height: 600 };
+const BOARD = { width: 200, height: 200 };
+const CENTRED = { centreX: 100, centreY: 100, scale: 2 };
+
+describe("viewport", () => {
+  it("puts the viewport centre at the middle of the screen", () => {
+    expect(screenToBoard(CENTRED, SCREEN, { x: 400, y: 300 })).toEqual({ x: 100, y: 100 });
+  });
+
+  it("converts screen to board at the current scale", () => {
+    // 40 screen pixels right of centre, at 2x, is 20 board pixels.
+    expect(screenToBoard(CENTRED, SCREEN, { x: 440, y: 300 })).toEqual({ x: 120, y: 100 });
+  });
+
+  it("keeps the board point under the cursor fixed while zooming", () => {
+    // This is the whole contract of zoom-to-cursor: whatever you point at is
+    // still under the pointer afterwards.
+    const point = { x: 600, y: 200 };
+    const before = screenToBoard(CENTRED, SCREEN, point);
+    const zoomed = zoomAt(CENTRED, SCREEN, point, 2, { min: 1, max: 64 });
+    const after = screenToBoard(zoomed, SCREEN, point);
+
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+    expect(zoomed.scale).toBe(4);
+  });
+
+  it("refuses to zoom past its limits", () => {
+    expect(zoomAt(CENTRED, SCREEN, { x: 400, y: 300 }, 100, { min: 1, max: 8 }).scale).toBe(8);
+    expect(zoomAt(CENTRED, SCREEN, { x: 400, y: 300 }, 0.001, { min: 1, max: 8 }).scale).toBe(1);
+  });
+
+  it("pans in board units, so a drag moves the same board distance at any zoom", () => {
+    expect(panBy({ ...CENTRED, scale: 2 }, 10, 0).centreX).toBe(110);
+  });
+
+  it("keeps the viewport centre on the board", () => {
+    expect(clampToBoard({ centreX: -50, centreY: 900, scale: 4 }, BOARD)).toEqual({
+      centreX: 0,
+      centreY: 200,
+      scale: 4,
+    });
+  });
+
+  it("floors a screen point to the pixel it lands in", () => {
+    expect(pixelAt(CENTRED, SCREEN, { x: 401, y: 301 }, BOARD)).toEqual({ x: 100, y: 100 });
+  });
+
+  it("returns nothing for a point outside the board", () => {
+    const farOut = { centreX: 0, centreY: 0, scale: 1 };
+    expect(pixelAt(farOut, SCREEN, { x: 0, y: 0 }, BOARD)).toBeNull();
+  });
+
+  it("treats a small movement as a tap and a large one as a drag", () => {
+    // Without this, every pan on a phone ends in an accidental pixel.
+    expect(isTap(0)).toBe(true);
+    expect(isTap(TAP_SLOP_PX - 1)).toBe(true);
+    expect(isTap(TAP_SLOP_PX + 1)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `npx vitest run src/lib/canvas/__tests__/viewport.test.ts`
+Expected: FAIL — cannot resolve `../viewport`.
+
+- [ ] **Step 3: Write `viewport.ts`**
+
+```ts
+/**
+ * Zoom, pan, and the screen-to-board conversion, with no DOM in sight.
+ *
+ * Kept pure so the fiddly part — the part where a zoom drifts by half a pixel
+ * and nobody can say why — is unit tested instead of eyeballed.
+ */
+
+export type Size = { width: number; height: number };
+export type Point = { x: number; y: number };
+export type Viewport = { centreX: number; centreY: number; scale: number };
+
+/**
+ * How far a pointer may travel and still count as a tap.
+ *
+ * Every pan on a touchscreen ends with a pointerup somewhere on the canvas. If
+ * that always painted, the board would fill with pixels nobody meant to place.
+ */
+export const TAP_SLOP_PX = 8;
+
+export function isTap(totalMovement: number): boolean {
+  return totalMovement <= TAP_SLOP_PX;
+}
+
+export function boardToScreen(v: Viewport, screen: Size, board: Point): Point {
+  return {
+    x: screen.width / 2 + (board.x - v.centreX) * v.scale,
+    y: screen.height / 2 + (board.y - v.centreY) * v.scale,
+  };
+}
+
+export function screenToBoard(v: Viewport, screen: Size, point: Point): Point {
+  return {
+    x: v.centreX + (point.x - screen.width / 2) / v.scale,
+    y: v.centreY + (point.y - screen.height / 2) / v.scale,
+  };
+}
+
+/** The pixel a screen point lands in, or null when it lands off the board. */
+export function pixelAt(v: Viewport, screen: Size, point: Point, board: Size): Point | null {
+  const { x, y } = screenToBoard(v, screen, point);
+  const px = Math.floor(x);
+  const py = Math.floor(y);
+  if (px < 0 || py < 0 || px >= board.width || py >= board.height) return null;
+  return { x: px, y: py };
+}
+
+/** Zooms about a screen point, leaving whatever is under it exactly where it is. */
+export function zoomAt(
+  v: Viewport,
+  screen: Size,
+  point: Point,
+  factor: number,
+  limits: { min: number; max: number },
+): Viewport {
+  const scale = Math.min(limits.max, Math.max(limits.min, v.scale * factor));
+  if (scale === v.scale) return v;
+
+  const anchor = screenToBoard(v, screen, point);
+  const offsetX = point.x - screen.width / 2;
+  const offsetY = point.y - screen.height / 2;
+
+  return {
+    scale,
+    centreX: anchor.x - offsetX / scale,
+    centreY: anchor.y - offsetY / scale,
+  };
+}
+
+export function panBy(v: Viewport, dxBoard: number, dyBoard: number): Viewport {
+  return { ...v, centreX: v.centreX + dxBoard, centreY: v.centreY + dyBoard };
+}
+
+/** Keeps the centre on the board, so the canvas cannot be lost off-screen. */
+export function clampToBoard(v: Viewport, board: Size): Viewport {
+  return {
+    ...v,
+    centreX: Math.min(board.width, Math.max(0, v.centreX)),
+    centreY: Math.min(board.height, Math.max(0, v.centreY)),
+  };
+}
+```
+
+- [ ] **Step 4: Run the tests and watch them pass**
+
+Run: `npx vitest run src/lib/canvas/__tests__/viewport.test.ts`
+Expected: 9 passed.
+
+- [ ] **Step 5: Write the failing board-image test**
+
+Create `src/lib/canvas/__tests__/board-image.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { BoardImage } from "../board-image";
+import { toRgb } from "../../wars/palette";
+
+describe("BoardImage", () => {
+  it("starts every pixel on the canvas ground", () => {
+    const image = new BoardImage(4, 4);
+    const [r, g, b] = toRgb("#2E2E38");
+    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([r, g, b, 255]);
+    expect(image.slotAt(0)).toBe(0);
+  });
+
+  it("paints the whole base in one go", () => {
+    const image = new BoardImage(2, 2);
+    image.setBase(new Uint8Array([1, 0, 13, 24]));
+
+    expect(image.slotAt(0)).toBe(1);
+    expect(image.slotAt(2)).toBe(13);
+    const [r, g, b] = toRgb("#BE0039");
+    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([r, g, b, 255]);
+  });
+
+  it("applies a single change without touching its neighbours", () => {
+    const image = new BoardImage(2, 2);
+    image.setBase(new Uint8Array([1, 1, 1, 1]));
+    image.applyChange(2, 24);
+
+    expect(image.slotAt(2)).toBe(24);
+    expect(image.slotAt(1)).toBe(1);
+    expect([...image.rgbaBuffer.slice(8, 12)]).toEqual([255, 255, 255, 255]);
+  });
+
+  it("returns a pixel to the ground when a change clears it", () => {
+    const image = new BoardImage(2, 2);
+    image.setBase(new Uint8Array([5, 5, 5, 5]));
+    image.applyChange(0, 0);
+
+    expect(image.slotAt(0)).toBe(0);
+    const [r, g, b] = toRgb("#2E2E38");
+    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([r, g, b, 255]);
+  });
+
+  it("ignores a change outside the board rather than corrupting the buffer", () => {
+    const image = new BoardImage(2, 2);
+    expect(() => image.applyChange(99, 3)).not.toThrow();
+    expect(image.rgbaBuffer).toHaveLength(16);
+  });
+
+  it("rejects a base of the wrong size, which would silently shear the board", () => {
+    const image = new BoardImage(2, 2);
+    expect(() => image.setBase(new Uint8Array(3))).toThrow(/expected 4 bytes/);
+  });
+});
+```
+
+- [ ] **Step 6: Run it and watch it fail**
+
+Run: `npx vitest run src/lib/canvas/__tests__/board-image.test.ts`
+Expected: FAIL — cannot resolve `../board-image`.
+
+- [ ] **Step 7: Write `board-image.ts`**
+
+```ts
+import { rgba } from "../wars/palette";
+
+/**
+ * The board as pixels, kept as two parallel buffers: the palette slot per
+ * pixel, and the RGBA the browser actually blits.
+ *
+ * Slots are kept because the RGBA cannot be read back reliably — two slots
+ * could in principle share a colour — and because inspecting a pixel needs the
+ * slot, not the colour.
+ *
+ * No DOM here. The React layer wraps `rgbaBuffer` in an ImageData and draws it;
+ * everything that can be got wrong lives in this file, where it is testable.
+ */
+export class BoardImage {
+  readonly slots: Uint8Array;
+  readonly rgbaBuffer: Uint8ClampedArray;
+  private readonly palette = rgba();
+
+  constructor(
+    readonly width: number,
+    readonly height: number,
+  ) {
+    this.slots = new Uint8Array(width * height);
+    this.rgbaBuffer = new Uint8ClampedArray(width * height * 4);
+    this.repaintAll();
+  }
+
+  setBase(bytes: Uint8Array): void {
+    if (bytes.length !== this.slots.length) {
+      throw new Error(`Board is ${this.width}x${this.height}: expected ${this.slots.length} bytes, got ${bytes.length}`);
+    }
+    this.slots.set(bytes);
+    this.repaintAll();
+  }
+
+  applyChange(idx: number, slot: number): void {
+    if (idx < 0 || idx >= this.slots.length) return;
+    this.slots[idx] = slot;
+    this.paintOne(idx);
+  }
+
+  slotAt(idx: number): number {
+    return this.slots[idx] ?? 0;
+  }
+
+  private repaintAll(): void {
+    for (let idx = 0; idx < this.slots.length; idx++) this.paintOne(idx);
+  }
+
+  private paintOne(idx: number): void {
+    const offset = this.slots[idx] * 4;
+    this.rgbaBuffer.set(this.palette.subarray(offset, offset + 4), idx * 4);
+  }
+}
+```
+
+- [ ] **Step 8: Run the tests and watch them pass**
+
+Run: `npx vitest run src/lib/canvas/__tests__/`
+Expected: 21 passed.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/lib/canvas/viewport.ts src/lib/canvas/board-image.ts src/lib/canvas/__tests__
+git commit -m "Add viewport maths and the pixel buffer
+
+Both are pure and unit tested. Zoom-to-cursor and the tap-versus-drag
+threshold are exactly the things that drift by half a pixel and never get
+noticed until somebody paints where they meant to pan."
+```
+
+---
+
+---
+
+### Task 3: Painter identity, client IP, and subnet
+
+
+**Files:**
+- Create: `src/lib/config.ts`, `src/lib/paint/painter.ts`, `src/lib/paint/client-ip.ts`
+- Test: `src/lib/paint/__tests__/painter.test.ts`, `src/lib/paint/__tests__/client-ip.test.ts`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces:
+  - `rateLimitSalt(): string`, `painterCookieSecret(): string`, `trustedProxyHops(): number`, `allowUntrustedClientIp(): boolean` from `src/lib/config.ts`
+  - `PAINTER_COOKIE: "pw_painter"`, `issuePainter(): { cookieValue: string; painterKey: string }`, `readPainter(request: Request): string | null` (returns the painter key), `painterKeyFor(id: string): string`, `painterSetCookie(value: string): string` from `src/lib/paint/painter.ts`
+  - `clientIp(request: Request): { ok: true; ip: string; source: string } | { ok: false; reason: string }`, `hashIp(ip: string): string`, `subnetKey(ip: string): string` from `src/lib/paint/client-ip.ts`
+
+- [ ] **Step 1: Copy the client-IP logic from bidoor**
+
+```bash
+mkdir -p src/lib/paint
+sed -n '/^const PLATFORM_IP_HEADERS/,/^}/p' ~/proyectos/outbid-tokens/src/lib/payments/limits.ts
+```
+
+Read `clientIp` and `hashIp` in bidoor's `src/lib/payments/limits.ts` and carry
+them across verbatim into `src/lib/paint/client-ip.ts`, keeping every comment.
+The rule they encode — proxies *append* to `x-forwarded-for`, so the
+trustworthy entry is counted from the right — is the difference between a rate
+limit and a header anyone can forge to get their own bucket.
+
+- [ ] **Step 2: Write the failing test for client IP and subnets**
+
+Create `src/lib/paint/__tests__/client-ip.test.ts`:
+
+```ts
+import { beforeEach, describe, expect, it } from "vitest";
+import { clientIp, hashIp, subnetKey } from "../client-ip";
+
+function request(headers: Record<string, string>): Request {
+  return new Request("https://pixelwar.fun/api/paint", { headers });
+}
+
+describe("clientIp", () => {
+  beforeEach(() => {
+    process.env.TRUSTED_PROXY_HOPS = "1";
+    delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+  });
+
+  it("prefers a platform header a caller cannot forge", () => {
+    const identity = clientIp(request({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "9.9.9.9" }));
+    expect(identity).toEqual({ ok: true, ip: "1.2.3.4", source: "cf-connecting-ip" });
+  });
+
+  it("reads x-forwarded-for from the right, not the left", () => {
+    // The caller wrote 9.9.9.9; our proxy appended 1.2.3.4. Reading the left
+    // entry would let anyone choose their own rate-limit bucket.
+    const identity = clientIp(request({ "x-forwarded-for": "9.9.9.9, 1.2.3.4" }));
+    expect(identity).toMatchObject({ ok: true, ip: "1.2.3.4" });
+  });
+
+  it("fails closed when no header can be trusted", () => {
+    expect(clientIp(request({})).ok).toBe(false);
+  });
+
+  it("allows an untrusted address only when development says so", () => {
+    process.env.ALLOW_UNTRUSTED_CLIENT_IP = "true";
+    expect(clientIp(request({})).ok).toBe(true);
+  });
+});
+
+describe("hashIp", () => {
+  beforeEach(() => {
+    process.env.RATE_LIMIT_SALT = "test-salt";
+  });
+
+  it("is stable for one address and different across addresses", () => {
+    expect(hashIp("1.2.3.4")).toBe(hashIp("1.2.3.4"));
+    expect(hashIp("1.2.3.4")).not.toBe(hashIp("1.2.3.5"));
+  });
+
+  it("never returns the address itself", () => {
+    expect(hashIp("1.2.3.4")).not.toContain("1.2.3.4");
+  });
+
+  it("changes completely when the salt changes", () => {
+    const before = hashIp("1.2.3.4");
+    process.env.RATE_LIMIT_SALT = "another-salt";
+    expect(hashIp("1.2.3.4")).not.toBe(before);
+  });
+});
+
+describe("subnetKey", () => {
+  beforeEach(() => {
+    process.env.RATE_LIMIT_SALT = "test-salt";
+  });
+
+  it("groups an IPv4 /24 together", () => {
+    expect(subnetKey("1.2.3.4")).toBe(subnetKey("1.2.3.200"));
+    expect(subnetKey("1.2.3.4")).not.toBe(subnetKey("1.2.4.4"));
+  });
+
+  it("groups an IPv6 /64 together", () => {
+    expect(subnetKey("2001:db8:1:2:3:4:5:6")).toBe(subnetKey("2001:db8:1:2:ffff:ffff:ffff:ffff"));
+    expect(subnetKey("2001:db8:1:2::1")).not.toBe(subnetKey("2001:db8:1:3::1"));
+  });
+
+  it("treats a compressed IPv6 address as the same prefix as its expanded form", () => {
+    expect(subnetKey("2001:db8::1")).toBe(subnetKey("2001:0db8:0000:0000::9"));
+  });
+
+  it("is hashed, so it never carries a raw prefix", () => {
+    expect(subnetKey("1.2.3.4")).not.toContain("1.2.3");
+  });
+});
+```
+
+- [ ] **Step 3: Run it and watch it fail**
+
+Run: `npx vitest run src/lib/paint/__tests__/client-ip.test.ts`
+Expected: FAIL — `subnetKey` is not exported.
+
+- [ ] **Step 4: Write config and finish `client-ip.ts`**
+
+Create `src/lib/config.ts`:
+
+```ts
+/**
+ * Environment readers.
+ *
+ * Each one throws rather than defaulting. A default for any of these is a
+ * production deploy that looks healthy while doing the wrong thing: an unsalted
+ * hash, an unsigned cookie, or a rate limit anyone can opt out of.
+ */
+
+function required(name: string, why: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is not set. ${why}`);
+  return value;
+}
+
+export function rateLimitSalt(): string {
+  return required(
+    "RATE_LIMIT_SALT",
+    "An unsalted SHA-256 of an IPv4 address is reversible by brute force, so the " +
+      "stored hashes would be visitor IP addresses in all but name.",
+  );
+}
+
+export function painterCookieSecret(): string {
+  return required(
+    "PAINTER_COOKIE_SECRET",
+    "Without it anyone can mint a painter identity per pixel and the cooldown means nothing.",
+  );
+}
+
+export function trustedProxyHops(): number {
+  const raw = process.env.TRUSTED_PROXY_HOPS?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : 1;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+export function allowUntrustedClientIp(): boolean {
+  return process.env.ALLOW_UNTRUSTED_CLIENT_IP?.trim() === "true";
+}
+
+/**
+ * Paints allowed per subnet per window, before the burst cap bites.
+ *
+ * A function, not a constant: a module-level constant freezes the value at
+ * import time, which makes it unreadable to any test that needs a different
+ * cap and untunable without a redeploy.
+ */
+export function subnetBurst(): { cap: number; windowSeconds: number } {
+  return {
+    cap: Number.parseInt(process.env.PAINT_SUBNET_BURST ?? "60", 10),
+    windowSeconds: Number.parseInt(process.env.PAINT_SUBNET_WINDOW_SECONDS ?? "60", 10),
+  };
+}
+
+/** Beyond this many changes, a client is told to refetch the board instead. */
+export function diffMaxChanges(): number {
+  return Number.parseInt(process.env.DIFF_MAX_CHANGES ?? "8000", 10);
+}
+```
+
+Append `subnetKey` to `src/lib/paint/client-ip.ts`:
+
+```ts
+import { createHash } from "node:crypto";
+import { rateLimitSalt } from "../config";
+
+// ... clientIp and hashIp, carried over from bidoor ...
+
+/**
+ * The address's network prefix, hashed.
+ *
+ * A phone cycling through a carrier's pool gets a fresh address on every
+ * reconnect but not a fresh prefix, so the prefix is where rotation actually
+ * shows up. /24 for IPv4 and /64 for IPv6 are the smallest blocks routinely
+ * allocated to one subscriber; going narrower would start grouping strangers
+ * together, which turns a burst cap into an outage for a neighbourhood.
+ */
+export function subnetKey(ip: string): string {
+  return createHash("sha256").update(`${rateLimitSalt()}:subnet:${prefixOf(ip)}`).digest("hex");
+}
+
+function prefixOf(ip: string): string {
+  if (ip.includes(":")) return `${expandIpv6(ip).slice(0, 4).join(":")}::/64`;
+
+  const octets = ip.split(".");
+  if (octets.length !== 4) return ip; // not an address we recognise; group it alone
+  return `${octets.slice(0, 3).join(".")}.0/24`;
+}
+
+/** Eight lowercase, unpadded groups. "2001:db8::1" and "2001:0db8:0:0::1" agree. */
+function expandIpv6(ip: string): string[] {
+  const [head, tail = ""] = ip.toLowerCase().split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const missing = 8 - left.length - right.length;
+  const middle = ip.includes("::") ? Array(Math.max(0, missing)).fill("0") : [];
+  return [...left, ...middle, ...right].map((group) =>
+    String(Number.parseInt(group || "0", 16).toString(16)),
+  );
+}
+```
+
+- [ ] **Step 5: Run the tests and watch them pass**
+
+Run: `npx vitest run src/lib/paint/__tests__/client-ip.test.ts`
+Expected: 11 passed.
+
+- [ ] **Step 6: Write the failing test for painter identity**
+
+Create `src/lib/paint/__tests__/painter.test.ts`:
+
+```ts
+import { beforeEach, describe, expect, it } from "vitest";
+import { PAINTER_COOKIE, issuePainter, painterSetCookie, readPainter } from "../painter";
+
+function withCookie(value: string): Request {
+  return new Request("https://pixelwar.fun/api/paint", {
+    headers: { cookie: `${PAINTER_COOKIE}=${value}` },
+  });
+}
+
+describe("painter identity", () => {
+  beforeEach(() => {
+    process.env.PAINTER_COOKIE_SECRET = "secret-under-test";
+    process.env.RATE_LIMIT_SALT = "test-salt";
+  });
+
+  it("issues a different identity each time", () => {
+    expect(issuePainter().cookieValue).not.toBe(issuePainter().cookieValue);
+  });
+
+  it("reads back the key it issued", () => {
+    const issued = issuePainter();
+    expect(readPainter(withCookie(issued.cookieValue))).toBe(issued.painterKey);
+  });
+
+  it("rejects a cookie whose signature does not match", () => {
+    const issued = issuePainter();
+    const [id] = issued.cookieValue.split(".");
+    expect(readPainter(withCookie(`${id}.forged-signature`))).toBeNull();
+  });
+
+  it("rejects a cookie signed with a different secret", () => {
+    const issued = issuePainter();
+    process.env.PAINTER_COOKIE_SECRET = "a-different-secret";
+    expect(readPainter(withCookie(issued.cookieValue))).toBeNull();
+  });
+
+  it("rejects malformed cookies rather than trusting them", () => {
+    for (const value of ["", "no-dot", ".", "a.b.c"]) {
+      expect(readPainter(withCookie(value))).toBeNull();
+    }
+  });
+
+  it("returns null when there is no cookie at all", () => {
+    expect(readPainter(new Request("https://pixelwar.fun/api/paint"))).toBeNull();
+  });
+
+  it("never stores anything that could reconstruct the cookie", () => {
+    const issued = issuePainter();
+    const [id] = issued.cookieValue.split(".");
+    // The key is a salted hash of the id. Holding the key must not be enough
+    // to mint a valid cookie, so a database leak is not a forgery kit.
+    expect(issued.painterKey).not.toContain(id);
+    expect(issued.cookieValue).not.toContain(issued.painterKey);
+  });
+
+  it("sets a cookie that a script cannot read and a cross-site request cannot send", () => {
+    const header = painterSetCookie("value-under-test");
+    expect(header).toContain("HttpOnly");
+    expect(header).toContain("SameSite=Lax");
+    expect(header).toContain("Secure");
+    expect(header).toContain("Path=/");
+  });
+});
+```
+
+- [ ] **Step 7: Run it and watch it fail**
+
+Run: `npx vitest run src/lib/paint/__tests__/painter.test.ts`
+Expected: FAIL — cannot resolve `../painter`.
+
+- [ ] **Step 8: Write the implementation**
+
+Create `src/lib/paint/painter.ts`:
+
+```ts
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { painterCookieSecret, rateLimitSalt } from "../config";
+
+/**
+ * Who is painting, in the absence of accounts.
+ *
+ * A random id in a signed cookie. The signature is what makes it worth
+ * anything: without it a caller mints a fresh identity per pixel and the
+ * cooldown is decoration.
+ *
+ * The server stores only a salted hash of the id, never the id. Holding the
+ * whole table is therefore not enough to forge a cookie, which is the
+ * difference between a database leak and a database leak that hands somebody
+ * unlimited paint.
+ *
+ * This is not a strong identity and is not meant to be one. It is one of two
+ * keys — the other is the caller's address — and a paint has to satisfy both.
+ */
+
+export const PAINTER_COOKIE = "pw_painter";
+
+/** Long enough that a returning visitor keeps their cooldown across a war. */
+const COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+
+function sign(id: string): string {
+  return createHmac("sha256", painterCookieSecret()).update(id).digest("base64url");
+}
+
+export function painterKeyFor(id: string): string {
+  return createHash("sha256").update(`${rateLimitSalt()}:painter:${id}`).digest("hex");
+}
+
+export function issuePainter(): { cookieValue: string; painterKey: string } {
+  const id = randomBytes(16).toString("base64url");
+  return { cookieValue: `${id}.${sign(id)}`, painterKey: painterKeyFor(id) };
+}
+
+/** The painter key carried by this request, or null if there is not a valid one. */
+export function readPainter(request: Request): string | null {
+  const raw = request.headers
+    .get("cookie")
+    ?.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${PAINTER_COOKIE}=`))
+    ?.slice(PAINTER_COOKIE.length + 1);
+
+  if (!raw) return null;
+
+  const parts = decodeURIComponent(raw).split(".");
+  if (parts.length !== 2) return null;
+
+  const [id, signature] = parts;
+  if (!id || !signature) return null;
+
+  const expected = Buffer.from(sign(id));
+  const offered = Buffer.from(signature);
+  // Compare fixed-length digests: an early return on length would leak how
+  // long the signature is.
+  if (offered.length !== expected.length) return null;
+  if (!timingSafeEqual(offered, expected)) return null;
+
+  return painterKeyFor(id);
+}
+
+export function painterSetCookie(value: string): string {
+  return [
+    `${PAINTER_COOKIE}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+    `Max-Age=${COOKIE_MAX_AGE_SECONDS}`,
+  ].join("; ");
+}
+```
+
+- [ ] **Step 9: Run the tests and watch them pass**
+
+Run: `npx vitest run src/lib/paint/__tests__/`
+Expected: 19 passed.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/lib/config.ts src/lib/paint src/lib/paint/__tests__
+git commit -m "Add painter identity, client address, and subnet grouping
+
+The painter cookie is signed and the server keeps only a salted hash of the id,
+so holding the table is not enough to mint one. The subnet key exists because a
+phone on mobile data gets a new address on every reconnect but keeps its prefix."
+```
+
+---
+
+---
+
+### Task 4: Neon and the database harness
+
+**Files:**
+- Create: `src/lib/db.ts`, `scripts/migrate.mts`, `migrations/000_bootstrap.sql`, `.env.example`
+- Modify: `vitest.setup.ts`, `package.json`
+- Test: `src/lib/__tests__/db.test.ts`
+
+**Interfaces:**
+- Consumes: the scaffold from Task 1.
+- Produces: `pool()`, `query<T>(text, params): Promise<T[]>`, `queryOne<T>`, `execute(text, params): Promise<number>`, `transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>`, `isUniqueViolation(err): boolean`, `violatedConstraint(err): string`, `closePool(): Promise<void>` from `src/lib/db.ts`; the exported test helper `truncateAll()` from `vitest.setup.ts`; and the scripts `db:migrate`, `db:migrate:test`, `db:up`.
+
+**There is no local Postgres.** The database is Neon, exactly as in bidoor.
+Two branches of one Neon project: `main` holds the app database and `tests`
+holds a disposable copy. Both connection strings live in `.env.local` and
+nowhere else — never in `.env.example`, never in a commit, never in a comment.
+
+- [ ] **Step 1: Install the driver**
+
+```bash
+npm install pg
+npm install -D @types/pg
+```
+
+- [ ] **Step 2: Copy `db.ts` from bidoor**
+
+```bash
+cp ~/proyectos/outbid-tokens/src/lib/db.ts src/lib/db.ts
+```
+
+Read it before moving on. Change nothing structural: the pool cached on
+`globalThis`, the deliberately swallowed pool error, and `isUniqueViolation`
+are all load-bearing here too. Reword only the doc comment's references to
+bidoor's board so it describes pixelwar.
+
+- [ ] **Step 3: Write the migration runner**
+
+Create `scripts/migrate.mts`:
+
+```ts
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { config } from "dotenv";
+import { Pool } from "pg";
+
+/**
+ * Applies every unapplied migration, in filename order, each inside its own
+ * transaction. A migration that throws leaves the database exactly as it was
+ * and stops the run: applying half a schema and reporting success is the one
+ * outcome a migration tool must never produce.
+ */
+
+config({ path: ".env.local" });
+
+const useTest = process.argv.includes("--test");
+const url = useTest ? process.env.TEST_DATABASE_URL : process.env.DATABASE_URL;
+
+if (!url) {
+  console.error(
+    `${useTest ? "TEST_DATABASE_URL" : "DATABASE_URL"} is not set. There is no default: ` +
+      "a fallback would mean migrating the wrong database rather than failing.",
+  );
+  process.exit(1);
+}
+
+const pool = new Pool({ connectionString: url });
+const dir = join(process.cwd(), "migrations");
+
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+
+const applied = new Set(
+  (await pool.query<{ version: string }>("SELECT version FROM schema_migrations")).rows.map(
+    (row) => row.version,
+  ),
+);
+
+const files = (await readdir(dir)).filter((name) => name.endsWith(".sql")).sort();
+let count = 0;
+
+for (const file of files) {
+  const version = file.replace(/\.sql$/, "");
+  if (applied.has(version)) continue;
+
+  const sql = await readFile(join(dir, file), "utf8");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(sql);
+    await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [version]);
+    await client.query("COMMIT");
+    console.log(`applied ${version}`);
+    count++;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(`failed on ${version}:`, error);
+    process.exit(1);
+  } finally {
+    client.release();
+  }
+}
+
+console.log(count === 0 ? "nothing to apply" : `applied ${count} migration(s)`);
+await pool.end();
+```
+
+- [ ] **Step 4: Add a bootstrap migration**
+
+Create `migrations/000_bootstrap.sql`:
+
+```sql
+-- Nothing structural yet; 001 carries the schema. This file exists so the
+-- runner has a migration to apply and the harness has something to assert on.
+CREATE TABLE IF NOT EXISTS bootstrap_check (
+  ok BOOLEAN NOT NULL DEFAULT TRUE
+);
+```
+
+- [ ] **Step 5: Add the scripts**
+
+In `package.json`:
+
+```json
+{
+  "db:migrate": "tsx scripts/migrate.mts",
+  "db:migrate:test": "tsx scripts/migrate.mts --test",
+  "db:up": "npm run db:migrate && npm run db:migrate:test"
+}
+```
+
+There is no `db:reset`: dropping a Neon branch is not something a script
+should do behind an npm alias. Resetting means resetting the `tests` branch
+from the Neon console, on purpose.
+
+- [ ] **Step 6: Write `.env.example`**
+
+Following bidoor's style, where every variable explains why it has no default.
+The file carries names and reasons only — never a real connection string:
+
+```bash
+# Postgres for the app, in every environment. Neon, branch `main`.
+#
+# Required, no default: a fallback would mean running against the wrong
+# database rather than failing. Keep ?sslmode=require.
+DATABASE_URL=
+
+# Postgres for the TEST SUITE and nothing else. Neon, branch `tests`.
+#
+# Deliberately a different variable, and deliberately a different branch. The
+# suite truncates every table between tests, so this must point at a database
+# that is disposable on purpose. The suite refuses to start if it is the same
+# as DATABASE_URL.
+TEST_DATABASE_URL=
+
+# Salt for hashing caller IP addresses.
+#
+# REQUIRED in production. An unsalted SHA-256 of an IPv4 address is reversible
+# by brute force — four billion preimages — so the stored hashes would be
+# visitor IP addresses in all but name. Generate with: openssl rand -hex 32
+RATE_LIMIT_SALT=
+
+# Secret that signs the painter cookie.
+#
+# REQUIRED in production, no default. Without it anyone can mint a painter
+# identity per pixel and the cooldown means nothing.
+# Generate with: openssl rand -hex 32
+PAINTER_COOKIE_SECRET=
+
+# Allow requests with no trustworthy client address. Local development only —
+# it must stay unset in production, where no client address means no rate
+# limiting at all.
+# ALLOW_UNTRUSTED_CLIENT_IP=true
+
+# How many proxies sit in front of this app and append to x-forwarded-for.
+# Default 1, which matches Vercel.
+# TRUSTED_PROXY_HOPS=1
+```
+
+- [ ] **Step 7: Extend `vitest.setup.ts` with the database guards**
+
+```ts
+import { config } from "dotenv";
+import { afterAll, beforeAll, beforeEach } from "vitest";
+import { closePool, execute, query } from "./src/lib/db";
+
+config({ path: ".env.local" });
+
+beforeAll(() => {
+  const test = process.env.TEST_DATABASE_URL?.trim();
+  const app = process.env.DATABASE_URL?.trim();
+
+  if (!test) {
+    throw new Error(
+      "TEST_DATABASE_URL is not set. The suite truncates every table, so it " +
+        "refuses to run without a database that is explicitly disposable.",
+    );
+  }
+  if (test === app) {
+    throw new Error(
+      "TEST_DATABASE_URL equals DATABASE_URL. The suite truncates every table; " +
+        "pointing it at the app database would delete real data.",
+    );
+  }
+
+  // Everything under test reads DATABASE_URL. Redirect it once, here.
+  process.env.DATABASE_URL = test;
+});
+
+/** Empties every table except the migration ledger. */
+export async function truncateAll(): Promise<void> {
+  const tables = await query<{ tablename: string }>(
+    `SELECT tablename FROM pg_tables
+      WHERE schemaname = 'public' AND tablename <> 'schema_migrations'`,
+  );
+  if (tables.length === 0) return;
+  await execute(`TRUNCATE ${tables.map((t) => `"${t.tablename}"`).join(", ")} CASCADE`);
+}
+
+beforeEach(truncateAll);
+afterAll(closePool);
+```
+
+- [ ] **Step 8: Write the failing test**
+
+Create `src/lib/__tests__/db.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { execute, query, transaction } from "../db";
+
+describe("database harness", () => {
+  it("is pointed at the test branch, not the app branch", async () => {
+    // Neon names both branches' databases the same, so identity is proved by
+    // the connection string the suite redirected DATABASE_URL to, not by the
+    // database name.
+    expect(process.env.DATABASE_URL).toBe(process.env.TEST_DATABASE_URL);
+  });
+
+  it("has applied the migrations", async () => {
+    const rows = await query<{ version: string }>("SELECT version FROM schema_migrations");
+    expect(rows.map((r) => r.version)).toContain("000_bootstrap");
+  });
+
+  it("rolls a transaction back when the work throws", async () => {
+    await execute("INSERT INTO bootstrap_check (ok) VALUES (TRUE)");
+
+    await expect(
+      transaction(async (client) => {
+        await client.query("INSERT INTO bootstrap_check (ok) VALUES (FALSE)");
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    const rows = await query<{ ok: boolean }>("SELECT ok FROM bootstrap_check");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ok).toBe(true);
+  });
+
+  it("truncates between tests, so the previous test's row is gone", async () => {
+    expect(await query("SELECT 1 FROM bootstrap_check")).toHaveLength(0);
+  });
+});
+```
+
+- [ ] **Step 9: Run it and watch it fail**
+
+Run: `npm test`
+Expected: FAIL — the Neon branches have no tables yet.
+
+- [ ] **Step 10: Apply the migrations**
+
+Run: `npm run db:up`
+Expected: `applied 000_bootstrap` twice, once per branch.
+
+If the first command hangs for a few seconds, that is Neon waking a suspended
+branch, not a problem.
+
+- [ ] **Step 11: Run the tests and watch them pass**
+
+Run: `npm test`
+Expected: 12 passed (8 palette, 4 database).
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add -A
+git commit -m "Connect to Neon and guard the test database
+
+The suite refuses to run unless TEST_DATABASE_URL is set and differs from
+DATABASE_URL, because it truncates every table between tests. Connection
+strings live in .env.local and nowhere else."
+```
+
+---
+
+### Task 5: Schema and war lifecycle
+
 
 **Files:**
 - Create: `migrations/001_initial.sql`, `src/lib/wars/lifecycle.ts`
@@ -596,7 +1361,7 @@ ground, and the ground far enough from all of them to be unmistakable."
 - Delete: `migrations/000_bootstrap.sql` is kept — it is already applied everywhere and removing it would make the ledger lie.
 
 **Interfaces:**
-- Consumes: `query`, `queryOne`, `execute`, `transaction` from `src/lib/db.ts`.
+- Consumes: `query`, `queryOne`, `execute`, `transaction` from `src/lib/db.ts` (Task 4).
 - Produces:
   - type `War = { id: string; slug: string; title: string; status: "draft"|"scheduled"|"live"|"ended"|"cancelled"; width: number; height: number; maxTokens: number; entryPriceUsd: number; cooldownSeconds: number; startsAt: Date; endsAt: Date; lastSeq: number; endedAt: Date | null }`
   - type `WarToken = { id: string; warId: string; chainId: string; contract: string; colourSlot: number; status: "reserved"|"active"|"removed"|"released"; name: string; ticker: string; logoUrl: string | null }`
@@ -1054,399 +1819,10 @@ produce one winner and one no-op."
 
 ---
 
-### Task 4: Painter identity, client IP, and subnet
-
-**Files:**
-- Create: `src/lib/config.ts`, `src/lib/paint/painter.ts`, `src/lib/paint/client-ip.ts`
-- Test: `src/lib/paint/__tests__/painter.test.ts`, `src/lib/paint/__tests__/client-ip.test.ts`
-
-**Interfaces:**
-- Consumes: nothing from earlier tasks.
-- Produces:
-  - `rateLimitSalt(): string`, `painterCookieSecret(): string`, `trustedProxyHops(): number`, `allowUntrustedClientIp(): boolean` from `src/lib/config.ts`
-  - `PAINTER_COOKIE: "pw_painter"`, `issuePainter(): { cookieValue: string; painterKey: string }`, `readPainter(request: Request): string | null` (returns the painter key), `painterKeyFor(id: string): string`, `painterSetCookie(value: string): string` from `src/lib/paint/painter.ts`
-  - `clientIp(request: Request): { ok: true; ip: string; source: string } | { ok: false; reason: string }`, `hashIp(ip: string): string`, `subnetKey(ip: string): string` from `src/lib/paint/client-ip.ts`
-
-- [ ] **Step 1: Copy the client-IP logic from bidoor**
-
-```bash
-mkdir -p src/lib/paint
-sed -n '/^const PLATFORM_IP_HEADERS/,/^}/p' ~/proyectos/outbid-tokens/src/lib/payments/limits.ts
-```
-
-Read `clientIp` and `hashIp` in bidoor's `src/lib/payments/limits.ts` and carry
-them across verbatim into `src/lib/paint/client-ip.ts`, keeping every comment.
-The rule they encode — proxies *append* to `x-forwarded-for`, so the
-trustworthy entry is counted from the right — is the difference between a rate
-limit and a header anyone can forge to get their own bucket.
-
-- [ ] **Step 2: Write the failing test for client IP and subnets**
-
-Create `src/lib/paint/__tests__/client-ip.test.ts`:
-
-```ts
-import { beforeEach, describe, expect, it } from "vitest";
-import { clientIp, hashIp, subnetKey } from "../client-ip";
-
-function request(headers: Record<string, string>): Request {
-  return new Request("https://pixelwar.fun/api/paint", { headers });
-}
-
-describe("clientIp", () => {
-  beforeEach(() => {
-    process.env.TRUSTED_PROXY_HOPS = "1";
-    delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
-  });
-
-  it("prefers a platform header a caller cannot forge", () => {
-    const identity = clientIp(request({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "9.9.9.9" }));
-    expect(identity).toEqual({ ok: true, ip: "1.2.3.4", source: "cf-connecting-ip" });
-  });
-
-  it("reads x-forwarded-for from the right, not the left", () => {
-    // The caller wrote 9.9.9.9; our proxy appended 1.2.3.4. Reading the left
-    // entry would let anyone choose their own rate-limit bucket.
-    const identity = clientIp(request({ "x-forwarded-for": "9.9.9.9, 1.2.3.4" }));
-    expect(identity).toMatchObject({ ok: true, ip: "1.2.3.4" });
-  });
-
-  it("fails closed when no header can be trusted", () => {
-    expect(clientIp(request({})).ok).toBe(false);
-  });
-
-  it("allows an untrusted address only when development says so", () => {
-    process.env.ALLOW_UNTRUSTED_CLIENT_IP = "true";
-    expect(clientIp(request({})).ok).toBe(true);
-  });
-});
-
-describe("hashIp", () => {
-  beforeEach(() => {
-    process.env.RATE_LIMIT_SALT = "test-salt";
-  });
-
-  it("is stable for one address and different across addresses", () => {
-    expect(hashIp("1.2.3.4")).toBe(hashIp("1.2.3.4"));
-    expect(hashIp("1.2.3.4")).not.toBe(hashIp("1.2.3.5"));
-  });
-
-  it("never returns the address itself", () => {
-    expect(hashIp("1.2.3.4")).not.toContain("1.2.3.4");
-  });
-
-  it("changes completely when the salt changes", () => {
-    const before = hashIp("1.2.3.4");
-    process.env.RATE_LIMIT_SALT = "another-salt";
-    expect(hashIp("1.2.3.4")).not.toBe(before);
-  });
-});
-
-describe("subnetKey", () => {
-  beforeEach(() => {
-    process.env.RATE_LIMIT_SALT = "test-salt";
-  });
-
-  it("groups an IPv4 /24 together", () => {
-    expect(subnetKey("1.2.3.4")).toBe(subnetKey("1.2.3.200"));
-    expect(subnetKey("1.2.3.4")).not.toBe(subnetKey("1.2.4.4"));
-  });
-
-  it("groups an IPv6 /64 together", () => {
-    expect(subnetKey("2001:db8:1:2:3:4:5:6")).toBe(subnetKey("2001:db8:1:2:ffff:ffff:ffff:ffff"));
-    expect(subnetKey("2001:db8:1:2::1")).not.toBe(subnetKey("2001:db8:1:3::1"));
-  });
-
-  it("treats a compressed IPv6 address as the same prefix as its expanded form", () => {
-    expect(subnetKey("2001:db8::1")).toBe(subnetKey("2001:0db8:0000:0000::9"));
-  });
-
-  it("is hashed, so it never carries a raw prefix", () => {
-    expect(subnetKey("1.2.3.4")).not.toContain("1.2.3");
-  });
-});
-```
-
-- [ ] **Step 3: Run it and watch it fail**
-
-Run: `npx vitest run src/lib/paint/__tests__/client-ip.test.ts`
-Expected: FAIL — `subnetKey` is not exported.
-
-- [ ] **Step 4: Write config and finish `client-ip.ts`**
-
-Create `src/lib/config.ts`:
-
-```ts
-/**
- * Environment readers.
- *
- * Each one throws rather than defaulting. A default for any of these is a
- * production deploy that looks healthy while doing the wrong thing: an unsalted
- * hash, an unsigned cookie, or a rate limit anyone can opt out of.
- */
-
-function required(name: string, why: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is not set. ${why}`);
-  return value;
-}
-
-export function rateLimitSalt(): string {
-  return required(
-    "RATE_LIMIT_SALT",
-    "An unsalted SHA-256 of an IPv4 address is reversible by brute force, so the " +
-      "stored hashes would be visitor IP addresses in all but name.",
-  );
-}
-
-export function painterCookieSecret(): string {
-  return required(
-    "PAINTER_COOKIE_SECRET",
-    "Without it anyone can mint a painter identity per pixel and the cooldown means nothing.",
-  );
-}
-
-export function trustedProxyHops(): number {
-  const raw = process.env.TRUSTED_PROXY_HOPS?.trim();
-  const parsed = raw ? Number.parseInt(raw, 10) : 1;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-}
-
-export function allowUntrustedClientIp(): boolean {
-  return process.env.ALLOW_UNTRUSTED_CLIENT_IP?.trim() === "true";
-}
-
-/** Paints allowed per subnet per window, before the burst cap bites. */
-export const SUBNET_BURST = {
-  cap: Number.parseInt(process.env.PAINT_SUBNET_BURST ?? "60", 10),
-  windowSeconds: Number.parseInt(process.env.PAINT_SUBNET_WINDOW_SECONDS ?? "60", 10),
-};
-
-/** Beyond this many changes, a client is told to refetch the board instead. */
-export const DIFF_MAX_CHANGES = Number.parseInt(process.env.DIFF_MAX_CHANGES ?? "8000", 10);
-```
-
-Append `subnetKey` to `src/lib/paint/client-ip.ts`:
-
-```ts
-import { createHash } from "node:crypto";
-import { rateLimitSalt } from "../config";
-
-// ... clientIp and hashIp, carried over from bidoor ...
-
-/**
- * The address's network prefix, hashed.
- *
- * A phone cycling through a carrier's pool gets a fresh address on every
- * reconnect but not a fresh prefix, so the prefix is where rotation actually
- * shows up. /24 for IPv4 and /64 for IPv6 are the smallest blocks routinely
- * allocated to one subscriber; going narrower would start grouping strangers
- * together, which turns a burst cap into an outage for a neighbourhood.
- */
-export function subnetKey(ip: string): string {
-  return createHash("sha256").update(`${rateLimitSalt()}:subnet:${prefixOf(ip)}`).digest("hex");
-}
-
-function prefixOf(ip: string): string {
-  if (ip.includes(":")) return `${expandIpv6(ip).slice(0, 4).join(":")}::/64`;
-
-  const octets = ip.split(".");
-  if (octets.length !== 4) return ip; // not an address we recognise; group it alone
-  return `${octets.slice(0, 3).join(".")}.0/24`;
-}
-
-/** Eight lowercase, unpadded groups. "2001:db8::1" and "2001:0db8:0:0::1" agree. */
-function expandIpv6(ip: string): string[] {
-  const [head, tail = ""] = ip.toLowerCase().split("::");
-  const left = head ? head.split(":") : [];
-  const right = tail ? tail.split(":") : [];
-  const missing = 8 - left.length - right.length;
-  const middle = ip.includes("::") ? Array(Math.max(0, missing)).fill("0") : [];
-  return [...left, ...middle, ...right].map((group) =>
-    String(Number.parseInt(group || "0", 16).toString(16)),
-  );
-}
-```
-
-- [ ] **Step 5: Run the tests and watch them pass**
-
-Run: `npx vitest run src/lib/paint/__tests__/client-ip.test.ts`
-Expected: 11 passed.
-
-- [ ] **Step 6: Write the failing test for painter identity**
-
-Create `src/lib/paint/__tests__/painter.test.ts`:
-
-```ts
-import { beforeEach, describe, expect, it } from "vitest";
-import { PAINTER_COOKIE, issuePainter, painterSetCookie, readPainter } from "../painter";
-
-function withCookie(value: string): Request {
-  return new Request("https://pixelwar.fun/api/paint", {
-    headers: { cookie: `${PAINTER_COOKIE}=${value}` },
-  });
-}
-
-describe("painter identity", () => {
-  beforeEach(() => {
-    process.env.PAINTER_COOKIE_SECRET = "secret-under-test";
-    process.env.RATE_LIMIT_SALT = "test-salt";
-  });
-
-  it("issues a different identity each time", () => {
-    expect(issuePainter().cookieValue).not.toBe(issuePainter().cookieValue);
-  });
-
-  it("reads back the key it issued", () => {
-    const issued = issuePainter();
-    expect(readPainter(withCookie(issued.cookieValue))).toBe(issued.painterKey);
-  });
-
-  it("rejects a cookie whose signature does not match", () => {
-    const issued = issuePainter();
-    const [id] = issued.cookieValue.split(".");
-    expect(readPainter(withCookie(`${id}.forged-signature`))).toBeNull();
-  });
-
-  it("rejects a cookie signed with a different secret", () => {
-    const issued = issuePainter();
-    process.env.PAINTER_COOKIE_SECRET = "a-different-secret";
-    expect(readPainter(withCookie(issued.cookieValue))).toBeNull();
-  });
-
-  it("rejects malformed cookies rather than trusting them", () => {
-    for (const value of ["", "no-dot", ".", "a.b.c"]) {
-      expect(readPainter(withCookie(value))).toBeNull();
-    }
-  });
-
-  it("returns null when there is no cookie at all", () => {
-    expect(readPainter(new Request("https://pixelwar.fun/api/paint"))).toBeNull();
-  });
-
-  it("never stores anything that could reconstruct the cookie", () => {
-    const issued = issuePainter();
-    const [id] = issued.cookieValue.split(".");
-    // The key is a salted hash of the id. Holding the key must not be enough
-    // to mint a valid cookie, so a database leak is not a forgery kit.
-    expect(issued.painterKey).not.toContain(id);
-    expect(issued.cookieValue).not.toContain(issued.painterKey);
-  });
-
-  it("sets a cookie that a script cannot read and a cross-site request cannot send", () => {
-    const header = painterSetCookie("value-under-test");
-    expect(header).toContain("HttpOnly");
-    expect(header).toContain("SameSite=Lax");
-    expect(header).toContain("Secure");
-    expect(header).toContain("Path=/");
-  });
-});
-```
-
-- [ ] **Step 7: Run it and watch it fail**
-
-Run: `npx vitest run src/lib/paint/__tests__/painter.test.ts`
-Expected: FAIL — cannot resolve `../painter`.
-
-- [ ] **Step 8: Write the implementation**
-
-Create `src/lib/paint/painter.ts`:
-
-```ts
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { painterCookieSecret, rateLimitSalt } from "../config";
-
-/**
- * Who is painting, in the absence of accounts.
- *
- * A random id in a signed cookie. The signature is what makes it worth
- * anything: without it a caller mints a fresh identity per pixel and the
- * cooldown is decoration.
- *
- * The server stores only a salted hash of the id, never the id. Holding the
- * whole table is therefore not enough to forge a cookie, which is the
- * difference between a database leak and a database leak that hands somebody
- * unlimited paint.
- *
- * This is not a strong identity and is not meant to be one. It is one of two
- * keys — the other is the caller's address — and a paint has to satisfy both.
- */
-
-export const PAINTER_COOKIE = "pw_painter";
-
-/** Long enough that a returning visitor keeps their cooldown across a war. */
-const COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
-
-function sign(id: string): string {
-  return createHmac("sha256", painterCookieSecret()).update(id).digest("base64url");
-}
-
-export function painterKeyFor(id: string): string {
-  return createHash("sha256").update(`${rateLimitSalt()}:painter:${id}`).digest("hex");
-}
-
-export function issuePainter(): { cookieValue: string; painterKey: string } {
-  const id = randomBytes(16).toString("base64url");
-  return { cookieValue: `${id}.${sign(id)}`, painterKey: painterKeyFor(id) };
-}
-
-/** The painter key carried by this request, or null if there is not a valid one. */
-export function readPainter(request: Request): string | null {
-  const raw = request.headers
-    .get("cookie")
-    ?.split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${PAINTER_COOKIE}=`))
-    ?.slice(PAINTER_COOKIE.length + 1);
-
-  if (!raw) return null;
-
-  const parts = decodeURIComponent(raw).split(".");
-  if (parts.length !== 2) return null;
-
-  const [id, signature] = parts;
-  if (!id || !signature) return null;
-
-  const expected = Buffer.from(sign(id));
-  const offered = Buffer.from(signature);
-  // Compare fixed-length digests: an early return on length would leak how
-  // long the signature is.
-  if (offered.length !== expected.length) return null;
-  if (!timingSafeEqual(offered, expected)) return null;
-
-  return painterKeyFor(id);
-}
-
-export function painterSetCookie(value: string): string {
-  return [
-    `${PAINTER_COOKIE}=${encodeURIComponent(value)}`,
-    "Path=/",
-    "HttpOnly",
-    "Secure",
-    "SameSite=Lax",
-    `Max-Age=${COOKIE_MAX_AGE_SECONDS}`,
-  ].join("; ");
-}
-```
-
-- [ ] **Step 9: Run the tests and watch them pass**
-
-Run: `npx vitest run src/lib/paint/__tests__/`
-Expected: 19 passed.
-
-- [ ] **Step 10: Commit**
-
-```bash
-git add src/lib/config.ts src/lib/paint src/lib/paint/__tests__
-git commit -m "Add painter identity, client address, and subnet grouping
-
-The painter cookie is signed and the server keeps only a salted hash of the id,
-so holding the table is not enough to mint one. The subnet key exists because a
-phone on mobile data gets a new address on every reconnect but keeps its prefix."
-```
-
 ---
 
-### Task 5: Reading the canvas
+### Task 6: Reading the canvas
+
 
 **Files:**
 - Create: `src/lib/canvas/state.ts`, `src/lib/canvas/diff.ts`
@@ -1714,7 +2090,7 @@ Expected: FAIL — cannot resolve `../diff`.
 - [ ] **Step 8: Write `diff.ts`**
 
 ```ts
-import { DIFF_MAX_CHANGES } from "../config";
+import { diffMaxChanges } from "../config";
 import { query, queryOne } from "../db";
 import type { War } from "../wars/lifecycle";
 
@@ -1733,7 +2109,7 @@ export type DiffResult =
 export async function changesSince(
   war: War,
   since: number,
-  max: number = DIFF_MAX_CHANGES,
+  max: number = diffMaxChanges(),
 ): Promise<DiffResult> {
   const head = await queryOne<{ last_seq: string }>(`SELECT last_seq FROM wars WHERE id = $1`, [
     war.id,
@@ -1773,14 +2149,17 @@ be ahead of the sequence it reports. The other order leaves permanent holes."
 
 ---
 
-### Task 6: Painting a pixel
+---
+
+### Task 7: Painting a pixel
+
 
 **Files:**
 - Create: `src/lib/paint/bans.ts`, `src/lib/paint/paint.ts`
 - Test: `src/lib/paint/__tests__/paint.test.ts`
 
 **Interfaces:**
-- Consumes: `transaction` from `db.ts`; `War` from `wars/lifecycle.ts`; `SUBNET_BURST` from `config.ts`.
+- Consumes: `transaction` from `db.ts`; `War` from `wars/lifecycle.ts`; `subnetBurst()` from `config.ts` (Task 3).
 - Produces:
   - type `PaintFailure = "war_not_live" | "out_of_bounds" | "unknown_token" | "banned" | "cooldown"`
   - type `PaintResult = { ok: true; seq: number; idx: number; colourSlot: number; cooldownUntil: string } | { ok: false; reason: PaintFailure; message: string; retryAfterSeconds?: number }`
@@ -2042,25 +2421,6 @@ describe("paintPixel", () => {
   });
 });
 ```
-
-Note: `SUBNET_BURST` in `config.ts` is a module-level constant, so the two
-tests that set `PAINT_SUBNET_BURST` need it read per call. Change `config.ts`
-to export functions instead:
-
-```ts
-export function subnetBurst(): { cap: number; windowSeconds: number } {
-  return {
-    cap: Number.parseInt(process.env.PAINT_SUBNET_BURST ?? "60", 10),
-    windowSeconds: Number.parseInt(process.env.PAINT_SUBNET_WINDOW_SECONDS ?? "60", 10),
-  };
-}
-
-export function diffMaxChanges(): number {
-  return Number.parseInt(process.env.DIFF_MAX_CHANGES ?? "8000", 10);
-}
-```
-
-and update `diff.ts` to call `diffMaxChanges()` as its default.
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -2348,7 +2708,7 @@ Expected: all green.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/lib/paint/paint.ts src/lib/paint/bans.ts src/lib/paint/__tests__/paint.test.ts src/lib/config.ts src/lib/canvas/diff.ts
+git add src/lib/paint/paint.ts src/lib/paint/bans.ts src/lib/paint/__tests__/paint.test.ts
 git commit -m "Paint a pixel
 
 The cooldown condition lives in the UPDATE's WHERE clause, so two concurrent
@@ -2359,14 +2719,17 @@ gapless — and a gapless sequence is what makes ?since= polling safe."
 
 ---
 
-### Task 7: The HTTP endpoints
+---
+
+### Task 8: The HTTP endpoints
+
 
 **Files:**
 - Create: `src/app/api/session/route.ts`, `src/app/api/canvas/route.ts`, `src/app/api/diff/route.ts`, `src/app/api/paint/route.ts`, `src/app/api/leaderboard/route.ts`, `src/lib/http.ts`
 - Test: `src/app/api/__tests__/routes.test.ts`
 
 **Interfaces:**
-- Consumes: everything from Tasks 3–6.
+- Consumes: everything from Tasks 3, 5, 6 and 7.
 - Produces:
   - `identify(request: Request): { ok: true; painterKey: string; ipHash: string; subnetKey: string; setCookie?: string } | { ok: false; message: string }` from `src/lib/http.ts`
   - `json(body, init?)` and `noStore` header helpers from `src/lib/http.ts`
@@ -2854,14 +3217,17 @@ unlimited allowance or an outage, and neither is a rate limit."
 
 ---
 
-### Task 8: A war to look at
+---
+
+### Task 9: A war to look at
+
 
 **Files:**
 - Create: `scripts/seed-war.mts`
 - Modify: `package.json` (add `db:seed`)
 
 **Interfaces:**
-- Consumes: the schema from Task 3.
+- Consumes: the schema from Task 5.
 - Produces: `npm run db:seed` — a live war at slug `demo`, six active tokens, cooldown 5 s.
 
 - [ ] **Step 1: Write the seed script**
@@ -2973,348 +3339,17 @@ token that never paid has no business on a board people bought into."
 
 ---
 
-### Task 9: Viewport maths and the pixel buffer
-
-**Files:**
-- Create: `src/lib/canvas/viewport.ts`, `src/lib/canvas/board-image.ts`
-- Test: `src/lib/canvas/__tests__/viewport.test.ts`, `src/lib/canvas/__tests__/board-image.test.ts`
-
-**Interfaces:**
-- Consumes: `rgba` from `wars/palette.ts`.
-- Produces:
-  - type `Viewport = { centreX: number; centreY: number; scale: number }`
-  - `boardToScreen(v: Viewport, screen: Size, board: { x: number; y: number }): { x: number; y: number }`
-  - `screenToBoard(v: Viewport, screen: Size, point: { x: number; y: number }): { x: number; y: number }`
-  - `pixelAt(v: Viewport, screen: Size, point, size: Size): { x: number; y: number } | null`
-  - `zoomAt(v: Viewport, screen: Size, point, factor: number, limits: { min: number; max: number }): Viewport`
-  - `panBy(v: Viewport, dx: number, dy: number): Viewport`
-  - `clampToBoard(v: Viewport, board: Size): Viewport`
-  - `isTap(totalMovement: number): boolean`, `TAP_SLOP_PX = 8`
-  - class `BoardImage` with `constructor(width, height)`, `setBase(bytes)`, `applyChange(idx, slot)`, `slotAt(idx)`, `rgbaBuffer: Uint8ClampedArray`
-
-- [ ] **Step 1: Write the failing viewport test**
-
-Create `src/lib/canvas/__tests__/viewport.test.ts`:
-
-```ts
-import { describe, expect, it } from "vitest";
-import {
-  TAP_SLOP_PX,
-  clampToBoard,
-  isTap,
-  panBy,
-  pixelAt,
-  screenToBoard,
-  zoomAt,
-} from "../viewport";
-
-const SCREEN = { width: 800, height: 600 };
-const BOARD = { width: 200, height: 200 };
-const CENTRED = { centreX: 100, centreY: 100, scale: 2 };
-
-describe("viewport", () => {
-  it("puts the viewport centre at the middle of the screen", () => {
-    expect(screenToBoard(CENTRED, SCREEN, { x: 400, y: 300 })).toEqual({ x: 100, y: 100 });
-  });
-
-  it("converts screen to board at the current scale", () => {
-    // 40 screen pixels right of centre, at 2x, is 20 board pixels.
-    expect(screenToBoard(CENTRED, SCREEN, { x: 440, y: 300 })).toEqual({ x: 120, y: 100 });
-  });
-
-  it("keeps the board point under the cursor fixed while zooming", () => {
-    // This is the whole contract of zoom-to-cursor: whatever you point at is
-    // still under the pointer afterwards.
-    const point = { x: 600, y: 200 };
-    const before = screenToBoard(CENTRED, SCREEN, point);
-    const zoomed = zoomAt(CENTRED, SCREEN, point, 2, { min: 1, max: 64 });
-    const after = screenToBoard(zoomed, SCREEN, point);
-
-    expect(after.x).toBeCloseTo(before.x, 6);
-    expect(after.y).toBeCloseTo(before.y, 6);
-    expect(zoomed.scale).toBe(4);
-  });
-
-  it("refuses to zoom past its limits", () => {
-    expect(zoomAt(CENTRED, SCREEN, { x: 400, y: 300 }, 100, { min: 1, max: 8 }).scale).toBe(8);
-    expect(zoomAt(CENTRED, SCREEN, { x: 400, y: 300 }, 0.001, { min: 1, max: 8 }).scale).toBe(1);
-  });
-
-  it("pans in board units, so a drag moves the same board distance at any zoom", () => {
-    expect(panBy({ ...CENTRED, scale: 2 }, 10, 0).centreX).toBe(110);
-  });
-
-  it("keeps the viewport centre on the board", () => {
-    expect(clampToBoard({ centreX: -50, centreY: 900, scale: 4 }, BOARD)).toEqual({
-      centreX: 0,
-      centreY: 200,
-      scale: 4,
-    });
-  });
-
-  it("floors a screen point to the pixel it lands in", () => {
-    expect(pixelAt(CENTRED, SCREEN, { x: 401, y: 301 }, BOARD)).toEqual({ x: 100, y: 100 });
-  });
-
-  it("returns nothing for a point outside the board", () => {
-    const farOut = { centreX: 0, centreY: 0, scale: 1 };
-    expect(pixelAt(farOut, SCREEN, { x: 0, y: 0 }, BOARD)).toBeNull();
-  });
-
-  it("treats a small movement as a tap and a large one as a drag", () => {
-    // Without this, every pan on a phone ends in an accidental pixel.
-    expect(isTap(0)).toBe(true);
-    expect(isTap(TAP_SLOP_PX - 1)).toBe(true);
-    expect(isTap(TAP_SLOP_PX + 1)).toBe(false);
-  });
-});
-```
-
-- [ ] **Step 2: Run it and watch it fail**
-
-Run: `npx vitest run src/lib/canvas/__tests__/viewport.test.ts`
-Expected: FAIL — cannot resolve `../viewport`.
-
-- [ ] **Step 3: Write `viewport.ts`**
-
-```ts
-/**
- * Zoom, pan, and the screen-to-board conversion, with no DOM in sight.
- *
- * Kept pure so the fiddly part — the part where a zoom drifts by half a pixel
- * and nobody can say why — is unit tested instead of eyeballed.
- */
-
-export type Size = { width: number; height: number };
-export type Point = { x: number; y: number };
-export type Viewport = { centreX: number; centreY: number; scale: number };
-
-/**
- * How far a pointer may travel and still count as a tap.
- *
- * Every pan on a touchscreen ends with a pointerup somewhere on the canvas. If
- * that always painted, the board would fill with pixels nobody meant to place.
- */
-export const TAP_SLOP_PX = 8;
-
-export function isTap(totalMovement: number): boolean {
-  return totalMovement <= TAP_SLOP_PX;
-}
-
-export function boardToScreen(v: Viewport, screen: Size, board: Point): Point {
-  return {
-    x: screen.width / 2 + (board.x - v.centreX) * v.scale,
-    y: screen.height / 2 + (board.y - v.centreY) * v.scale,
-  };
-}
-
-export function screenToBoard(v: Viewport, screen: Size, point: Point): Point {
-  return {
-    x: v.centreX + (point.x - screen.width / 2) / v.scale,
-    y: v.centreY + (point.y - screen.height / 2) / v.scale,
-  };
-}
-
-/** The pixel a screen point lands in, or null when it lands off the board. */
-export function pixelAt(v: Viewport, screen: Size, point: Point, board: Size): Point | null {
-  const { x, y } = screenToBoard(v, screen, point);
-  const px = Math.floor(x);
-  const py = Math.floor(y);
-  if (px < 0 || py < 0 || px >= board.width || py >= board.height) return null;
-  return { x: px, y: py };
-}
-
-/** Zooms about a screen point, leaving whatever is under it exactly where it is. */
-export function zoomAt(
-  v: Viewport,
-  screen: Size,
-  point: Point,
-  factor: number,
-  limits: { min: number; max: number },
-): Viewport {
-  const scale = Math.min(limits.max, Math.max(limits.min, v.scale * factor));
-  if (scale === v.scale) return v;
-
-  const anchor = screenToBoard(v, screen, point);
-  const offsetX = point.x - screen.width / 2;
-  const offsetY = point.y - screen.height / 2;
-
-  return {
-    scale,
-    centreX: anchor.x - offsetX / scale,
-    centreY: anchor.y - offsetY / scale,
-  };
-}
-
-export function panBy(v: Viewport, dxBoard: number, dyBoard: number): Viewport {
-  return { ...v, centreX: v.centreX + dxBoard, centreY: v.centreY + dyBoard };
-}
-
-/** Keeps the centre on the board, so the canvas cannot be lost off-screen. */
-export function clampToBoard(v: Viewport, board: Size): Viewport {
-  return {
-    ...v,
-    centreX: Math.min(board.width, Math.max(0, v.centreX)),
-    centreY: Math.min(board.height, Math.max(0, v.centreY)),
-  };
-}
-```
-
-- [ ] **Step 4: Run the tests and watch them pass**
-
-Run: `npx vitest run src/lib/canvas/__tests__/viewport.test.ts`
-Expected: 9 passed.
-
-- [ ] **Step 5: Write the failing board-image test**
-
-Create `src/lib/canvas/__tests__/board-image.test.ts`:
-
-```ts
-import { describe, expect, it } from "vitest";
-import { BoardImage } from "../board-image";
-import { toRgb } from "../../wars/palette";
-
-describe("BoardImage", () => {
-  it("starts every pixel on the canvas ground", () => {
-    const image = new BoardImage(4, 4);
-    const [r, g, b] = toRgb("#2E2E38");
-    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([r, g, b, 255]);
-    expect(image.slotAt(0)).toBe(0);
-  });
-
-  it("paints the whole base in one go", () => {
-    const image = new BoardImage(2, 2);
-    image.setBase(new Uint8Array([1, 0, 13, 24]));
-
-    expect(image.slotAt(0)).toBe(1);
-    expect(image.slotAt(2)).toBe(13);
-    const [r, g, b] = toRgb("#BE0039");
-    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([r, g, b, 255]);
-  });
-
-  it("applies a single change without touching its neighbours", () => {
-    const image = new BoardImage(2, 2);
-    image.setBase(new Uint8Array([1, 1, 1, 1]));
-    image.applyChange(2, 24);
-
-    expect(image.slotAt(2)).toBe(24);
-    expect(image.slotAt(1)).toBe(1);
-    expect([...image.rgbaBuffer.slice(8, 12)]).toEqual([255, 255, 255, 255]);
-  });
-
-  it("returns a pixel to the ground when a change clears it", () => {
-    const image = new BoardImage(2, 2);
-    image.setBase(new Uint8Array([5, 5, 5, 5]));
-    image.applyChange(0, 0);
-
-    expect(image.slotAt(0)).toBe(0);
-    const [r, g, b] = toRgb("#2E2E38");
-    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([r, g, b, 255]);
-  });
-
-  it("ignores a change outside the board rather than corrupting the buffer", () => {
-    const image = new BoardImage(2, 2);
-    expect(() => image.applyChange(99, 3)).not.toThrow();
-    expect(image.rgbaBuffer).toHaveLength(16);
-  });
-
-  it("rejects a base of the wrong size, which would silently shear the board", () => {
-    const image = new BoardImage(2, 2);
-    expect(() => image.setBase(new Uint8Array(3))).toThrow(/expected 4 bytes/);
-  });
-});
-```
-
-- [ ] **Step 6: Run it and watch it fail**
-
-Run: `npx vitest run src/lib/canvas/__tests__/board-image.test.ts`
-Expected: FAIL — cannot resolve `../board-image`.
-
-- [ ] **Step 7: Write `board-image.ts`**
-
-```ts
-import { rgba } from "../wars/palette";
-
-/**
- * The board as pixels, kept as two parallel buffers: the palette slot per
- * pixel, and the RGBA the browser actually blits.
- *
- * Slots are kept because the RGBA cannot be read back reliably — two slots
- * could in principle share a colour — and because inspecting a pixel needs the
- * slot, not the colour.
- *
- * No DOM here. The React layer wraps `rgbaBuffer` in an ImageData and draws it;
- * everything that can be got wrong lives in this file, where it is testable.
- */
-export class BoardImage {
-  readonly slots: Uint8Array;
-  readonly rgbaBuffer: Uint8ClampedArray;
-  private readonly palette = rgba();
-
-  constructor(
-    readonly width: number,
-    readonly height: number,
-  ) {
-    this.slots = new Uint8Array(width * height);
-    this.rgbaBuffer = new Uint8ClampedArray(width * height * 4);
-    this.repaintAll();
-  }
-
-  setBase(bytes: Uint8Array): void {
-    if (bytes.length !== this.slots.length) {
-      throw new Error(`Board is ${this.width}x${this.height}: expected ${this.slots.length} bytes, got ${bytes.length}`);
-    }
-    this.slots.set(bytes);
-    this.repaintAll();
-  }
-
-  applyChange(idx: number, slot: number): void {
-    if (idx < 0 || idx >= this.slots.length) return;
-    this.slots[idx] = slot;
-    this.paintOne(idx);
-  }
-
-  slotAt(idx: number): number {
-    return this.slots[idx] ?? 0;
-  }
-
-  private repaintAll(): void {
-    for (let idx = 0; idx < this.slots.length; idx++) this.paintOne(idx);
-  }
-
-  private paintOne(idx: number): void {
-    const offset = this.slots[idx] * 4;
-    this.rgbaBuffer.set(this.palette.subarray(offset, offset + 4), idx * 4);
-  }
-}
-```
-
-- [ ] **Step 8: Run the tests and watch them pass**
-
-Run: `npx vitest run src/lib/canvas/__tests__/`
-Expected: 21 passed.
-
-- [ ] **Step 9: Commit**
-
-```bash
-git add src/lib/canvas/viewport.ts src/lib/canvas/board-image.ts src/lib/canvas/__tests__
-git commit -m "Add viewport maths and the pixel buffer
-
-Both are pure and unit tested. Zoom-to-cursor and the tap-versus-drag
-threshold are exactly the things that drift by half a pixel and never get
-noticed until somebody paints where they meant to pan."
-```
-
 ---
 
 ### Task 10: The war page
+
 
 **Files:**
 - Create: `src/hooks/useCanvasStream.ts`, `src/components/Board.tsx`, `src/components/TokenRail.tsx`, `src/components/PaintButton.tsx`, `src/components/WarHud.tsx`
 - Modify: `src/app/page.tsx`, `src/app/globals.css`, `src/app/layout.tsx`
 
 **Interfaces:**
-- Consumes: the HTTP contract from Task 7; `BoardImage`, viewport helpers from Task 9; `colourForSlot` from Task 2.
+- Consumes: the HTTP contract from Task 8; `BoardImage`, viewport helpers from Task 2; `colourForSlot` from Task 1.
 - Produces: a working page at `/`.
 
 - [ ] **Step 1: Write the polling hook**
@@ -3766,7 +3801,7 @@ worse than a screen that says so.
 - [ ] **Step 6: Verify by hand**
 
 ```bash
-npm run db:reset && npm run db:seed && npm run dev
+npm run db:up && npm run db:seed && npm run dev
 ```
 
 Open `http://localhost:3000` and confirm, in order:
@@ -3799,10 +3834,12 @@ overrides the client's guess with the server's answer."
 
 ---
 
+---
+
 ## Batch A is done when
 
 - `npm test` is green, `npm run lint` is clean, `npm run build` succeeds.
-- `npm run db:reset && npm run db:seed && npm run dev` gives a canvas you can paint on.
+- `npm run db:up && npm run db:seed && npm run dev` gives a canvas you can paint on.
 - Two browser windows converge within ~1.5 s.
 - The cooldown survives clearing cookies (same address) and changing address (same cookie).
 - No payments, no wallet, no admin, and no half-built versions of them.
@@ -3829,17 +3866,22 @@ the-button (§11).
 `GET /api/pixel` (§6) lands in Batch E with the inspector UI that consumes it;
 nothing in Batch A calls it.
 
+**Ordering note.** Tasks 1, 2 and 3 touch no database and run before the Neon
+branches exist. Task 4 connects to Neon, and everything from Task 5 on needs
+it. That is why the palette, the viewport maths and the painter identity come
+first: they are the parts of this batch that a missing connection string
+cannot block.
+
 **Type consistency checked:** `War`/`WarToken` shapes are produced in Task 3 and
 consumed unchanged in Tasks 5, 6, 7 and 10. `painterKey`/`ipHash`/`subnetKey`
 are the same three names from `client-ip.ts` through `identify()` into
 `paintPixel`. `colourSlot` is camelCase in TypeScript and `colour_slot` in SQL
 everywhere, with the conversion only in the row-mapping functions.
 
-**One correction folded in:** `config.ts` originally exported `SUBNET_BURST` and
-`DIFF_MAX_CHANGES` as module constants, which would freeze the values at import
-and make the burst-cap test unrunnable. Task 6 Step 1 changes them to
-`subnetBurst()` and `diffMaxChanges()`, and Task 5's `diff.ts` is updated to
-match.
+**One correction folded in:** `config.ts` first exported `SUBNET_BURST` and
+`DIFF_MAX_CHANGES` as module constants, which freezes the values at import and
+makes the burst-cap test unrunnable. They are functions from the start —
+`subnetBurst()` and `diffMaxChanges()` — in Task 3, where the file is created.
 
 ---
 
