@@ -257,41 +257,52 @@ describe("paintPixel", () => {
     "caps a subnet's burst even when every painter behind it is new",
     { timeout: 20_000 },
     async () => {
+      // Snapshot and restore in a finally rather than deleting at the end of
+      // the test body: the suite is single-fork, so one failed assertion
+      // above would otherwise leave a burst cap of 3 in place for every test
+      // in every file that runs afterwards.
+      const previousBurst = process.env.PAINT_SUBNET_BURST;
+      const previousWindow = process.env.PAINT_SUBNET_WINDOW_SECONDS;
       process.env.PAINT_SUBNET_BURST = "3";
       // Clearly larger than the war's cooldown below, so a wait reported from
       // the wrong clock (the painter's cooldown) is unmistakable from a wait
       // reported from the right one (the rest of this window).
       process.env.PAINT_SUBNET_WINDOW_SECONDS = "120";
-      const war = await makeWar({ width: 32, height: 32, cooldownSeconds: 5 });
-      const token = await makeToken(war.id, 5);
 
-      const results = [];
-      for (let i = 0; i < 5; i++) {
-        results.push(
-          await paintPixel({
-            war,
-            x: i,
-            y: 0,
-            tokenId: token,
-            painterKey: `painter-${i}`,
-            ipHash: `ip-${i}`,
-            subnetKey: "one-shared-subnet",
-          }),
-        );
+      try {
+        const war = await makeWar({ width: 32, height: 32, cooldownSeconds: 5 });
+        const token = await makeToken(war.id, 5);
+
+        const results = [];
+        for (let i = 0; i < 5; i++) {
+          results.push(
+            await paintPixel({
+              war,
+              x: i,
+              y: 0,
+              tokenId: token,
+              painterKey: `painter-${i}`,
+              ipHash: `ip-${i}`,
+              subnetKey: "one-shared-subnet",
+            }),
+          );
+        }
+
+        expect(results.filter((r) => r.ok)).toHaveLength(3);
+        expect(results[4]).toMatchObject({ ok: false, reason: "cooldown" });
+
+        // The wait must be the window's, not one painter's cooldown. Reporting the
+        // painter's number here tells a caller behind a capped subnet to come back
+        // in seconds when the real block lasts the rest of the window.
+        const refused = results[4];
+        if (refused.ok) throw new Error("unreachable");
+        expect(refused.retryAfterSeconds).toBeGreaterThan(war.cooldownSeconds);
+      } finally {
+        if (previousBurst === undefined) delete process.env.PAINT_SUBNET_BURST;
+        else process.env.PAINT_SUBNET_BURST = previousBurst;
+        if (previousWindow === undefined) delete process.env.PAINT_SUBNET_WINDOW_SECONDS;
+        else process.env.PAINT_SUBNET_WINDOW_SECONDS = previousWindow;
       }
-
-      expect(results.filter((r) => r.ok)).toHaveLength(3);
-      expect(results[4]).toMatchObject({ ok: false, reason: "cooldown" });
-
-      // The wait must be the window's, not one painter's cooldown. Reporting the
-      // painter's number here tells a caller behind a capped subnet to come back
-      // in seconds when the real block lasts the rest of the window.
-      const refused = results[4];
-      if (refused.ok) throw new Error("unreachable");
-      expect(refused.retryAfterSeconds).toBeGreaterThan(war.cooldownSeconds);
-
-      delete process.env.PAINT_SUBNET_BURST;
-      delete process.env.PAINT_SUBNET_WINDOW_SECONDS;
     },
   );
 });
