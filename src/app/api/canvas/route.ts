@@ -20,10 +20,14 @@ export async function GET(request: Request): Promise<Response> {
       "x-canvas-seq": String(seq),
       "x-canvas-width": String(war.width),
       "x-canvas-height": String(war.height),
-      // An ended board cannot change; a live one may, twice a second at most.
+      // "ended" is not actually forever: an operator can extend a war after
+      // the fact, and a later batch changes what this endpoint returns for
+      // one. A year-long immutable response cannot be recalled once a client
+      // has cached it, so an ended board gets a short cache instead of a
+      // permanent one — long enough to matter, short enough to recover from.
       "cache-control":
         war.status === "ended"
-          ? "public, max-age=31536000, immutable"
+          ? "public, max-age=60"
           : "public, s-maxage=2, stale-while-revalidate=8",
     },
   });
