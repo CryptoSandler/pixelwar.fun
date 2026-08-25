@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "db:migrate": "tsx scripts/migrate.mts",
     "db:migrate:test": "tsx scripts/migrate.mts --test",
-    "db:up": "npm run db:migrate && npm run db:migrate:test"
+    "db:up": "npm run db:migrate && npm run db:migrate:test",
+    "db:seed": "tsx scripts/seed-war.mts"
   },
   "dependencies": {
     "next": "16.3.2",
