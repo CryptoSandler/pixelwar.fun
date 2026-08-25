@@ -561,6 +561,27 @@ describe("BoardImage", () => {
     expect(image.rgbaBuffer).toHaveLength(16);
   });
 
+  it("ignores a slot outside the palette, keeping slots and pixels in step", () => {
+    // Writing the slot but failing the palette lookup would leave the pixel
+    // showing its old colour while slotAt() claims otherwise: a canvas that
+    // lies rather than one with a hole in it.
+    const image = new BoardImage(2, 2);
+    image.setBase(new Uint8Array([7, 7, 7, 7]));
+    image.applyChange(0, 255);
+
+    expect(image.slotAt(0)).toBe(7);
+    expect([...image.rgbaBuffer.slice(0, 4)]).toEqual([...image.rgbaBuffer.slice(4, 8)]);
+  });
+
+  it("turns an unrenderable byte in the base into unpainted, not a stale colour", () => {
+    const image = new BoardImage(2, 2);
+    image.setBase(new Uint8Array([1, 200, 1, 1]));
+
+    expect(image.slotAt(1)).toBe(0);
+    const [r, g, b] = toRgb("#2E2E38");
+    expect([...image.rgbaBuffer.slice(4, 8)]).toEqual([r, g, b, 255]);
+  });
+
   it("rejects a base of the wrong size, which would silently shear the board", () => {
     const image = new BoardImage(2, 2);
     expect(() => image.setBase(new Uint8Array(3))).toThrow(/expected 4 bytes/);
@@ -576,7 +597,7 @@ Expected: FAIL — cannot resolve `../board-image`.
 - [ ] **Step 7: Write `board-image.ts`**
 
 ```ts
-import { rgba } from "../wars/palette";
+import { PALETTE_SIZE, rgba } from "../wars/palette";
 
 /**
  * The board as pixels, kept as two parallel buffers: the palette slot per
@@ -607,18 +628,31 @@ export class BoardImage {
     if (bytes.length !== this.slots.length) {
       throw new Error(`Board is ${this.width}x${this.height}: expected ${this.slots.length} bytes, got ${bytes.length}`);
     }
-    this.slots.set(bytes);
+    // Anything outside the palette becomes unpainted, in BOTH buffers. A
+    // corrupt board should degrade to holes, never to stale colours.
+    for (let idx = 0; idx < bytes.length; idx++) {
+      this.slots[idx] = this.isKnownSlot(bytes[idx]) ? bytes[idx] : 0;
+    }
     this.repaintAll();
   }
 
   applyChange(idx: number, slot: number): void {
     if (idx < 0 || idx >= this.slots.length) return;
+    // An unknown slot is data we cannot render. Dropping the change keeps the
+    // two buffers in step; writing it would leave the slot updated and the
+    // pixel showing its previous colour, which is a wrong canvas rather than
+    // an incomplete one. The next full fetch repairs the gap.
+    if (!this.isKnownSlot(slot)) return;
     this.slots[idx] = slot;
     this.paintOne(idx);
   }
 
   slotAt(idx: number): number {
     return this.slots[idx] ?? 0;
+  }
+
+  private isKnownSlot(slot: number): boolean {
+    return Number.isInteger(slot) && slot >= 0 && slot <= PALETTE_SIZE;
   }
 
   private repaintAll(): void {
