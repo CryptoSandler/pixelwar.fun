@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { USDC_MINT } from "../config";
+import { BLOCKTIME_SKEW_SECONDS, USDC_MINT } from "../config";
 import { verifyPayment, type SolanaTransaction } from "../solana";
 
 const WALLET = "8vQ2mQ6xkYPfJ7BFhCGDVzWJ1uYTLDXQoK4Vn5wCq3Rt";
@@ -165,12 +165,47 @@ it("rejects a transaction that is not yet confirmed", async () => {
   if (!noResult.ok) expect(noResult.reason).toBe("not_confirmed");
 });
 
-it("rejects a block time outside the order's window", async () => {
-  const longBeforeOrder = Math.floor((WINDOW_START - 60 * 60_000) / 1000);
-  const result = await check(tx({ after: "100000000", blockTime: longBeforeOrder }));
-  expect(result.ok).toBe(false);
-  if (result.ok) return;
-  expect(result.reason).toBe("outside_bid_window");
+describe("the block-time window", () => {
+  // Fixed round numbers rather than the shared WINDOW_START/END, so the
+  // skew-adjusted edges land on whole seconds and the arithmetic is easy to
+  // check by eye.
+  const CREATED_AT = 1_700_000_000_000;
+  const EXPIRES_AT = CREATED_AT + 30 * 60_000;
+  const SKEW_MS = BLOCKTIME_SKEW_SECONDS * 1000;
+
+  async function checkAt(blockTimeMs: number) {
+    return verifyPayment({
+      signature: SIG,
+      expectedBaseUnits: 100_000_000n,
+      wallet: WALLET,
+      createdAtMs: CREATED_AT,
+      expiresAtMs: EXPIRES_AT,
+      fetchTransaction: async () =>
+        tx({ after: "100000000", blockTime: Math.floor(blockTimeMs / 1000) }),
+    });
+  }
+
+  it("rejects a block time before the window opens", async () => {
+    const result = await checkAt(CREATED_AT - SKEW_MS - 1000);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("outside_bid_window");
+  });
+
+  it("rejects a block time after the window closes", async () => {
+    const result = await checkAt(EXPIRES_AT + SKEW_MS + 1000);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("outside_bid_window");
+  });
+
+  it("accepts a block time exactly on each edge of the window", async () => {
+    const early = await checkAt(CREATED_AT - SKEW_MS);
+    expect(early.ok).toBe(true);
+
+    const late = await checkAt(EXPIRES_AT + SKEW_MS);
+    expect(late.ok).toBe(true);
+  });
 });
 
 it("names the sender when a real transfer did not match", async () => {
@@ -198,6 +233,49 @@ it("rejects a payer that is not the wallet the order was opened with", async () 
       payer: PAYER,
       payerBefore: "500000000",
       payerAfter: "400000000",
+    }),
+    { expectedPayer: OTHER_PAYER },
+  );
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.reason).toBe("wrong_payer");
+});
+
+it("does not treat a blank expected payer as no binding at all", async () => {
+  // "" is falsy in JS. A gate written as `if (params.expectedPayer)` would
+  // silently skip the whole check for it — not "no match found" but "no
+  // check performed", a false ok:true on exactly what this check exists to
+  // catch. A present-but-blank value must instead fail closed as wrong_payer,
+  // the same as any other wallet that is not the real payer.
+  const paidByPayer = tx({
+    after: "100000000",
+    feePayer: PAYER,
+    payer: PAYER,
+    payerBefore: "500000000",
+    payerAfter: "400000000",
+  });
+
+  const blank = await check(paidByPayer, { expectedPayer: "" });
+  expect(blank.ok).toBe(false);
+  if (!blank.ok) expect(blank.reason).toBe("wrong_payer");
+
+  const whitespace = await check(paidByPayer, { expectedPayer: "   " });
+  expect(whitespace.ok).toBe(false);
+  if (!whitespace.ok) expect(whitespace.reason).toBe("wrong_payer");
+});
+
+it("checks the payer before the amount when both are wrong", async () => {
+  // An underpayment can be topped up from the same wallet; a wrong-wallet
+  // payment cannot be fixed by sending more from that same wrong wallet. The
+  // failure the payer cannot fix themselves is the one they need to hear
+  // about, so wrong_payer must win over insufficient_amount here.
+  const result = await check(
+    tx({
+      after: "50000000",
+      feePayer: PAYER,
+      payer: PAYER,
+      payerBefore: "500000000",
+      payerAfter: "450000000",
     }),
     { expectedPayer: OTHER_PAYER },
   );

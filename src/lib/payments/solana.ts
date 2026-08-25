@@ -314,6 +314,52 @@ export async function verifyPayment(params: {
         };
   }
 
+  /**
+   * When the order was opened from a connected wallet, only that wallet can pay
+   * it.
+   *
+   * Without this, a fixed price plus signature-only binding means anyone
+   * watching the chain can take a stranger's transfer and claim it against their
+   * own order — first call to /confirm wins the consumed_signatures race, and
+   * the person who actually paid gets nothing. The paste-a-signature fallback
+   * has no connected wallet and therefore no expected payer; that path is
+   * first-to-claim inside the order's window, and the rules page says so.
+   *
+   * Checked ahead of the amount on purpose. It leaks nothing: the transaction
+   * and its amount are already public to anyone holding the signature, so
+   * checking order costs nothing extra. It matters because the two failures
+   * are not equally fixable — an underpayment can be topped up from the same
+   * wallet, but a wrong-wallet payment cannot be fixed by sending more from
+   * that same wrong wallet. Telling someone "you underpaid" when the real
+   * problem is whose wallet it came from sends them straight into a second
+   * rejection.
+   *
+   * Gated on the field being present, not on it being truthy. `if
+   * (params.expectedPayer)` reads tidier but is wrong: it would treat an
+   * empty string the same as "no binding requested" and skip this whole
+   * check — not "no match found", but "no check performed", which is a false
+   * `ok: true` on exactly the thing this check exists to catch. A present but
+   * blank or malformed value instead flows into the comparison below, can
+   * never equal a real address, and fails closed as `wrong_payer`.
+   */
+  if (params.expectedPayer !== undefined && params.expectedPayer !== null) {
+    const expectedPayer = params.expectedPayer.trim();
+    const sender = senderOf(transaction, params.wallet);
+    const paidByExpectedWallet =
+      sender.feePayer === expectedPayer ||
+      sender.debited.some((debit) => debit.owner === expectedPayer);
+
+    if (!paidByExpectedWallet) {
+      return {
+        ok: false,
+        reason: "wrong_payer",
+        message: "That transaction was not paid from the wallet this order was opened with.",
+        receivedBaseUnits: received,
+        sender,
+      };
+    }
+  }
+
   // The price is fixed and a payment is bound to its order by the
   // transaction signature, not by amount, so paying more than required is not
   // a mismatch — it is simply recorded as what arrived. Paying less is still a
@@ -329,34 +375,6 @@ export async function verifyPayment(params: {
       receivedBaseUnits: received,
       sender: senderOf(transaction, params.wallet),
     };
-  }
-
-  /**
-   * When the order was opened from a connected wallet, only that wallet can pay
-   * it.
-   *
-   * Without this, a fixed price plus signature-only binding means anyone
-   * watching the chain can take a stranger's transfer and claim it against their
-   * own order — first call to /confirm wins the consumed_signatures race, and
-   * the person who actually paid gets nothing. The paste-a-signature fallback
-   * has no connected wallet and therefore no expected payer; that path is
-   * first-to-claim inside the order's window, and the rules page says so.
-   */
-  if (params.expectedPayer) {
-    const sender = senderOf(transaction, params.wallet);
-    const paidByExpectedWallet =
-      sender.feePayer === params.expectedPayer ||
-      sender.debited.some((debit) => debit.owner === params.expectedPayer);
-
-    if (!paidByExpectedWallet) {
-      return {
-        ok: false,
-        reason: "wrong_payer",
-        message: "That transaction was not paid from the wallet this order was opened with.",
-        receivedBaseUnits: received,
-        sender,
-      };
-    }
   }
 
   return { ok: true, amountBaseUnits: received };
