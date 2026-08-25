@@ -56,7 +56,13 @@ describe("GET /api/session", () => {
 });
 
 describe("GET /api/canvas", () => {
-  it("returns the board as bytes with the sequence in a header", async () => {
+  // Creating a war, creating a token, and painting are each their own
+  // sequential round trips to a remote Neon database; several of them
+  // together land close enough to the suite's 5s default to fail
+  // intermittently on a slow hop. This and the other route tests below that
+  // build real fixtures get their own ceiling rather than raising the suite
+  // default for every test in the file.
+  it("returns the board as bytes with the sequence in a header", { timeout: 20_000 }, async () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 7);
 
@@ -79,7 +85,7 @@ describe("GET /api/canvas", () => {
 });
 
 describe("GET /api/diff", () => {
-  it("returns changes after the given sequence", async () => {
+  it("returns changes after the given sequence", { timeout: 20_000 }, async () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 3);
     await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token }));
@@ -105,7 +111,7 @@ describe("GET /api/diff", () => {
 });
 
 describe("POST /api/paint", () => {
-  it("paints and answers with the new sequence", async () => {
+  it("paints and answers with the new sequence", { timeout: 20_000 }, async () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 2);
 
@@ -114,7 +120,7 @@ describe("POST /api/paint", () => {
     expect(await response.json()).toMatchObject({ seq: 1, idx: 35, colourSlot: 2 });
   });
 
-  it("answers 429 with Retry-After inside the cooldown", async () => {
+  it("answers 429 with Retry-After inside the cooldown", { timeout: 20_000 }, async () => {
     const war = await makeWar({ cooldownSeconds: 30 });
     const token = await makeToken(war.id, 2);
 
@@ -164,7 +170,7 @@ describe("POST /api/paint", () => {
     expect(response.status).toBe(403);
   });
 
-  it("allows a same-origin POST that sends an Origin header", async () => {
+  it("allows a same-origin POST that sends an Origin header", { timeout: 20_000 }, async () => {
     const war = await makeWar();
     const token = await makeToken(war.id, 2);
     const response = await paintRoute(
