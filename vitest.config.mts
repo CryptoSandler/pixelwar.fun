@@ -14,5 +14,12 @@ export default defineConfig({
     // it forces a single worker instead of running files in parallel.
     pool: "forks",
     fileParallelism: false,
+    // Every test here talks to real Neon over the network rather than a local
+    // Postgres, so a fixture loop of a dozen paints is a few dozen round
+    // trips, not a few dozen milliseconds. Vitest's 5s default is tuned for
+    // in-process work and clips tests like that well before they are actually
+    // stuck; 20s gives real network latency room without hiding a genuine
+    // hang for anywhere near as long as a CI timeout would.
+    testTimeout: 20_000,
   },
 });
