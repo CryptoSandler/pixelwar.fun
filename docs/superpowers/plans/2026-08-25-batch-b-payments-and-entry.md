@@ -220,7 +220,26 @@ Read it fully before changing a line. It is written against **token-balance delt
 
 **(a) Overpayment is accepted.** bidoor returns `overpaid` as a failure because it matched payments by exact amount. Here the price is fixed and the binding is the signature, so more money is not a mismatch — record what arrived and apply it. Remove `overpaid` from `PaymentFailure` and accept any amount at or above the expected one.
 
-**(b) The payer must be the wallet the order was opened with.** Add an optional `expectedPayer?: string` parameter. When present, the transaction's fee payer or one of the debited USDC owners must equal it; otherwise fail with a new `wrong_payer` reason.
+**(b) The payer must be the wallet the order was opened with.** Add an optional
+`expectedPayer?: string` parameter. When present, the transaction's fee payer or
+one of the debited USDC owners must equal it; otherwise fail with a new
+`wrong_payer` reason.
+
+**Present means present, not truthy.** Gate on
+`params.expectedPayer !== undefined && params.expectedPayer !== null`, never on
+the value being truthy. An empty string is falsy, so a truthiness check turns a
+caller who passed a blank payer into a caller who asked for no binding at all —
+and the function answers `ok: true` for a transaction some stranger paid. If the
+field was supplied, enforce it: a blank or malformed value can never equal a
+real address, so enforcing fails closed as `wrong_payer`, which is the answer
+that costs nobody anything.
+
+**Check the payer before the amount.** When both are wrong, report
+`wrong_payer`. Somebody told they underpaid will send more money — from the same
+wallet that will be rejected again. The amount is a problem a payer can fix; the
+binding is not, and the one they cannot fix has to be the one they hear about.
+The transaction and its amount are public to anyone holding the signature, so
+saying which check failed leaks nothing a block explorer would not.
 
 Comment (b) with why it exists:
 
@@ -250,10 +269,14 @@ it("rejects a transfer to a different destination", ...)   // somebody else's wa
 it("rejects an underpayment", ...)
 it("rejects a transaction that failed on chain", ...)
 it("rejects a transaction that is not yet confirmed", ...)
-it("rejects a block time outside the order's window", ...)
+it("rejects a block time before the window opens", ...)
+it("rejects a block time after the window closes", ...)   // the late edge
+it("accepts a block time exactly on each edge of the window", ...)
 it("names the sender when a real transfer did not match", ...)  // so support can reunite it
 it("rejects a payer that is not the wallet the order was opened with", ...)
 it("allows any payer when the order has no expected payer", ...) // the paste fallback
+it("does not treat a blank expected payer as no binding at all", ...) // "" and "   "
+it("checks the payer before the amount when both are wrong", ...)
 it("sees a transfer made through a CPI", ...)              // the reason we read deltas
 ```
 
@@ -362,10 +385,12 @@ for f in chains addresses links dexscreener; do
 done
 ```
 
-**Task 1 left you a duplicate to remove.** It wrote a private Solana base58
-checker inline in `src/lib/payments/config.ts` because no address utility
-existed yet. Now one does: delete that private checker and have `paymentWallet`
-call `validateAddress("solana", …)`. Two independent address validators in one
+**Tasks 1 and 2 left you two duplicates to remove.** Task 1 wrote a private
+Solana base58 checker in `src/lib/payments/config.ts`; Task 2 wrote another in
+`src/lib/payments/solana.ts`. They have already drifted — Task 2's rejects empty
+input and Task 1's does not — which is the whole argument against duplication,
+demonstrated inside one batch. Delete both, put one base58 decoder somewhere
+shared, and have `paymentWallet` call `validateAddress("solana", …)`. Two independent address validators in one
 codebase will drift, and the one that drifts is the one nobody remembers exists.
 
 Read each. Keep the comments — particularly the one on `pickPair`, which explains that DexScreener returns pairs and the token you asked about is not always the pair's base token, so reading `baseToken` blindly lists the wrong token's name and logo.
