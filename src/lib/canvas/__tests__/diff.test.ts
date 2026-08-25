@@ -32,7 +32,10 @@ describe("changesSince", () => {
     });
   });
 
-  it("asks the client to refetch rather than shipping a quarter of the board", async () => {
+  // Twelve sequential writes to a remote database, so this one test gets a
+  // wider ceiling. Raising the suite default instead would cost every other
+  // test its ability to catch a hang.
+  it("asks the client to refetch rather than shipping a quarter of the board", { timeout: 20_000 }, async () => {
     const war = await makeWar();
     const red = await makeToken(war.id, 1);
     for (let seq = 1; seq <= 12; seq++) await paintRaw(war.id, seq, red, 1, seq);

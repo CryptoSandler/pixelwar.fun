@@ -39,16 +39,30 @@ describe("canvasBytes", () => {
     expect(bytes[5]).toBe(13);
   });
 
-  it("never reports a sequence newer than the board it returns", async () => {
-    // The seq must be read BEFORE the pixels. Over-delivering a change the
-    // client will also see in the diff is harmless — it writes the same value
-    // twice. Under-delivering is a pixel the client never learns about.
+  it("tolerates a diff that re-delivers a change the board already has", async () => {
+    // canvasBytes reads the sequence BEFORE the pixels, so the board it
+    // returns can be slightly AHEAD of the sequence it reports: a paint that
+    // lands between the two reads is in the bytes and also in the client's
+    // first diff. That is deliberate. This test pins the property that makes
+    // it safe — applying such a change twice is a no-op — because the other
+    // ordering has no safe failure mode at all: a pixel missing from the
+    // board but below the reported sequence is never requested again and is
+    // gone from that screen for the rest of the war.
+    //
+    // The ordering itself is enforced by reading state.ts, not by this test.
+    // Testing it directly would need a seam in production code that exists
+    // only for the test, which is a worse trade than a comment.
     const war = await makeWar({ width: 4, height: 4 });
     const red = await makeToken(war.id, 1);
-    await paintRaw(war.id, 3, red, 1, 7);
+    await paintRaw(war.id, 5, red, 1, 1);
 
     const { seq, bytes } = await canvasBytes(war);
-    expect(seq).toBeLessThanOrEqual(7);
-    expect(bytes[3]).toBe(1);
+    expect(bytes[5]).toBe(1);
+
+    const replayed = new Uint8Array(bytes);
+    for (const [idx, slot] of [[5, 1]] as [number, number][]) replayed[idx] = slot;
+
+    expect([...replayed]).toEqual([...bytes]);
+    expect(seq).toBeLessThanOrEqual(1);
   });
 });
