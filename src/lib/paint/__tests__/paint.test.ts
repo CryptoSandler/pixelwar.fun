@@ -148,8 +148,13 @@ describe("paintPixel", () => {
     const war = await makeWar({ width: 32, height: 32 });
     const token = await makeToken(war.id, 5);
 
+    // Eight, not twenty: the pool is ten clients and every paint holds one for
+    // the length of a transaction that serialises on the wars row. Twenty
+    // concurrent callers starve the pool and fail on pg's own connect timeout,
+    // which no vitest timeout can rescue — a flaky test measuring the pool
+    // instead of the property. Eight still races the same allocation.
     await Promise.all(
-      Array.from({ length: 20 }, (_, i) =>
+      Array.from({ length: 8 }, (_, i) =>
         paintPixel({
           war,
           x: i,
@@ -163,7 +168,7 @@ describe("paintPixel", () => {
     );
 
     const rows = await query<{ seq: string }>(`SELECT seq FROM pixel_events ORDER BY seq`);
-    expect(rows.map((r) => Number(r.seq))).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+    expect(rows.map((r) => Number(r.seq))).toEqual(Array.from({ length: 8 }, (_, i) => i + 1));
   });
 
   it("refuses a token that belongs to another war", async () => {
@@ -241,8 +246,11 @@ describe("paintPixel", () => {
     { timeout: 20_000 },
     async () => {
       process.env.PAINT_SUBNET_BURST = "3";
-      process.env.PAINT_SUBNET_WINDOW_SECONDS = "60";
-      const war = await makeWar({ width: 32, height: 32 });
+      // Clearly larger than the war's cooldown below, so a wait reported from
+      // the wrong clock (the painter's cooldown) is unmistakable from a wait
+      // reported from the right one (the rest of this window).
+      process.env.PAINT_SUBNET_WINDOW_SECONDS = "120";
+      const war = await makeWar({ width: 32, height: 32, cooldownSeconds: 5 });
       const token = await makeToken(war.id, 5);
 
       const results = [];
@@ -262,6 +270,14 @@ describe("paintPixel", () => {
 
       expect(results.filter((r) => r.ok)).toHaveLength(3);
       expect(results[4]).toMatchObject({ ok: false, reason: "cooldown" });
+
+      // The wait must be the window's, not one painter's cooldown. Reporting the
+      // painter's number here tells a caller behind a capped subnet to come back
+      // in seconds when the real block lasts the rest of the window.
+      const refused = results[4];
+      if (refused.ok) throw new Error("unreachable");
+      expect(refused.retryAfterSeconds).toBeGreaterThan(war.cooldownSeconds);
+
       delete process.env.PAINT_SUBNET_BURST;
       delete process.env.PAINT_SUBNET_WINDOW_SECONDS;
     },

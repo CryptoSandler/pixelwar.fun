@@ -33,12 +33,26 @@ export type PaintInput = {
   subnetKey: string;
 };
 
+/** A gate either lets the caller through, or reports how long until it won't refuse them. */
+type Gate = { ok: true } | { ok: false; waitSeconds: number };
+
+function waitFrom(seconds: unknown): number {
+  return Math.max(1, Math.ceil(Number(seconds ?? 1)));
+}
+
 /**
- * Takes one cooldown key. Returns false when the caller must wait.
+ * Takes one cooldown key. Reports how long the caller must wait when refused.
  *
  * The condition lives in the UPDATE's WHERE clause rather than in a SELECT
  * followed by an UPDATE, so two concurrent paints cannot both read "clear" and
  * both proceed — the second one updates zero rows and loses.
+ *
+ * On refusal, the wait is read back from the row that just blocked the
+ * UPDATE — not computed as a separate "when is this caller free" query. This
+ * transaction is about to roll back, so any row it inserted itself (a brand
+ * new painter's first-ever cooldown row, for instance) will not exist once
+ * committed; asking a fresh question here would read the transaction's own
+ * doomed write instead of the state the next attempt will actually see.
  */
 async function takeInterval(
   client: PoolClient,
@@ -46,7 +60,7 @@ async function takeInterval(
   keyType: "painter" | "ip",
   key: string,
   seconds: number,
-): Promise<boolean> {
+): Promise<Gate> {
   const result = await client.query(
     `INSERT INTO paint_cooldowns AS c (war_id, key_type, key, last_painted_at, window_start, window_count)
      VALUES ($1, $2, $3, now(), now(), 1)
@@ -56,15 +70,26 @@ async function takeInterval(
      RETURNING last_painted_at`,
     [warId, keyType, key, String(seconds)],
   );
-  return (result.rowCount ?? 0) > 0;
+  if ((result.rowCount ?? 0) > 0) return { ok: true };
+
+  const blocking = await client.query<{ wait: string }>(
+    `SELECT EXTRACT(EPOCH FROM (last_painted_at + ($4 || ' seconds')::interval - now())) AS wait
+       FROM paint_cooldowns
+      WHERE war_id = $1 AND key_type = $2 AND key = $3`,
+    [warId, keyType, key, String(seconds)],
+  );
+  return { ok: false, waitSeconds: waitFrom(blocking.rows[0]?.wait) };
 }
 
-/** The subnet key is gated on a count per window, not on an interval. */
-async function takeBurst(
-  client: PoolClient,
-  warId: string,
-  key: string,
-): Promise<boolean> {
+/**
+ * The subnet key is gated on a count per window, not on an interval.
+ *
+ * Same reasoning as `takeInterval` for why the wait is read from the blocking
+ * row rather than asked separately: a subnet's clock is the window rolling
+ * over, not any one painter's cooldown, and the row that answers that
+ * question is the one the UPDATE just failed to touch.
+ */
+async function takeBurst(client: PoolClient, warId: string, key: string): Promise<Gate> {
   const { cap, windowSeconds } = subnetBurst();
   const result = await client.query(
     `INSERT INTO paint_cooldowns AS c (war_id, key_type, key, last_painted_at, window_start, window_count)
@@ -79,23 +104,15 @@ async function takeBurst(
      RETURNING window_count`,
     [warId, key, String(windowSeconds), cap],
   );
-  return (result.rowCount ?? 0) > 0;
-}
+  if ((result.rowCount ?? 0) > 0) return { ok: true };
 
-async function secondsUntilFree(
-  client: PoolClient,
-  warId: string,
-  painterKey: string,
-  ipHash: string,
-  cooldownSeconds: number,
-): Promise<number> {
-  const result = await client.query<{ wait: string }>(
-    `SELECT MAX(EXTRACT(EPOCH FROM (last_painted_at + ($4 || ' seconds')::interval - now()))) AS wait
+  const blocking = await client.query<{ wait: string }>(
+    `SELECT EXTRACT(EPOCH FROM (window_start + ($3 || ' seconds')::interval - now())) AS wait
        FROM paint_cooldowns
-      WHERE war_id = $1 AND ((key_type = 'painter' AND key = $2) OR (key_type = 'ip' AND key = $3))`,
-    [warId, painterKey, ipHash, String(cooldownSeconds)],
+      WHERE war_id = $1 AND key_type = 'subnet' AND key = $2`,
+    [warId, key, String(windowSeconds)],
   );
-  return Math.max(1, Math.ceil(Number(result.rows[0]?.wait ?? 1)));
+  return { ok: false, waitSeconds: waitFrom(blocking.rows[0]?.wait) };
 }
 
 export async function paintPixel(input: PaintInput): Promise<PaintResult> {
@@ -153,17 +170,23 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
     const colourSlot = token.rows[0].colour_slot;
 
     // Always painter, then ip, then subnet. A fixed order means two concurrent
-    // paints can never hold one key each and wait on the other.
+    // paints can never hold one key each and wait on the other. Each gate
+    // carries its own wait — a painter cooldown and a subnet window are
+    // different clocks, and reporting the wrong one tells a caller behind an
+    // already-capped subnet to come back in seconds when the real wait is the
+    // rest of the window.
     const cooldown = current.cooldown_seconds;
-    if (
-      !(await takeInterval(client, war.id, "painter", painterKey, cooldown)) ||
-      !(await takeInterval(client, war.id, "ip", ipHash, cooldown)) ||
-      !(await takeBurst(client, war.id, subnetKey))
-    ) {
-      const wait = await secondsUntilFree(client, war.id, painterKey, ipHash, cooldown);
-      // Roll back: a refused paint must not leave a half-taken cooldown behind.
-      throw new CooldownError(wait);
-    }
+
+    const painterGate = await takeInterval(client, war.id, "painter", painterKey, cooldown);
+    if (!painterGate.ok) throw new CooldownError(painterGate.waitSeconds);
+
+    const ipGate = await takeInterval(client, war.id, "ip", ipHash, cooldown);
+    if (!ipGate.ok) throw new CooldownError(ipGate.waitSeconds);
+
+    const subnetGate = await takeBurst(client, war.id, subnetKey);
+    if (!subnetGate.ok) throw new CooldownError(subnetGate.waitSeconds);
+    // Roll back on any of the above: a refused paint must not leave a
+    // half-taken cooldown behind.
 
     const seqRow = await client.query<{ last_seq: string }>(
       `UPDATE wars SET last_seq = last_seq + 1 WHERE id = $1 RETURNING last_seq`,
