@@ -512,7 +512,18 @@ it("leaves nothing behind when verification fails", ...)
 
 Late confirmation is the case that decides whether somebody loses money. A reservation that expires is `released`, freeing its colour. If the payment then arrives, try to flip that same row back to `active`; the unique index rejects it if the colour was taken meanwhile, and the client is offered the remaining free colours. If the war is full or ended, file the payment in `unmatched_payments` with the sender, and point the payer at `SUPPORT_CONTACT` — reuniting a stray payment is manual work done from `/admin`, and it needs a real inbox.
 
-**Never** let a verification failure leave a half-applied order. One transaction, or nothing.
+**Never** let a verification failure leave a half-applied order. One
+transaction, or nothing.
+
+**A swallowed constraint violation inside a transaction is not swallowed.**
+Postgres aborts the whole transaction on any error; catching the exception in
+JavaScript changes nothing about that, and every statement afterwards fails with
+`25P02`. Worse, if nothing follows, the `COMMIT` silently degrades to a
+`ROLLBACK` and the caller gets a normal-looking result while the writes it
+believes it made are gone. Inside a transaction, express "insert unless it is
+already there" as `ON CONFLICT ... DO NOTHING`, so the conflict never becomes an
+error — or wrap it in a `SAVEPOINT`. Prefer the former: a `SAVEPOINT` is a thing
+the next call site can forget.
 
 ---
 
