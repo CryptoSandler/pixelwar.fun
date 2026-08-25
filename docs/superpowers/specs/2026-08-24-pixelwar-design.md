@@ -474,6 +474,17 @@ the board as JSON. Cached `public, s-maxage=1, stale-while-revalidate=2`.
    totally ordered** sequence. A `BIGSERIAL` would not: sequence values are
    handed out before commit, so a client polling `since` can step over a row
    that committed late and lose a pixel silently.
+
+   **The ceiling this buys, stated plainly.** That row lock is held from this
+   statement to commit, so a single war's paint throughput is capped at roughly
+   one paint per lock-held round trip — a few dozen per second against a
+   low-latency database, and fewer against a distant one. It does not matter
+   how many painters or serverless instances there are. That is the price of a
+   gapless sequence and it is worth paying, because the alternative is losing
+   pixels off people's screens. It is also a real number to plan a launch burst
+   around: a war that goes viral queues rather than drops, and if the queue
+   ever becomes the problem, the fix is sharding the sequence per region of the
+   canvas, not abandoning the ordering.
 6. Upsert `pixels`, append to `pixel_events`, adjust `token_pixel_counts` for
    both the old and new owner.
 
