@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Every string in the repo is English** — code, comments, commits, docs, UI copy. No Spanish anywhere.
-- **The author is CryptoSandler.** The name "Fede" must never appear in a commit, a file, or a comment. `git config user.name` is already set in this repo; do not override it.
+- **The author is CryptoSandler, and nobody else.** This repo is public, and no other name, handle, or personal detail belongs in a commit, a file, or a comment. `git config user.name` and `user.email` are already set here; do not override them, and do not let a tool add a co-author or a machine username. Check with `git log --format='%an <%ae>'` before pushing.
 - **No code, assets, sounds, copy, or palette values are taken from `rplacelive/game`.** It is LGPL-3.0 with a non-commercial request and this product charges money. Ideas only. See [`docs/references.md`](../../references.md).
 - **Reuse bidoor, do not rewrite it.** Modules named as "copy from bidoor" are copied from `~/proyectos/outbid-tokens` and adapted, not reimplemented from memory.
 - **`SITE_URL` is `https://pixelwar.fun`.**
