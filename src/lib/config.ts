@@ -60,12 +60,28 @@ export function trustedPlatformHeader(): string | null {
  */
 export function subnetBurst(): { cap: number; windowSeconds: number } {
   return {
-    cap: Number.parseInt(process.env.PAINT_SUBNET_BURST ?? "60", 10),
-    windowSeconds: Number.parseInt(process.env.PAINT_SUBNET_WINDOW_SECONDS ?? "60", 10),
+    cap: positiveInt(process.env.PAINT_SUBNET_BURST, 60),
+    windowSeconds: positiveInt(process.env.PAINT_SUBNET_WINDOW_SECONDS, 60),
   };
 }
 
 /** Beyond this many changes, a client is told to refetch the board instead. */
 export function diffMaxChanges(): number {
-  return Number.parseInt(process.env.DIFF_MAX_CHANGES ?? "8000", 10);
+  return positiveInt(process.env.DIFF_MAX_CHANGES, 8000);
+}
+
+/**
+ * A positive integer from the environment, or the documented default.
+ *
+ * Unlike the rest of this file, a bad value here does not throw: these two
+ * settings are tunable knobs, not secrets a missing value should block
+ * startup over. But `Number.parseInt` on garbage — or on an unset variable
+ * coerced through `??` — produces NaN, and NaN is not a fallback, it is a
+ * value that reaches Postgres as an integer parameter and gets rejected,
+ * 500ing every single paint. Falling back explicitly here is what makes a
+ * typo in the environment merely wrong instead of an outage.
+ */
+function positiveInt(raw: string | undefined, fallback: number): number {
+  const parsed = raw?.trim() ? Number.parseInt(raw, 10) : NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
