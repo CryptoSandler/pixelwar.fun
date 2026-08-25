@@ -25,15 +25,29 @@
 
 ---
 
-## One decision needed before Task 6
+## Two decisions, already made
 
-The spec records an open question at the end of §5 and it becomes load-bearing in Task 6: **should an order carry a Solana Pay reference key?**
+**The order carries a Solana Pay reference key.** A unique, unguessable public
+key goes on the transfer as a read-only account. It is a third binding beside
+the signature and the payer's pubkey, and it fixes what neither can: a payer who
+signs and closes the tab never tells us the signature, so the money arrives and
+no order hears about it. With a reference, a reconcile pass asks the chain
+`getSignaturesForAddress(reference)` and settles it unaided.
 
-Today the binding is the signature plus the payer's pubkey, and both need the browser to come back and tell us the signature. A payer who signs and closes the tab is a payment that reaches our wallet with no order attached — it ends in `unmatched_payments` and a manual refund. A unique unguessable pubkey attached to the transfer as a read-only account would let a reconcile job find that payment with `getSignaturesForAddress` and apply it unaided.
+The server generates a keypair, keeps **only the public key**, and discards the
+secret unread. Nothing signs with it. This project holds no private key and
+that does not change here.
 
-It costs one extra account on the instruction and one column on the order. This plan is written **without** it, and Task 6 notes exactly where it would go. Decide before Task 6 starts, not after.
+It does not replace the payer binding: the reference says which order a payment
+was for, the payer pubkey says who was allowed to pay it. Task 11 is the
+recovery pass.
 
----
+**The RPC provider is the public mainnet endpoint, read from `SOLANA_RPC_URL`.**
+The same as the sibling project — which is to say, no dedicated provider. It is
+heavily rate limited, and the proxy in Task 8 puts every payer's transaction
+traffic through it, so this will need replacing before any war with real volume.
+The variable exists so that is a configuration change and not a code change.
+Do not hardcode an endpoint anywhere, and do not add a provider SDK.
 
 ## File Structure
 
@@ -253,7 +267,13 @@ CREATE UNIQUE INDEX payments_order_unique ON payments (order_id);
 
 `amount_base_units` is TEXT because it is a u64 and does not fit a JS number safely — the same reason `wars.last_seq` is read through one conversion point.
 
-`consumed_signatures` records every signature ever offered, with its outcome, so a signature that failed verification cannot be retried against a different order.
+`entry_orders` carries `reference_pubkey TEXT NOT NULL UNIQUE` — unique because
+it is what a payment is looked up by, and a collision would attach one payment
+to two orders.
+
+`consumed_signatures` records every signature ever offered, with its outcome, so
+a signature that failed verification cannot be retried against a different
+order.
 
 - [ ] **Step 2: Apply and assert the constraints hold**
 
@@ -339,7 +359,11 @@ Cover: the base-token confusion above; an address that does not exist; a chain w
 - `POST /api/orders` — `{ warSlug, chainId, contract, colourSlot, payerPubkey? }` → 201 `{ orderId, amountUsd, payTo, mint, expiresAt }`; 409 with a `reason` for `colour_taken` / `already_entered` / `war_full` / `war_closed`; 400 for a malformed address or unknown chain; 404 for an unknown token or war.
 - `GET /api/orders/[id]` → `{ status, amountUsd, expiresAt, paidAt, tokenTicker, colourSlot }`.
 
-> **If the reference-key decision came back yes**, this is where it lands: generate the reference keypair's public key here, store it on the order, and return it so the client can attach it to the transfer as a read-only account.
+**The reference key is generated here.** `Keypair.generate()`, keep
+`.publicKey.toBase58()`, let the secret go out of scope unread — write a comment
+saying so, because the next reader will wonder where the secret went and deserves
+to know it was never wanted. Store it on the order and return it, so the client
+can attach it to the transfer.
 
 - [ ] **Step 1: Failing tests**
 
@@ -426,7 +450,14 @@ npm install @solana/web3.js @solana/wallet-adapter-base @solana/wallet-adapter-r
 
 Phantom, Solflare and Backpack. Point the adapter's connection at `/api/rpc`, never at a public endpoint.
 
-The flow: pick chain and contract → resolve the token and show what was found, so nobody pays for a typo → pick a colour from the free ones → connect wallet → **show recipient, amount, token and network before signing** → sign → post the signature to `/confirm` → poll `GET /api/orders/[id]` until `paid`.
+The flow: pick chain and contract → resolve the token and show what was found,
+so nobody pays for a typo → pick a colour from the free ones → connect wallet →
+**show recipient, amount, token and network before signing** → sign → post the
+signature to `/confirm` → poll `GET /api/orders/[id]` until `paid`.
+
+The transfer instruction carries the order's `reference_pubkey` as an extra
+account: not a signer, not writable. It changes nothing about what the transfer
+does; it is a marker the chain will let us search by later.
 
 - [ ] **Verify in a browser, and say what you could not verify.** A wallet signature needs a wallet; if you cannot drive one, take the flow as far as the unsigned transaction and report exactly where you stopped. Do not claim a payment path works because it compiles.
 
@@ -446,6 +477,44 @@ An order paid this way has no connected wallet and therefore no expected payer, 
 
 ---
 
+---
+
+### Task 11: Recovering a payment nobody claimed
+
+**Files:**
+- Create: `src/lib/payments/recover.ts`
+- Test: `src/lib/payments/__tests__/recover.test.ts`
+
+**Interfaces:** `recoverUnclaimedOrders(fetcher?): Promise<{ recovered: string[]; filed: string[] }>`.
+
+This is the payoff for the reference key. For every order that expired unpaid,
+ask the chain for signatures touching its reference, and settle the first one
+that verifies. The payer never came back; the money is theirs either way.
+
+- [ ] **Step 1: Failing tests, with an injected signature fetcher — no network**
+
+```ts
+it("settles an expired order whose payment did arrive", ...)
+it("re-takes the colour when it is still free", ...)
+it("files the payment for support when the colour was taken", ...)
+it("files it when the war filled up or ended", ...)
+it("leaves an order alone when the chain knows nothing about its reference", ...)
+it("is idempotent — a second pass settles nothing twice", ...)
+it("ignores a signature already consumed by another order", ...)
+```
+
+- [ ] **Step 2: Implement over `settlePayment` from Task 7**
+
+Reuse it rather than writing a second settlement path: two ways to mark an order
+paid is two places for them to disagree. This pass finds the signature; Task 7's
+function decides what it means.
+
+Called lazily today and by the reconcile cron in Batch E. It runs against the
+real RPC, so cap how many orders it examines per pass and say so in a comment —
+the public endpoint's rate limit is shared with every payer's checkout.
+
+---
+
 ## Batch B is done when
 
 - `npm test` is green, `npm run lint` clean, `npm run build` clean.
@@ -453,6 +522,7 @@ An order paid this way has no connected wallet and therefore no expected payer, 
 - A signature cannot be spent twice, on any order.
 - An expired reservation frees its colour; a removed token does not.
 - The browser never talks to anything but our own origin.
+- A payer who signs and closes the tab still gets their token on the board.
 
 ## Deliberately not in this batch
 
@@ -462,6 +532,9 @@ Closing a war and its snapshot (Batch C); the admin console (D); the reconcile c
 
 **Covered:** §5 end to end — reservation, order, wallet checkout, verification with payer binding, overpayment, late confirmation, unmatched payments; §8 the proxy and its whitelist; §3's order and payment tables; the four `war_tokens` statuses and what each does to a colour.
 
-**Not covered, and named:** the reference key, which is a decision above rather than a task; the reconcile job that would use it; refunds, which are an operator sending USDC by hand and are documented on the rules page in Batch E.
+**Not covered, and named:** the reconcile *cron* that will call Task 11 on a
+schedule (Batch E — the function and its tests are here, the timer is not);
+refunds, which are an operator sending USDC by hand and are documented on the
+rules page in Batch E.
 
 **Type consistency:** `Order`, `CreateOrderResult` and `SettleResult` are produced in Tasks 4 and 7 and consumed unchanged in 6, 7, 9 and 10. `colourSlot` is camelCase in TypeScript and `colour_slot` in SQL throughout, converted only in row mappers — the rule Batch A settled.

@@ -397,17 +397,22 @@ Pasting a signature by hand is a collapsed fallback, not the main path.
 There are no automatic refunds. The rules say what happens when we cancel a
 war, and it is an operator sending USDC back by hand.
 
-**Open for Batch B: a per-order reference key.** Solana Pay's convention is to
-attach a unique, unguessable pubkey to the transfer as a read-only account, and
-then find the payment server-side with `getSignaturesForAddress(reference)`.
-That is a third binding alongside the signature and the payer pubkey, and it
-fixes the one case the other two cannot: a payer who signs and then closes the
-tab never sends us the signature, so the payment reaches our wallet and no
-order ever learns about it. Today that ends in `unmatched_payments` and a
-manual refund. With a reference key the reconcile job finds it unaided. Cheap
-to add — one extra account on the instruction, one column on the order — and
-worth deciding on before the payment flow is written rather than after. See
-[docs/skills.md](../../skills.md) for where this came from.
+**Every order carries a reference key.** Solana Pay's convention: a unique,
+unguessable public key attached to the transfer as a read-only account. It is a
+third binding alongside the signature and the payer's pubkey, and it fixes the
+one case the other two cannot — a payer who signs and then closes the tab never
+sends us the signature, so the money reaches our wallet and no order learns
+about it.
+
+The server generates a keypair, keeps **only the public key**, and discards the
+secret unread: nothing ever needs to sign with it, and this project holds no
+private key. A reconcile pass then asks the chain
+`getSignaturesForAddress(reference)` for any order that expired unpaid, finds
+the transfer, and settles it without the browser's help. What used to end in
+`unmatched_payments` and a manual refund now ends by itself.
+
+It does not replace the payer binding. The reference says which order a payment
+was for; the payer pubkey says who is allowed to pay it.
 
 ## 6. Canvas API
 
@@ -702,6 +707,12 @@ rather than papered over.
 Required in production, no defaults, server refuses to start without them:
 `DATABASE_URL`, `PAYMENT_WALLET`, `RATE_LIMIT_SALT`, `PAINTER_COOKIE_SECRET`,
 `ADMIN_TOKEN` (or `ADMIN_TOKENS`), `SUPPORT_CONTACT`, `SOLANA_RPC_URL`.
+
+`SOLANA_RPC_URL` is optional and defaults to the public mainnet endpoint, which
+is heavily rate limited. It is read from the environment precisely so the
+provider can change without a code change — and it will need to, because the
+proxy in §8 puts every payer's transaction traffic through it, so the public
+endpoint's limit becomes a checkout that fails rather than a slow admin page.
 
 Optional: `SITE_URL` (defaults to `https://pixelwar.fun`),
 `ADMIN_STEP_UP_SECRET`, `IP_HASH_RETENTION_DAYS` (30), `TRUSTED_PROXY_HOPS`
