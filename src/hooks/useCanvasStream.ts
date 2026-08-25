@@ -59,6 +59,10 @@ export function useCanvasStream(warSlug: string) {
   }, [image, loadBoard, warSlug]);
 
   useEffect(() => {
+    // The rule can't see that loadBoard's setState calls sit behind an
+    // `await fetch`, not synchronously in the effect body; this is the
+    // standard "load once on mount" effect, not a cascading-render bug.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadBoard();
   }, [loadBoard]);
 
