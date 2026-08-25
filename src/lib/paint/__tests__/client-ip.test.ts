@@ -76,4 +76,18 @@ describe("subnetKey", () => {
   it("is hashed, so it never carries a raw prefix", () => {
     expect(subnetKey("1.2.3.4")).not.toContain("1.2.3");
   });
+
+  it("keeps two different IPv4-mapped addresses in different buckets", () => {
+    // A dual-stack listener reports IPv4 clients in this form. Splitting on
+    // ":" leaves the octets in the last group, where the /64 prefix never
+    // sees them — so every address of this shape hashed to one key and
+    // unrelated strangers shared a burst cap.
+    expect(subnetKey("::ffff:1.2.3.4")).not.toBe(subnetKey("::ffff:9.9.9.9"));
+    expect(subnetKey("::ffff:1.2.3.4")).not.toBe(subnetKey("::1"));
+  });
+
+  it("treats an IPv4-mapped address as the IPv4 client it is", () => {
+    expect(subnetKey("::ffff:1.2.3.4")).toBe(subnetKey("1.2.3.4"));
+    expect(hashIp("::ffff:1.2.3.4")).toBe(hashIp("1.2.3.4"));
+  });
 });

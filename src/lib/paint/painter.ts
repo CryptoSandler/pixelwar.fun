@@ -46,7 +46,17 @@ export function readPainter(request: Request): string | null {
 
   if (!raw) return null;
 
-  const parts = decodeURIComponent(raw).split(".");
+  // decodeURIComponent throws on a malformed escape — a cookie of "%" is
+  // enough. This runs on every paint request, so it returns null like every
+  // other rejection rather than turning a junk cookie into a 500.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+
+  const parts = decoded.split(".");
   if (parts.length !== 2) return null;
 
   const [id, signature] = parts;

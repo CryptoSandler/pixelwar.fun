@@ -3,7 +3,20 @@ import { allowUntrustedClientIp, rateLimitSalt, trustedProxyHops } from "../conf
 
 /** Raw IPs are never stored. This is only ever used as a counting key. */
 export function hashIp(ip: string): string {
-  return createHash("sha256").update(`${rateLimitSalt()}:${ip}`).digest("hex");
+  return createHash("sha256").update(`${rateLimitSalt()}:${normaliseIp(ip)}`).digest("hex");
+}
+
+/**
+ * One canonical spelling for one address.
+ *
+ * A dual-stack listener reports IPv4 clients as `::ffff:a.b.c.d`. Both
+ * `hashIp` and `subnetKey` must agree about who that is — two spellings for
+ * the same visitor means two buckets, and for `hashIp` that means the
+ * cooldown quietly halves itself.
+ */
+export function normaliseIp(ip: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip.trim());
+  return mapped ? mapped[1] : ip.trim().toLowerCase();
 }
 
 /**
@@ -82,15 +95,34 @@ export function clientIp(request: Request): ClientIdentity {
  * together, which turns a burst cap into an outage for a neighbourhood.
  */
 export function subnetKey(ip: string): string {
-  return createHash("sha256").update(`${rateLimitSalt()}:subnet:${prefixOf(ip)}`).digest("hex");
+  return createHash("sha256")
+    .update(`${rateLimitSalt()}:subnet:${prefixOf(normaliseIp(ip))}`)
+    .digest("hex");
 }
 
 function prefixOf(ip: string): string {
-  if (ip.includes(":")) return `${expandIpv6(ip).slice(0, 4).join(":")}::/64`;
+  if (ip.includes(":")) return `${expandIpv6(withEmbeddedIpv4AsHex(ip)).slice(0, 4).join(":")}::/64`;
 
   const octets = ip.split(".");
   if (octets.length !== 4) return ip; // not an address we recognise; group it alone
   return `${octets.slice(0, 3).join(".")}.0/24`;
+}
+
+/**
+ * Rewrites a trailing embedded IPv4 dotted quad (e.g. `64:ff9b::1.2.3.4`) as
+ * two hex groups. `::ffff:a.b.c.d` is already peeled off to plain IPv4 by
+ * `normaliseIp` before this runs, but other embedding forms are not, and
+ * without this the octets never reach the /64 prefix — every address of that
+ * shape would hash to the same one.
+ */
+function withEmbeddedIpv4AsHex(ip: string): string {
+  const match = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (!match) return ip;
+  const octets = match.slice(2).map(Number);
+  if (octets.some((octet) => octet > 255)) return ip;
+  const high = ((octets[0] << 8) | octets[1]).toString(16);
+  const low = ((octets[2] << 8) | octets[3]).toString(16);
+  return `${match[1]}${high}:${low}`;
 }
 
 /** Eight lowercase, unpadded groups. "2001:db8::1" and "2001:0db8:0:0::1" agree. */
@@ -101,6 +133,6 @@ function expandIpv6(ip: string): string[] {
   const missing = 8 - left.length - right.length;
   const middle = ip.includes("::") ? Array(Math.max(0, missing)).fill("0") : [];
   return [...left, ...middle, ...right].map((group) =>
-    String(Number.parseInt(group || "0", 16).toString(16)),
+    Number.parseInt(group || "0", 16).toString(16),
   );
 }

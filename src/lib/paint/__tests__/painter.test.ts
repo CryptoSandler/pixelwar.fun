@@ -35,7 +35,9 @@ describe("painter identity", () => {
   });
 
   it("rejects malformed cookies rather than trusting them", () => {
-    for (const value of ["", "no-dot", ".", "a.b.c"]) {
+    // "%", "%zz", and "abc%" are malformed percent-escapes: decodeURIComponent
+    // throws on them, and that throw must turn into a rejection, not a 500.
+    for (const value of ["", "no-dot", ".", "a.b.c", "%", "%zz", "abc%"]) {
       expect(readPainter(withCookie(value))).toBeNull();
     }
   });
