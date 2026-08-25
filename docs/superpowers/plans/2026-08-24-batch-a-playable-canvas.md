@@ -4025,11 +4025,28 @@ export default async function Page() {
 }
 ```
 
-`WarView` holds the client state: selected token, cooldown, hovered pixel. It
+`WarView` holds the client state: selected token, cooldown, target pixel. It
 calls `/api/session` on mount to get its cookie and its current cooldown, binds
 number keys to the first nine tokens, refreshes the leaderboard every two
 seconds, and on a successful paint calls `applyLocal` before the next poll
 arrives so the pixel appears instantly.
+
+**Hover and target are two different things, and conflating them makes the
+paint button unclickable.** The canvas nulls its hover on `pointerleave`, so a
+mouse travelling from the canvas to the button clears the hover *before* the
+click lands — a button gated on hover is disabled by the very act of reaching
+for it, and no automated check catches it because tapping the canvas still
+paints. Keep `hovered` for the HUD readout, where going blank when the pointer
+leaves is correct, and keep a separate `target` — the last pixel pointed at or
+painted — which survives the pointer leaving. The button gates on `target`.
+
+**Every failure the paint route can return needs to reach the person.** The
+route answers 403 for a ban and 400 for a bad token or coordinates, not just
+429 and 409. Branching on the two you expect and silently discarding the rest —
+including a thrown network error swallowed by an empty `catch` — leaves a
+banned painter clicking a button that does nothing, which is the same failure
+the frozen-war screen exists to prevent. Surface the server's message in a live
+region next to the button.
 
 Handle the 429 by reading `Retry-After` and setting `cooldownUntil` from it —
 the server is the authority, and the client's prediction is only a guess that
