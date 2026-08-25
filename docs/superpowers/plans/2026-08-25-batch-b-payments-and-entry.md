@@ -428,6 +428,15 @@ codebase will drift, and the one that drifts is the one nobody remembers exists.
 
 Read each. Keep the comments — particularly the one on `pickPair`, which explains that DexScreener returns pairs and the token you asked about is not always the pair's base token, so reading `baseToken` blindly lists the wrong token's name and logo.
 
+**Length before algorithm, always.** `base58Decode` walks the growing byte array
+once per character, so it is quadratic. Every address family has a known maximum
+length — a Solana address is 32 to 44 characters — so check the length BEFORE
+decoding anything. A caller who sends a hundred thousand characters costs seconds
+of CPU and a couple of megabytes costs minutes; it never errors, it simply stops
+answering, which on a money-handling endpoint reachable from the internet is
+worse than a crash. This was found by review after it shipped, on the exact
+"enormous strings" case the hostile-input list already named.
+
 Metadata comes from DexScreener and not from whoever is paying: that is what stops a buyer owning an entry's identity, and it doubles as the existence check — an address no DEX has ever seen cannot be listed.
 
 - [ ] **Step 2: Tests with a stubbed fetch, no network**
