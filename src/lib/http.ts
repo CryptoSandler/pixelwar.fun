@@ -15,11 +15,15 @@ export type Caller =
 export function identify(request: Request): Caller {
   const identity = clientIp(request);
   if (!identity.ok) {
+    // The operational detail (which env var to set, how many proxy hops are
+    // configured) is for the server log, not the caller: it names
+    // ALLOW_UNTRUSTED_CLIENT_IP, the variable that switches rate limiting
+    // off, and this message is returned in a 400 body that the client
+    // renders straight into the user's error pill.
+    console.error(`identify: ${identity.reason}`);
     return {
       ok: false,
-      message:
-        "No trusted client address. Set TRUSTED_PROXY_HOPS to match the deployment, " +
-        "or ALLOW_UNTRUSTED_CLIENT_IP=true for local development.",
+      message: "This request could not be verified. Please try again.",
     };
   }
 
