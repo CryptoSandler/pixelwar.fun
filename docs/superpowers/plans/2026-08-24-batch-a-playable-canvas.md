@@ -1350,16 +1350,43 @@ beforeAll(() => {
         "refuses to run without a database that is explicitly disposable.",
     );
   }
-  if (test === app) {
+  // Compare where the two URLs POINT, not how they are spelled. A trailing
+  // slash, a different letter case in the host, or an extra query parameter
+  // makes two strings unequal while they still address the same database —
+  // and this guard is the only thing between a hand-edited .env.local and
+  // TRUNCATE running against production.
+  if (sameTarget(test, app)) {
     throw new Error(
-      "TEST_DATABASE_URL equals DATABASE_URL. The suite truncates every table; " +
-        "pointing it at the app database would delete real data.",
+      "TEST_DATABASE_URL and DATABASE_URL point at the same database. The suite " +
+        "truncates every table; pointing it at the app database would delete real data.",
     );
   }
 
   // Everything under test reads DATABASE_URL. Redirect it once, here.
   process.env.DATABASE_URL = test;
 });
+
+/**
+ * True when two connection strings address the same database.
+ *
+ * Host, port and database name only. Credentials and query parameters are
+ * deliberately ignored: connecting as a different role, or with a different
+ * sslmode, still truncates the same tables.
+ *
+ * An unparseable URL is treated as a match — refusing to run is the safe
+ * answer when we cannot tell what we are pointed at.
+ */
+function sameTarget(a: string, b: string): boolean {
+  try {
+    const left = new URL(a);
+    const right = new URL(b);
+    const key = (url: URL) =>
+      `${url.hostname.toLowerCase()}:${url.port || "5432"}${url.pathname.replace(/\/+$/, "")}`;
+    return key(left) === key(right);
+  } catch {
+    return true;
+  }
+}
 
 /** Empties every table except the migration ledger. */
 export async function truncateAll(): Promise<void> {
