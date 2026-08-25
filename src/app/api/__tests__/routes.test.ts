@@ -6,7 +6,13 @@ import { GET as leaderboardRoute } from "../leaderboard/route";
 import { POST as paintRoute } from "../paint/route";
 import { GET as sessionRoute } from "../session/route";
 
-const HEADERS = { "cf-connecting-ip": "1.2.3.4" };
+// x-forwarded-for, not cf-connecting-ip: cf-connecting-ip is only trustworthy
+// on a deployment that declares itself behind Cloudflare via
+// TRUSTED_PLATFORM_HEADER, which nothing sets in this test environment. With
+// it unset, clientIp() ignores that header and reads x-forwarded-for instead
+// — the path the default configuration actually trusts, and therefore the
+// one these tests need to use to keep distinct IPs genuinely distinct.
+const HEADERS = { "x-forwarded-for": "1.2.3.4" };
 
 function get(path: string): Request {
   return new Request(`https://pixelwar.fun${path}`, { headers: HEADERS });
@@ -16,7 +22,7 @@ function post(path: string, body: unknown, cookie?: string, ip = "1.2.3.4"): Req
   return new Request(`https://pixelwar.fun${path}`, {
     method: "POST",
     headers: {
-      "cf-connecting-ip": ip,
+      "x-forwarded-for": ip,
       "content-type": "application/json",
       ...(cookie ? { cookie } : {}),
     },
@@ -148,7 +154,7 @@ describe("POST /api/paint", () => {
       new Request("https://pixelwar.fun/api/paint", {
         method: "POST",
         headers: {
-          "cf-connecting-ip": "1.2.3.4",
+          "x-forwarded-for": "1.2.3.4",
           "content-type": "text/plain",
           origin: "https://evil.example",
         },
@@ -165,7 +171,7 @@ describe("POST /api/paint", () => {
       new Request("https://pixelwar.fun/api/paint", {
         method: "POST",
         headers: {
-          "cf-connecting-ip": "1.2.3.4",
+          "x-forwarded-for": "1.2.3.4",
           "content-type": "application/json",
           origin: "https://pixelwar.fun",
         },
