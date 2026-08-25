@@ -38,6 +38,20 @@ export function allowUntrustedClientIp(): boolean {
 }
 
 /**
+ * Which platform header, if any, this deployment trusts as the caller's real
+ * address.
+ *
+ * Unset by default: no platform header is trusted until we are told which
+ * edge we are running behind, because a header is only unforgeable when that
+ * platform's edge is the one writing it. `client-ip.ts` still validates the
+ * value against the headers it actually knows how to use — this function only
+ * reads the environment.
+ */
+export function trustedPlatformHeader(): string | null {
+  return process.env.TRUSTED_PLATFORM_HEADER?.trim() || null;
+}
+
+/**
  * Paints allowed per subnet per window, before the burst cap bites.
  *
  * A function, not a constant: a module-level constant freezes the value at

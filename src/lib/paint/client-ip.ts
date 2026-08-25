@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { allowUntrustedClientIp, rateLimitSalt, trustedProxyHops } from "../config";
+import {
+  allowUntrustedClientIp,
+  rateLimitSalt,
+  trustedPlatformHeader,
+  trustedProxyHops,
+} from "../config";
 
 /** Raw IPs are never stored. This is only ever used as a counting key. */
 export function hashIp(ip: string): string {
@@ -20,9 +25,14 @@ export function normaliseIp(ip: string): string {
 }
 
 /**
- * Headers a platform sets itself and a caller cannot forge, because the edge
- * overwrites them. Checked before x-forwarded-for, which is append-only and
- * therefore partly caller-controlled.
+ * Headers a platform CAN set itself, overwriting whatever a caller sent —
+ * but only on the platform that actually does the overwriting. None of these
+ * are unforgeable in general: sent to a deployment not behind that platform's
+ * edge, they are ordinary inbound headers a caller can set to anything,
+ * including someone else's rate-limit bucket. That is why `clientIp` below
+ * trusts at most one of them, and only the one named by
+ * `TRUSTED_PLATFORM_HEADER` — this list exists so a typo in that variable
+ * cannot promote an arbitrary header to authoritative.
  */
 const PLATFORM_IP_HEADERS = [
   "cf-connecting-ip",
@@ -48,9 +58,10 @@ export type ClientIdentity =
  * unlimited allowance or a self-inflicted outage, and neither is a limit.
  */
 export function clientIp(request: Request): ClientIdentity {
-  for (const header of PLATFORM_IP_HEADERS) {
-    const value = request.headers.get(header)?.split(",")[0]?.trim();
-    if (value) return { ok: true, ip: value, source: header };
+  const platformHeader = trustedPlatformHeader();
+  if (platformHeader && (PLATFORM_IP_HEADERS as readonly string[]).includes(platformHeader)) {
+    const value = request.headers.get(platformHeader)?.split(",")[0]?.trim();
+    if (value) return { ok: true, ip: value, source: platformHeader };
   }
 
   const forwarded = request.headers.get("x-forwarded-for");

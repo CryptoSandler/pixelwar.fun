@@ -13,6 +13,7 @@ describe("clientIp", () => {
   beforeEach(() => {
     process.env.TRUSTED_PROXY_HOPS = "1";
     delete process.env.ALLOW_UNTRUSTED_CLIENT_IP;
+    delete process.env.TRUSTED_PLATFORM_HEADER;
   });
 
   afterEach(() => {
@@ -22,11 +23,36 @@ describe("clientIp", () => {
     } else {
       process.env.ALLOW_UNTRUSTED_CLIENT_IP = original.ALLOW_UNTRUSTED_CLIENT_IP;
     }
+    if (original.TRUSTED_PLATFORM_HEADER === undefined) {
+      delete process.env.TRUSTED_PLATFORM_HEADER;
+    } else {
+      process.env.TRUSTED_PLATFORM_HEADER = original.TRUSTED_PLATFORM_HEADER;
+    }
   });
 
-  it("prefers a platform header a caller cannot forge", () => {
+  it("trusts a platform header only once told which platform we are behind", () => {
+    process.env.TRUSTED_PLATFORM_HEADER = "cf-connecting-ip";
     const identity = clientIp(request({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "9.9.9.9" }));
     expect(identity).toEqual({ ok: true, ip: "1.2.3.4", source: "cf-connecting-ip" });
+  });
+
+  it("is not fooled by an attacker-chosen platform header when TRUSTED_PLATFORM_HEADER is unset", () => {
+    // This is the exploit: without the deployment declaring which edge it is
+    // behind, a caller who sends cf-connecting-ip must NOT get to pick their
+    // own rate-limit bucket. The request must fall through to
+    // x-forwarded-for, read from the right as usual.
+    const identity = clientIp(
+      request({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "9.9.9.9, 5.6.7.8" }),
+    );
+    expect(identity).toMatchObject({ ok: true, ip: "5.6.7.8", source: "x-forwarded-for[-1]" });
+  });
+
+  it("rejects a TRUSTED_PLATFORM_HEADER value it does not recognise, treating it as unset", () => {
+    process.env.TRUSTED_PLATFORM_HEADER = "x-attacker-header";
+    const identity = clientIp(
+      request({ "x-attacker-header": "1.2.3.4", "x-forwarded-for": "9.9.9.9, 5.6.7.8" }),
+    );
+    expect(identity).toMatchObject({ ok: true, ip: "5.6.7.8" });
   });
 
   it("reads x-forwarded-for from the right, not the left", () => {
