@@ -31,9 +31,26 @@ export function Board({
     scale: 3,
   });
   const drag = useRef<{ x: number; y: number; travelled: number } | null>(null);
+  // Bumped by the ResizeObserver below. The draw effect's own deps only ever
+  // see the board and the viewport move — nothing tells it the element's own
+  // box changed size, so without this the backing store keeps whatever
+  // dimensions it had at the last redraw while the CSS box moves on, and
+  // every screen-to-board conversion drifts by the difference.
+  const [resizeTick, setResizeTick] = useState(0);
 
-  // Redraw whenever the board changes or the viewport moves. `version` is the
-  // signal: BoardImage mutates in place, so React cannot see it change.
+  // Observe the canvas element itself, not the window: a sidebar opening or
+  // closing resizes this box without ever firing a window resize event.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver(() => setResizeTick((tick) => tick + 1));
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+
+  // Redraw whenever the board changes, the viewport moves, or the element's
+  // own box is resized. `version` is the signal for the board: BoardImage
+  // mutates in place, so React cannot see it change on its own.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -70,7 +87,7 @@ export function Board({
       image.width * scale,
       image.height * scale,
     );
-  }, [image, version, viewport]);
+  }, [image, version, viewport, resizeTick]);
 
   function screen() {
     const canvas = canvasRef.current!;
