@@ -382,6 +382,12 @@ Pasting a signature by hand is a collapsed fallback, not the main path.
    `paid`, flip the `war_tokens` row to `active`. Overpayment is recorded and
    accepted.
 
+   **When money reached our wallet and the verdict was still no** — the payer
+   was not the order's wallet, or the amount fell short — the USDC is ours and
+   belongs to somebody. File it in `unmatched_payments` with the sender the
+   chain names, and never with a sender a claimant asserts. Dropping it is how
+   a payment becomes invisible to the only people who could return it.
+
 4. **Paste-a-signature fallback.** Collapsed by default. The order has no
    `payer_pubkey`, so the sender check cannot apply and first-to-claim inside
    the window is the rule. The rules page says so plainly.
