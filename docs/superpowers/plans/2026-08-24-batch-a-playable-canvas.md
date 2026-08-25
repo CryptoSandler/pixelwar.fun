@@ -2216,7 +2216,10 @@ describe("changesSince", () => {
     });
   });
 
-  it("asks the client to refetch rather than shipping a quarter of the board", async () => {
+  // Twelve sequential writes to a remote database, so this one test gets a
+  // wider ceiling. Raising the suite default instead would cost every other
+  // test its ability to catch a hang.
+  it("asks the client to refetch rather than shipping a quarter of the board", { timeout: 20_000 }, async () => {
     const war = await makeWar();
     const red = await makeToken(war.id, 1);
     for (let seq = 1; seq <= 12; seq++) await paintRaw(war.id, seq, red, 1, seq);
@@ -2381,7 +2384,7 @@ describe("paintPixel", () => {
   });
 
   it("moves ownership when one token paints over another", async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 0 });
+    const war = await makeWar({ width: 8, height: 8 });
     const red = await makeToken(war.id, 1);
     const blue = await makeToken(war.id, 13);
 
@@ -2468,7 +2471,7 @@ describe("paintPixel", () => {
   });
 
   it("hands out a gapless sequence under concurrency", async () => {
-    const war = await makeWar({ width: 32, height: 32, cooldownSeconds: 0 });
+    const war = await makeWar({ width: 32, height: 32 });
     const token = await makeToken(war.id, 5);
 
     await Promise.all(
@@ -2562,7 +2565,7 @@ describe("paintPixel", () => {
   it("caps a subnet's burst even when every painter behind it is new", async () => {
     process.env.PAINT_SUBNET_BURST = "3";
     process.env.PAINT_SUBNET_WINDOW_SECONDS = "60";
-    const war = await makeWar({ width: 32, height: 32, cooldownSeconds: 0 });
+    const war = await makeWar({ width: 32, height: 32 });
     const token = await makeToken(war.id, 5);
 
     const results = [];
@@ -2926,10 +2929,14 @@ function get(path: string): Request {
   return new Request(`https://pixelwar.fun${path}`, { headers: HEADERS });
 }
 
-function post(path: string, body: unknown, cookie?: string): Request {
+function post(path: string, body: unknown, cookie?: string, ip = "1.2.3.4"): Request {
   return new Request(`https://pixelwar.fun${path}`, {
     method: "POST",
-    headers: { ...HEADERS, "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+    headers: {
+      "cf-connecting-ip": ip,
+      "content-type": "application/json",
+      ...(cookie ? { cookie } : {}),
+    },
     body: JSON.stringify(body),
   });
 }
@@ -2984,7 +2991,7 @@ describe("GET /api/canvas", () => {
 
 describe("GET /api/diff", () => {
   it("returns changes after the given sequence", async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 0 });
+    const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 3);
     await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token }));
 
@@ -3058,13 +3065,17 @@ describe("POST /api/paint", () => {
 
 describe("GET /api/leaderboard", () => {
   it("ranks tokens by pixels currently owned", async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 0 });
+    const war = await makeWar({ width: 8, height: 8 });
     const red = await makeToken(war.id, 1);
     const blue = await makeToken(war.id, 13);
 
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: blue }));
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: blue }));
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 2, y: 0, tokenId: red }));
+    // Three paints inside one cooldown window, so each must come from a
+    // different caller — which is exactly what the product requires of a real
+    // community. A war with no cooldown is not a thing that can exist: the
+    // schema pins cooldown_seconds to 1..3600.
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: blue }, undefined, "1.2.3.4"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: blue }, undefined, "1.2.3.5"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 2, y: 0, tokenId: red }, undefined, "1.2.3.6"));
 
     const body = await (await leaderboardRoute(get(`/api/leaderboard?war=${war.slug}`))).json();
     expect(body.tokens.map((t: { colourSlot: number }) => t.colourSlot)).toEqual([13, 1]);
