@@ -796,6 +796,20 @@ describe("subnetKey", () => {
   it("is hashed, so it never carries a raw prefix", () => {
     expect(subnetKey("1.2.3.4")).not.toContain("1.2.3");
   });
+
+  it("keeps two different IPv4-mapped addresses in different buckets", () => {
+    // A dual-stack listener reports IPv4 clients in this form. Splitting on
+    // ":" leaves the octets in the last group, where the /64 prefix never
+    // sees them — so every address of this shape hashed to one key and
+    // unrelated strangers shared a burst cap.
+    expect(subnetKey("::ffff:1.2.3.4")).not.toBe(subnetKey("::ffff:9.9.9.9"));
+    expect(subnetKey("::ffff:1.2.3.4")).not.toBe(subnetKey("::1"));
+  });
+
+  it("treats an IPv4-mapped address as the IPv4 client it is", () => {
+    expect(subnetKey("::ffff:1.2.3.4")).toBe(subnetKey("1.2.3.4"));
+    expect(hashIp("::ffff:1.2.3.4")).toBe(hashIp("1.2.3.4"));
+  });
 });
 ```
 
@@ -886,15 +900,53 @@ import { rateLimitSalt } from "../config";
  * together, which turns a burst cap into an outage for a neighbourhood.
  */
 export function subnetKey(ip: string): string {
-  return createHash("sha256").update(`${rateLimitSalt()}:subnet:${prefixOf(ip)}`).digest("hex");
+  return createHash("sha256")
+    .update(`${rateLimitSalt()}:subnet:${prefixOf(normaliseIp(ip))}`)
+    .digest("hex");
+}
+
+/**
+ * One canonical spelling per client, before anything is hashed.
+ *
+ * A dual-stack listener reports an IPv4 client as `::ffff:1.2.3.4`, and the
+ * same client can arrive in either spelling depending on which header carried
+ * it. Hashing both forms gives one visitor two cooldown buckets, which is the
+ * cooldown quietly halving itself. Both `hashIp` and `subnetKey` go through
+ * here so the two keys cannot disagree about who somebody is.
+ */
+export function normaliseIp(ip: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip.trim());
+  return mapped ? mapped[1] : ip.trim().toLowerCase();
 }
 
 function prefixOf(ip: string): string {
-  if (ip.includes(":")) return `${expandIpv6(ip).slice(0, 4).join(":")}::/64`;
+  if (ip.includes(":")) {
+    return `${expandIpv6(withEmbeddedIpv4AsHex(ip)).slice(0, 4).join(":")}::/64`;
+  }
 
   const octets = ip.split(".");
   if (octets.length !== 4) return ip; // not an address we recognise; group it alone
   return `${octets.slice(0, 3).join(".")}.0/24`;
+}
+
+/**
+ * Rewrites a trailing dotted quad as two hex groups.
+ *
+ * Without this, splitting on ":" leaves the IPv4 octets in one final group and
+ * they never reach the first four groups the prefix is built from — so every
+ * address of this shape collapses to the same /64 and unrelated strangers land
+ * in one burst bucket.
+ */
+function withEmbeddedIpv4AsHex(ip: string): string {
+  const match = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (!match) return ip;
+
+  const octets = match.slice(2).map(Number);
+  if (octets.some((octet) => octet > 255)) return ip;
+
+  const high = ((octets[0] << 8) | octets[1]).toString(16);
+  const low = ((octets[2] << 8) | octets[3]).toString(16);
+  return `${match[1]}${high}:${low}`;
 }
 
 /** Eight lowercase, unpadded groups. "2001:db8::1" and "2001:0db8:0:0::1" agree. */
@@ -957,7 +1009,9 @@ describe("painter identity", () => {
   });
 
   it("rejects malformed cookies rather than trusting them", () => {
-    for (const value of ["", "no-dot", ".", "a.b.c"]) {
+    // "%" is a malformed percent-escape: decodeURIComponent throws on it, and
+    // a junk cookie must be a rejection, not a 500 on the paint route.
+    for (const value of ["", "no-dot", ".", "a.b.c", "%", "%zz", "abc%"]) {
       expect(readPainter(withCookie(value))).toBeNull();
     }
   });
@@ -1043,7 +1097,17 @@ export function readPainter(request: Request): string | null {
 
   if (!raw) return null;
 
-  const parts = decodeURIComponent(raw).split(".");
+  // decodeURIComponent throws on a malformed escape — a cookie of "%" is
+  // enough. This runs on every paint request, so it returns null like every
+  // other rejection rather than turning a junk cookie into a 500.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+
+  const parts = decoded.split(".");
   if (parts.length !== 2) return null;
 
   const [id, signature] = parts;
