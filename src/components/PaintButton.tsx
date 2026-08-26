@@ -44,11 +44,14 @@ export function PaintButton({
       type="button"
       disabled={disabled || waiting}
       onClick={onPaint}
-      // A dead key says so with a colour, never `opacity` (DESIGN.md §9).
-      // DISABLED_INK reads 4.14:1 on the shell behind this button — over
-      // DISABLED_TEXT_CONTRAST, and the same named colour the secondary
-      // button already uses on the light side.
-      className="rounded-full px-8 py-3 text-lg font-semibold disabled:text-[var(--chrome-ink-disabled)]"
+      // Quiet, not out of reach — and the distinction decides the colour.
+      // `DISABLED_INK` is right where "disabled" is the whole message, but
+      // this label is not saying that: while the cooldown runs it IS the
+      // countdown, which is the one thing a painter is waiting to read.
+      // Hiding it at 4.14:1 to signal a state the `disabled` attribute and
+      // the cursor already signal gets the trade backwards. MUTED_INK_INVERSE
+      // reads 9.70:1 on the shell behind this button.
+      className="rounded-full px-8 py-3 text-lg font-semibold disabled:cursor-not-allowed disabled:text-[var(--chrome-ink-muted-inverse)]"
     >
       {text}
     </button>

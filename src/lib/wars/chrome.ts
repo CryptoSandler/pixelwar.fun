@@ -181,6 +181,20 @@ export const BODY_TEXT_CONTRAST = 7;
 export const DISABLED_TEXT_CONTRAST = 3;
 
 /**
+ * Every surface a token chip is drawn on, of either polarity.
+ *
+ * `CHROME_SURFACES` and `BOARD_SURFACES` are kept apart for the rules that
+ * genuinely differ — a Batch A dark face has no business answering §4's
+ * chroma ceiling or I1's distance rule, because the design did not choose it.
+ * **Chip visibility is not one of those rules.** A token that vanishes into
+ * the surface behind it vanishes just as completely on a surface nobody
+ * designed, and the leaderboard rail draws all twenty-four on `zinc-950`
+ * today. So I2 asks this list, not `CHROME_SURFACES`, and the hole that let a
+ * chip be drawn with no outline at all closes.
+ */
+export const CHIP_SURFACES = { ...CHROME_SURFACES, ...BOARD_SURFACES } as const;
+
+/**
  * The outline every token chip carries, per surface it is drawn on.
  *
  * This is the fix for a failure that is invisible until it happens: a token
@@ -194,13 +208,22 @@ export const DISABLED_TEXT_CONTRAST = 3;
  * A fill cannot solve this, because the fill is the token's own colour and is
  * not ours to change. The outline can, because it is ours.
  */
-export const CHIP_OUTLINE: Record<keyof typeof CHROME_SURFACES, string> = {
+export const CHIP_OUTLINE: Record<keyof typeof CHIP_SURFACES, string> = {
   surround: "#21242E",
   panel: "#21242E",
   control: "#21242E",
   readout: "#21242E",
   header: "#F2F3F7",
   board: "#F2F3F7",
+  // The board's own three, all dark, so all take the light outline the header
+  // takes. The rail draws every token in the war on `shell`; without an entry
+  // here #000000 was a black square on a #09090B ground — the exact failure
+  // this constant exists for, one surface further out than anybody had
+  // looked, and invisible to I2 for as long as I2 only asked
+  // `CHROME_SURFACES`.
+  shell: "#F2F3F7",
+  well: "#F2F3F7",
+  overlay: "#F2F3F7",
 };
 
 /**

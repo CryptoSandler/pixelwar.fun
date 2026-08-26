@@ -236,13 +236,28 @@ Neutrals are protected by I2 instead.
 ### I2 — Every token chip is visible on every surface it is drawn on
 
 A chip is the small filled square standing for a token. On each surface in
-`CHROME_SURFACES`, the chip's outline must clear `OUTLINE_SURFACE_DISTANCE`
-(60) from that surface.
+`CHIP_SURFACES` — every surface a chip is drawn on, of either polarity — the
+chip's outline must clear `OUTLINE_SURFACE_DISTANCE` (60) from that surface.
 
-> *Test:* every surface checked against its declared outline; plus a dedicated
-> case for `#FFFFFF` and `#000000`, the two tokens that would otherwise
-> disappear on light and dark chrome respectively; plus an assertion that every
-> surface has a declared outline, so a new surface cannot be added silently.
+**This asks a wider list than the other invariants do, and that is the point.**
+`CHIP_SURFACES` is `CHROME_SURFACES` plus `BOARD_SURFACES`, the Batch A dark
+faces the board still renders on. Those faces are rightly exempt from §4's
+chroma ceiling and I1's distance rule — the design did not choose them, so
+holding them to rules about what the design may choose is meaningless. Chip
+visibility is a different question. A token that vanishes into the surface
+behind it has vanished whether or not anybody designed that surface, and for
+as long as this invariant asked only `CHROME_SURFACES` the leaderboard rail
+drew all twenty-four tokens on `#09090B` with no outline, no declared outline
+to be missing, and a green suite. `#000000` was a black square on a black
+ground in any war that had one.
+
+> *Test:* every surface in `CHIP_SURFACES` checked against its declared
+> outline; plus a dedicated case for `#FFFFFF` and `#000000`, the two tokens
+> that would otherwise disappear on light and dark chrome respectively; plus an
+> assertion that every surface has a declared outline, so a new surface cannot
+> be added silently. That last one is what failed first when the board faces
+> were brought in — three surfaces with no outline named — which is how the
+> widening was known to reach anything at all.
 
 **Why this exists.** A rejected direction with warm-white chrome erased its
 white token completely — in the leaderboard and the paint bar at once. Nothing

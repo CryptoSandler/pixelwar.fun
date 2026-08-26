@@ -56,8 +56,10 @@ const plexMono = IBM_Plex_Mono({
  * making: `INK` reads 11.51:1 on a panel, 8.40:1 on the readout and 7.20:1 on
  * the surround; `MUTED_INK` reads 7.81:1 on the panel and control faces, the
  * only two surfaces `MUTED_INK_SURFACES` declares it for; `DISABLED_INK`
- * reads 3.57:1 on those same faces and 4.14:1 on the board's own dark shell;
- * `MUTED_INK_INVERSE` reads 9.70:1 there and 7.26:1 in the board well;
+ * reads 3.57:1 on those same faces, and is drawn nowhere else — the board's
+ * one disabled control is the Paint button, whose label carries the cooldown
+ * countdown and is quiet rather than out of reach; `MUTED_INK_INVERSE` reads
+ * 9.70:1 on the board's dark shell and 7.26:1 in the board well;
  * `DISABLED_FACE` carries `INK` at 4.85:1. DESIGN.md §9 asks for 8:1 in the
  * readout and 7:1 for body text, and I6 tests every one of these numbers
  * rather than trusting this comment. Which surface a class is *used* on is not

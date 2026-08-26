@@ -17,6 +17,7 @@ import {
   BOARD_SURFACES,
   BODY_TEXT_CONTRAST,
   CHIP_OUTLINE,
+  CHIP_SURFACES,
   DISABLED_FACE,
   DISABLED_INK,
   DISABLED_TEXT_CONTRAST,
@@ -67,10 +68,16 @@ describe("the chrome never claims a token's colour", () => {
 });
 
 describe("every token chip is visible on every surface chrome draws it on", () => {
-  const surfaces = Object.keys(CHROME_SURFACES) as (keyof typeof CHROME_SURFACES)[];
+  // Every surface a chip appears on, of either polarity — NOT just the ones
+  // the design chose. I2 used to ask `CHROME_SURFACES`, which meant the rail
+  // could draw all twenty-four tokens on a Batch A `zinc-950` shell with no
+  // outline and no declared outline to be missing, and the suite stayed green
+  // while `#000000` was invisible on screen. A token vanishing into a surface
+  // nobody designed has vanished exactly as completely.
+  const surfaces = Object.keys(CHIP_SURFACES) as (keyof typeof CHIP_SURFACES)[];
 
   it.each(surfaces)("gives the chip a visible edge on the %s surface", (surface) => {
-    const distance = rgbDistance(CHIP_OUTLINE[surface], CHROME_SURFACES[surface]);
+    const distance = rgbDistance(CHIP_OUTLINE[surface], CHIP_SURFACES[surface]);
     expect(distance).toBeGreaterThanOrEqual(OUTLINE_SURFACE_DISTANCE);
   });
 
@@ -80,9 +87,9 @@ describe("every token chip is visible on every surface chrome draws it on", () =
     for (const token of ["#FFFFFF", "#000000"]) {
       expect(PALETTE).toContain(token);
       for (const surface of surfaces) {
-        const fillHides = rgbDistance(token, CHROME_SURFACES[surface]) < OUTLINE_SURFACE_DISTANCE;
+        const fillHides = rgbDistance(token, CHIP_SURFACES[surface]) < OUTLINE_SURFACE_DISTANCE;
         const outlineSaves =
-          rgbDistance(CHIP_OUTLINE[surface], CHROME_SURFACES[surface]) >= OUTLINE_SURFACE_DISTANCE;
+          rgbDistance(CHIP_OUTLINE[surface], CHIP_SURFACES[surface]) >= OUTLINE_SURFACE_DISTANCE;
         // Either the fill separates on its own, or the outline does. Never neither.
         expect(fillHides && !outlineSaves).toBe(false);
       }
@@ -235,6 +242,13 @@ describe("a chrome colour is legible under the text it carries", () => {
     }
   });
 
+  // The scale, not the usage. `DISABLED_INK` is not drawn on a board surface
+  // today — the board's one disabled control is the Paint button, whose label
+  // carries the cooldown countdown and takes the muted colour because a
+  // countdown is information rather than decoration on a dead key. The order
+  // is asserted anyway, so that the day something genuinely out of reach
+  // appears on a dark face there is already a measured step below muted for
+  // it to use, instead of an `opacity` invented on the spot.
   it("keeps the dark scale in order: full ink, muted, disabled", () => {
     for (const [name, face] of Object.entries(BOARD_SURFACES)) {
       const full = contrastRatio(INK_INVERSE, face);

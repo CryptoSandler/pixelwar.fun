@@ -1,5 +1,6 @@
 "use client";
 
+import { CHIP_OUTLINE } from "../lib/wars/chrome";
 import { colourForSlot } from "../lib/wars/palette";
 
 export type RailToken = {
@@ -43,7 +44,21 @@ export function TokenRail({
               aria-pressed={token.id === selectedId}
               className="flex items-center gap-2 rounded px-2 py-1"
             >
-              <span aria-hidden className="h-4 w-4 rounded-sm" style={{ background: colour }} />
+              {/* Every chip carries its outline, keyed by the surface it is
+                  drawn on (DESIGN.md I2). This one sits on the board's own
+                  shell, and without the outline the #000000 token was a black
+                  square on a #09090B ground — invisible, in the leaderboard,
+                  for any war that had one. The fill cannot fix it: the fill is
+                  the token's colour and is not ours to change. */}
+              <span
+                aria-hidden
+                className="h-4 w-4 rounded-sm"
+                style={{
+                  background: colour,
+                  outline: `1px solid ${CHIP_OUTLINE.shell}`,
+                  outlineOffset: "-1px",
+                }}
+              />
               <span className="font-mono">{token.ticker}</span>
               {/* The count is not quiet text at all. It is the leaderboard —
                   pixels held right now, which DESIGN.md §8 calls the thing the
