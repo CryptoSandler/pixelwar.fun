@@ -1,4 +1,4 @@
-import { adminConfigured, authenticateAdmin } from "../../../../lib/admin";
+import { requireAdmin } from "../../../../lib/admin-guard";
 import { json, NO_STORE } from "../../../../lib/http";
 import { listOrphans } from "../../../../lib/payments/orphans";
 
@@ -15,39 +15,16 @@ export const dynamic = "force-dynamic";
  * AGENTS.md asks every new route to name its caller, and "the page fetches it"
  * would have been untrue.
  *
- * There is no POST here. Assigning a filed payment to an order — the only
- * place in this project money would move on a human's say-so — is not built,
- * because `settlePayment` cannot be reused as-is for it. See
- * `.superpowers/sdd/2026-08-26-admin-orphans/task-2-report.md` §1.
+ * There is no POST here: assigning a filed payment to an order lives at
+ * `POST /api/admin/orphans/[id]/assign`, because it acts on one row.
  */
-
-/**
- * One refusal, whatever the cause.
- *
- * No cookie, an expired cookie, a revoked cookie, a junk cookie and a wrong
- * `x-admin-token` all get this exact response — status, body and headers
- * identical — so a prober cannot learn which half of the surface to attack.
- * `authenticateAdmin` already collapses all of them to `{ ok: false }`, so
- * there is nothing here to distinguish with even if it wanted to.
- *
- * An unset `ADMIN_TOKEN` gets it too. That is deliberately NOT the session
- * route's 503-for-unconfigured: this endpoint's job is to be silent about the
- * state of the surface, and "this deployment has no admin" is exactly the kind
- * of thing a prober is trying to establish. The operator learns it from the
- * server log line below instead, which is where configuration faults belong.
- */
-function refuse(): Response {
-  return json({ error: "Not authorised." }, { status: 401, headers: NO_STORE });
-}
 
 export async function GET(request: Request): Promise<Response> {
-  if (!adminConfigured()) {
-    console.error("admin/orphans: ADMIN_TOKEN is not set; refusing every request.");
-    return refuse();
-  }
-
-  const identity = await authenticateAdmin(request);
-  if (!identity.ok) return refuse();
+  // One guard, one answer — see `requireAdmin`. No cookie, a bad cookie, a
+  // wrong token header and an unconfigured deployment are indistinguishable
+  // from out here, on purpose.
+  const admin = await requireAdmin(request, "admin/orphans");
+  if (!admin.ok) return admin.response;
 
   const orphans = await listOrphans();
 
@@ -67,7 +44,11 @@ export async function GET(request: Request): Promise<Response> {
         resolvedAt: orphan.resolvedAt?.toISOString() ?? null,
         resolutionNote: orphan.resolutionNote,
         appliedOrderId: orphan.appliedOrderId,
+        appliedBy: orphan.appliedBy,
+        // Both halves of the chain's answer to "who paid this", because that
+        // is what migration 002 put them there for.
         senderFeePayer: orphan.senderFeePayer,
+        senderDebited: orphan.senderDebited,
       })),
     },
     { headers: NO_STORE },

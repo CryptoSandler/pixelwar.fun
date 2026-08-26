@@ -466,13 +466,12 @@ async function handleVerificationFailure(params: {
  * `active` — never by inserting a new row, so the war's capacity and this
  * colour's exclusivity are exactly the same checks a fresh order would face.
  *
- * The reclaim attempt runs inside a SAVEPOINT, and both of the unique
- * indexes it can collide with are tolerated there. A unique violation aborts
- * whatever Postgres transaction it runs in unless one was taken first —
- * without it, the unmatched_payments insert that must follow a lost race
- * would itself fail with "current transaction is aborted", and a violation
- * rethrown past this function takes the whole settlement transaction, and
- * that same row, down with it.
+ * The two decisions underneath it — is there room in this war, and can this
+ * released row be taken back — live in `warHasRoom` and `reclaimReleasedSeat`
+ * below, because `settleAssignedPayment` has to ask exactly the same two
+ * questions in exactly the same way. Behaviour here is unchanged by that
+ * move; what changed is that there is now one implementation of colour
+ * exclusivity rather than a second one waiting to be written.
  */
 async function settleLateConfirmation(
   client: PoolClient,
@@ -500,9 +499,51 @@ async function settleLateConfirmation(
     });
   }
 
+  const room = await warHasRoom(client, order.war_id);
+  if (!room.ok) {
+    return unmatchedNoSeat(client, {
+      order,
+      signature,
+      amountBaseUnits,
+      expectedBaseUnits,
+      reason: room.reason,
+      // A closed war has no colours left to offer; a full one still does the
+      // instant somebody leaves, so the distinction is kept.
+      warStillOpen: room.reason === "war_closed" ? false : true,
+    });
+  }
+
+  const seat = await reclaimReleasedSeat(client, order.war_token_id);
+  if (!seat.ok) {
+    return unmatchedNoSeat(client, {
+      order,
+      signature,
+      amountBaseUnits,
+      expectedBaseUnits,
+      reason: seat.reason,
+      warStillOpen: true,
+    });
+  }
+
+  return finishSettlement(client, { order, signature, amountBaseUnits, payerPubkey });
+}
+
+/**
+ * Is this war still able to seat one more token?
+ *
+ * Lifted out of `settleLateConfirmation` unchanged so that
+ * `settleAssignedPayment` asks the database exactly the same question in
+ * exactly the same way. An operator assigning a filed payment must not be able
+ * to seat a token into a war that has ended or filled — "a human decided it"
+ * is authorisation, never an exemption from the war's own rules.
+ */
+async function warHasRoom(
+  client: PoolClient,
+  warId: string,
+): Promise<{ ok: true } | { ok: false; reason: "war_closed" | "war_full" }> {
   const warResult = await client.query<WarRow>(
     `SELECT status, (ends_at <= now()) AS ended, max_tokens FROM wars WHERE id = $1 FOR UPDATE`,
-    [order.war_id],
+    [warId],
   );
   const war = warResult.rows[0];
   // 'draft' is an operator's unpublished war — createOrder refuses it for
@@ -514,36 +555,43 @@ async function settleLateConfirmation(
   const warOpen =
     !!war && !war.ended && war.status !== "ended" && war.status !== "cancelled" && war.status !== "draft";
 
-  if (!war || !warOpen) {
-    return unmatchedNoSeat(client, {
-      order,
-      signature,
-      amountBaseUnits,
-      expectedBaseUnits,
-      reason: "war_closed",
-      warStillOpen: false,
-    });
-  }
+  if (!war || !warOpen) return { ok: false, reason: "war_closed" };
 
   const countResult = await client.query<{ count: string }>(
     `SELECT count(*) FROM war_tokens WHERE war_id = $1 AND status <> 'released'`,
-    [order.war_id],
+    [warId],
   );
   const hasRoom = Number(countResult.rows[0]?.count ?? 0) < war.max_tokens;
 
-  if (!hasRoom) {
-    return unmatchedNoSeat(client, {
-      order,
-      signature,
-      amountBaseUnits,
-      expectedBaseUnits,
-      reason: "war_full",
-      warStillOpen: true,
-    });
-  }
+  return hasRoom ? { ok: true } : { ok: false, reason: "war_full" };
+}
 
+/**
+ * Colour exclusivity: flip a released reservation straight back to `active`,
+ * or lose the race and say which of the two live claims won.
+ *
+ * Never by inserting a new row — the war's capacity and this colour's
+ * exclusivity are then exactly the same checks a fresh order would face.
+ *
+ * The reclaim attempt runs inside a SAVEPOINT, and both of the unique indexes
+ * it can collide with are tolerated there. A unique violation aborts whatever
+ * Postgres transaction it runs in unless one was taken first — without it, the
+ * unmatched_payments insert that must follow a lost race would itself fail
+ * with "current transaction is aborted", and a violation rethrown past this
+ * function takes the whole settlement transaction, and that same row, down
+ * with it.
+ *
+ * ONE implementation, two callers: the payer's own late confirm
+ * (`settleLateConfirmation`) and the operator's assignment
+ * (`settleAssignedPayment`). That is the whole point — a second copy of this
+ * block is a second place for colour exclusivity to be got wrong, and the
+ * admin path has no chain evidence backing it.
+ */
+async function reclaimReleasedSeat(
+  client: PoolClient,
+  tokenId: string,
+): Promise<{ ok: true } | { ok: false; reason: "colour_taken" | "contract_taken" }> {
   await client.query("SAVEPOINT reclaim_colour");
-  let reclaimed = false;
   // Which live claim beat this payment to the seat, when one did. Both
   // partial unique indexes are re-entered by this single UPDATE, because
   // both are `WHERE status <> 'released'` and this row is moving out of
@@ -553,50 +601,31 @@ async function settleLateConfirmation(
   // TOKEN re-entering at a different colour are the same ordinary event seen
   // from two sides. An unrecognised violation is still rethrown: this
   // tolerates the two races it can name, not every failure.
-  let blockedBy: "colour_taken" | "contract_taken" | null = null;
   try {
     const flip = await client.query(
       `UPDATE war_tokens
           SET status = 'active', joined_at = now(), released_at = NULL, released_reason = NULL
         WHERE id = $1 AND status = 'released' RETURNING id`,
-      [order.war_token_id],
+      [tokenId],
     );
-    reclaimed = (flip.rowCount ?? 0) > 0;
     await client.query("RELEASE SAVEPOINT reclaim_colour");
+    // No violation at all means the UPDATE simply matched nothing: the row
+    // is no longer 'released', so something else already has this seat.
+    return (flip.rowCount ?? 0) > 0 ? { ok: true } : { ok: false, reason: "colour_taken" };
   } catch (error) {
     // The SAVEPOINT is what makes this survivable at all, and it is the
     // whole fix: rethrowing here would abort the enclosing transaction, and
     // `transaction()` would roll back the `unmatched_payments` row that the
-    // path below exists to guarantee along with it. A record written inside
-    // a transaction that then rolls back is not a record. Rolling back to
-    // the savepoint instead leaves the transaction alive and writable, so
-    // the payment is filed and COMMITTED on both losing races.
+    // caller exists to guarantee along with it. A record written inside a
+    // transaction that then rolls back is not a record. Rolling back to the
+    // savepoint instead leaves the transaction alive and writable, so the
+    // payment is filed and COMMITTED on both losing races.
     await client.query("ROLLBACK TO SAVEPOINT reclaim_colour");
     const constraint = isUniqueViolation(error) ? violatedConstraint(error) : "";
-    if (constraint === "war_tokens_colour_live") {
-      blockedBy = "colour_taken";
-    } else if (constraint === "war_tokens_contract_live") {
-      blockedBy = "contract_taken";
-    } else {
-      throw error;
-    }
-    reclaimed = false;
+    if (constraint === "war_tokens_colour_live") return { ok: false, reason: "colour_taken" };
+    if (constraint === "war_tokens_contract_live") return { ok: false, reason: "contract_taken" };
+    throw error;
   }
-
-  if (!reclaimed) {
-    return unmatchedNoSeat(client, {
-      order,
-      signature,
-      amountBaseUnits,
-      expectedBaseUnits,
-      // No violation at all means the UPDATE simply matched nothing: the row
-      // is no longer 'released', so something else already has this seat.
-      reason: blockedBy ?? "colour_taken",
-      warStillOpen: true,
-    });
-  }
-
-  return finishSettlement(client, { order, signature, amountBaseUnits, payerPubkey });
 }
 
 /**
@@ -742,6 +771,255 @@ async function finishSettlement(
   );
 
   return { ok: true, amountBaseUnits: params.amountBaseUnits };
+}
+
+// --- Assignment, from /admin/orphans -------------------------------------
+
+export type AssignFailureReason =
+  /** No `unmatched_payments` row with this id. */
+  | "not_found"
+  /** The row is no longer `open`. THE double-click answer — see the doc below. */
+  | "already_resolved"
+  | "order_not_found"
+  /** The order is `paid` or `failed`: it can never take a payment. */
+  | "order_not_assignable"
+  /** The order says `pending` but its reservation is not `reserved`. */
+  | "token_state_mismatch"
+  /** `payments.signature` UNIQUE fired: this signature has already settled something. */
+  | "signature_settled"
+  /** `payments_order_unique` fired: this order already holds a payment. */
+  | "order_already_paid"
+  | "war_closed"
+  | "war_full"
+  | "colour_taken"
+  | "contract_taken";
+
+export type AssignResult =
+  | { ok: true; orderId: string; amountBaseUnits: bigint }
+  | { ok: false; reason: AssignFailureReason; message: string };
+
+const ASSIGN_MESSAGES: Record<AssignFailureReason, string> = {
+  not_found: "That filed payment no longer exists.",
+  already_resolved: "That payment has already been resolved. Nothing was changed.",
+  order_not_found: "That order does not exist.",
+  order_not_assignable: "That order has already been paid, or can no longer be paid.",
+  token_state_mismatch:
+    "That order's colour reservation is not in the state the order claims. Do not assign to it.",
+  signature_settled: "That signature has already paid for an order. Nothing was changed.",
+  order_already_paid: "That order already holds a payment. Nothing was changed.",
+  war_closed: "That war is no longer open for entry.",
+  war_full: "That war has no seats left.",
+  colour_taken: "That order's colour is held by someone else now.",
+  contract_taken: "That token has already re-entered this war under a different colour.",
+};
+
+/**
+ * Thrown to abandon the settlement transaction with a typed answer.
+ *
+ * The ledger conflicts below are detected AFTER the seat has been flipped to
+ * `active` inside this transaction. Returning `{ ok: false }` from the
+ * callback would COMMIT that flip (see `transaction()` in `db.ts`, which
+ * commits whenever the callback returns without throwing) — a token made
+ * active with no payment behind it, which is exactly the half-applied state
+ * this module exists to make impossible. Throwing rolls the whole thing back,
+ * and the catch outside turns it back into a normal result. A SAVEPOINT would
+ * be the wrong tool: the point is not to survive the error, it is to undo
+ * everything that came before it.
+ */
+class AssignConflict extends Error {
+  constructor(readonly reason: AssignFailureReason) {
+    super(reason);
+  }
+}
+
+type UnmatchedRow = {
+  id: string;
+  signature: string;
+  received_base_units: string;
+  status: string;
+  sender_fee_payer: string | null;
+};
+
+/**
+ * Applies a filed payment to an order an operator chose.
+ *
+ * **This is the only path in this project where money moves on a human's
+ * say-so.** Every other settlement is decided by chain evidence. So it is not
+ * a second settlement — it is a second, differently-authorised ENTRY into the
+ * first one. The colour exclusivity is `reclaimReleasedSeat`, the capacity
+ * check is `warHasRoom`, and the settlement itself is `finishSettlement`, all
+ * three shared verbatim with the payer's own path. Nothing here writes its own
+ * UPDATE against `entry_orders`, `war_tokens` or `payments`.
+ *
+ * WHO CALLS THIS: `POST /api/admin/orphans/[id]/assign`, guarded by the admin
+ * session. Nothing else, ever — `operatorLabel` is the caller asserting a
+ * human authorised this, and only an authenticated route may assert it.
+ *
+ * ## Why this does not claim `consumed_signatures`, and why that is not a hole
+ *
+ * The two tables are not two versions of the same guard.
+ *
+ * `consumed_signatures` is an ATTEMPT LOG: it stops a signature being *tried*
+ * twice. `payments` is the LEDGER: `payments.signature UNIQUE` stops a
+ * signature being *settled* twice, and `payments_order_unique` stops an order
+ * holding two payments. Migration 002 says so in as many words — "One payment
+ * per signature, globally. This single constraint is what makes a signature
+ * single-use across the whole system; everything else about replay protection
+ * is commentary on it."
+ *
+ * Both paths converge on the ledger, which is the row that means money moved.
+ * So the property that actually matters — one signature, one settlement — is
+ * enforced identically for a payer and for an operator, by the same two
+ * indexes, and neither path can talk its way past them.
+ *
+ * This path skips the attempt log because the attempt already happened and is
+ * already recorded. That is precisely why there is an `unmatched_payments` row
+ * to assign at all: eight of the eleven reasons a row can carry were filed by
+ * a settlement that had already committed the `consumed_signatures` claim.
+ * Re-claiming a signature that is by definition already claimed would be the
+ * incoherent act here, not the safe one — it would refuse every one of those
+ * eight rows forever, which is the defect this function exists to fix.
+ *
+ * ## Idempotent under a double-click
+ *
+ * The `unmatched_payments` row is the idempotency token. It is locked FOR
+ * UPDATE as the first act of the transaction, and only a row still `open` is
+ * acted on. A second request — a double-click, a retried POST, two operators
+ * at once — blocks on that lock until the first commits, then reads the true
+ * post-settlement `status` and returns `already_resolved` having touched
+ * nothing. That is a lock, not a check-then-act, so there is no window between
+ * the read and the write for a second caller to slip through.
+ *
+ * Underneath it, the two ledger indexes are the backstop that holds even if
+ * that reasoning is ever wrong: the same signature cannot settle twice and the
+ * same order cannot be paid twice, whatever any application code believes.
+ */
+export async function settleAssignedPayment(params: {
+  /** `unmatched_payments.id` — the filed payment being applied. */
+  unmatchedId: string;
+  /** The order the operator chose for it. */
+  orderId: string;
+  /** `admin_sessions.token_label`. Never a token, never a session id. */
+  operatorLabel: string;
+}): Promise<AssignResult> {
+  const { unmatchedId, orderId, operatorLabel } = params;
+
+  try {
+    return await transaction(async (client): Promise<AssignResult> => {
+      // The idempotency token, locked before anything else is read. See the
+      // doc above: everything about a double-click resolving safely rests on
+      // this being a lock rather than a status check.
+      const filedResult = await client.query<UnmatchedRow>(
+        `SELECT id, signature, received_base_units, status, sender_fee_payer
+           FROM unmatched_payments WHERE id = $1 FOR UPDATE`,
+        [unmatchedId],
+      );
+      const filed = filedResult.rows[0];
+      if (!filed) return refuseAssignment("not_found");
+      if (filed.status !== "open") return refuseAssignment("already_resolved");
+
+      // The same lock, on the same row, that `settlePayment` takes — so a
+      // payer confirming this order and an operator assigning to it serialise
+      // against each other rather than racing.
+      const orderResult = await client.query<OrderRow>(
+        `SELECT id, status, war_id, war_token_id, expires_at
+           FROM entry_orders WHERE id = $1 FOR UPDATE`,
+        [orderId],
+      );
+      const order = orderResult.rows[0];
+      if (!order) return refuseAssignment("order_not_found");
+      if (order.status === "paid" || order.status === "failed") {
+        return refuseAssignment("order_not_assignable");
+      }
+
+      if (order.status === "pending") {
+        // Its reservation is still live and holding the colour, so there is no
+        // race to lose: the same flip `settlePayment` does.
+        const flip = await client.query(
+          `UPDATE war_tokens SET status = 'active', joined_at = now()
+            WHERE id = $1 AND status = 'reserved' RETURNING id`,
+          [order.war_token_id],
+        );
+        if (flip.rowCount === 0) return refuseAssignment("token_state_mismatch");
+      } else if (order.status === "expired") {
+        // The reservation lapsed and released its colour. An operator does not
+        // get to skip the war's own rules to take it back — same capacity
+        // check, same two unique indexes, same code as a payer's late confirm.
+        // Deliberately NOT gated on LATE_CONFIRM_GRACE_MINUTES: that window
+        // bounds what happens automatically, and a human looking at a filed
+        // payment weeks later is the case this screen exists for. What it may
+        // never do is take a seat that is gone, and that is what these two
+        // checks are.
+        const room = await warHasRoom(client, order.war_id);
+        if (!room.ok) return refuseAssignment(room.reason);
+
+        const seat = await reclaimReleasedSeat(client, order.war_token_id);
+        if (!seat.ok) return refuseAssignment(seat.reason);
+      } else {
+        // Any other status is not one this schema defines — fail closed.
+        return refuseAssignment("order_not_assignable");
+      }
+
+      let settled: SettleResult;
+      try {
+        settled = await finishSettlement(client, {
+          order,
+          signature: filed.signature,
+          amountBaseUnits: BigInt(filed.received_base_units),
+          // The chain's own fee payer, never the order's `payer_pubkey`. The
+          // whole reason `sender_fee_payer` exists (migration 002) is that
+          // reuniting a stray payment must not mean trusting a claim about who
+          // paid it, and an order's payer field is exactly such a claim — on a
+          // `wrong_payer` row it is provably the wrong wallet. Null when the
+          // filing path had no sender to record; a lie would be worse.
+          payerPubkey: filed.sender_fee_payer,
+        });
+      } catch (error) {
+        // The ledger refusing the write. Thrown onward, never returned, so the
+        // seat flip above is rolled back with it — see `AssignConflict`.
+        if (isUniqueViolation(error)) {
+          const constraint = violatedConstraint(error);
+          if (constraint === "payments_signature_key") throw new AssignConflict("signature_settled");
+          if (constraint === "payments_order_unique") throw new AssignConflict("order_already_paid");
+        }
+        throw error;
+      }
+
+      if (!settled.ok) {
+        // `finishSettlement` returns only `{ ok: true }` or throws. Unreachable,
+        // and failing closed costs nothing.
+        throw new AssignConflict("order_not_assignable");
+      }
+
+      // `finishSettlement` has already closed this row with its own automatic
+      // note (it looks for any 'open' row on this signature, which is ours).
+      // Overwritten here, in the same transaction, so what survives is the
+      // truth: a human did this, and here is which one. Same transaction as
+      // the settlement, so an applied row and an unsettled payment cannot
+      // exist separately in either direction.
+      await client.query(
+        `UPDATE unmatched_payments
+            SET status = 'applied', resolved_at = now(), applied_order_id = $2,
+                applied_by = $3, resolution_note = $4
+          WHERE id = $1`,
+        [
+          filed.id,
+          order.id,
+          operatorLabel,
+          `Assigned to this order from /admin/orphans by ${operatorLabel}.`,
+        ],
+      );
+
+      return { ok: true, orderId: order.id, amountBaseUnits: settled.amountBaseUnits };
+    });
+  } catch (error) {
+    if (error instanceof AssignConflict) return refuseAssignment(error.reason);
+    throw error;
+  }
+}
+
+function refuseAssignment(reason: AssignFailureReason): AssignResult {
+  return { ok: false, reason, message: ASSIGN_MESSAGES[reason] };
 }
 
 // --- Verification rate limiting ------------------------------------------

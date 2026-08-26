@@ -1,7 +1,13 @@
 import { redirect } from "next/navigation";
 import { Cabinet } from "../../../components/Cabinet";
 import { adminSessionLabel } from "../../../lib/admin";
-import { listOrphans, ORPHAN_PAGE_SIZE, type Orphan } from "../../../lib/payments/orphans";
+import {
+  assignableOrders,
+  listOrphans,
+  ORPHAN_PAGE_SIZE,
+  type AssignableOrder,
+  type Orphan,
+} from "../../../lib/payments/orphans";
 
 export const dynamic = "force-dynamic";
 
@@ -20,15 +26,17 @@ export const dynamic = "force-dynamic";
  * to reach an endpoint that would then read the same table. The JSON endpoint
  * exists for the operator who has no browser.
  *
- * WHAT IS NOT HERE: assigning a filed payment to an order. That is the only
- * path in this project where money would move on a human's say-so, and it must
- * inherit `settlePayment`'s guarantees whole rather than grow a second
- * settlement beside them. `settlePayment` cannot be reused as-is — it requires
- * a `VerifyResult` that only a chain round trip against THIS order can produce
- * and that no orphan can satisfy, and for eight of the eleven reasons a row
- * can carry the signature is already claimed in `consumed_signatures`. Written
- * up in `.superpowers/sdd/2026-08-26-admin-orphans/task-2-report.md` §1, and
- * said on screen below rather than hidden behind a button that cannot work.
+ * WHO CALLS `POST /api/admin/orphans/[id]/assign`: the form on each open row
+ * below. A plain HTML form — no JavaScript, like the sign-in form, and for the
+ * same reason. The form only ever carries two ids; every decision about
+ * whether the assignment is allowed is made inside the settlement
+ * transaction, where it cannot be raced.
+ *
+ * **Assigning is the only act in this project that moves money on a human's
+ * say-so.** It is deliberately the quietest control on the screen — a
+ * secondary key, not the brass one — because the accent means "this is the
+ * thing to do" (DESIGN.md I5) and moving somebody's money is not something
+ * this page should be urging.
  */
 
 /**
@@ -53,6 +61,29 @@ const REASONS: Record<string, string> = {
 };
 
 /**
+ * What the assign route sends back in `?error=`, said plainly.
+ *
+ * These mirror `AssignFailureReason` in `settle.ts`. Kept in the page rather
+ * than passed through the redirect as prose, because a message in a URL is a
+ * message anybody can put there.
+ */
+const ASSIGN_ERRORS: Record<string, string> = {
+  no_order: "Pick an order before assigning.",
+  not_found: "That filed payment no longer exists.",
+  already_resolved: "That payment had already been resolved. Nothing was changed.",
+  order_not_found: "That order does not exist.",
+  order_not_assignable: "That order has already been paid, or can no longer be paid.",
+  token_state_mismatch:
+    "That order's colour reservation is not in the state the order claims. Do not assign to it.",
+  signature_settled: "That signature has already paid for an order. Nothing was changed.",
+  order_already_paid: "That order already holds a payment. Nothing was changed.",
+  war_closed: "That war is no longer open for entry.",
+  war_full: "That war has no seats left.",
+  colour_taken: "That order's colour is held by someone else now.",
+  contract_taken: "That token has already re-entered this war under a different colour.",
+};
+
+/**
  * ISO-8601 UTC, deliberately.
  *
  * An operator reads this beside a block explorer, and an unambiguous
@@ -64,14 +95,22 @@ function stamp(date: Date): string {
   return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
 }
 
-export default async function OrphansPage() {
+export default async function OrphansPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   // The same answer for signed out, expired, revoked, junk, and an unset
   // ADMIN_TOKEN: `adminSessionLabel` collapses all five to null, so there is
   // nothing here that could tell them apart even by accident.
   const label = await adminSessionLabel();
   if (!label) redirect("/admin");
 
-  const orphans = await listOrphans();
+  const params = await searchParams;
+  const applied = params.applied === "1";
+  const errorCode = typeof params.error === "string" ? params.error : null;
+
+  const [orphans, orders] = await Promise.all([listOrphans(), assignableOrders()]);
 
   return (
     <Cabinet label="Unmatched payments">
@@ -82,11 +121,19 @@ export default async function OrphansPage() {
           Amounts are USDC.
         </p>
         <p className="text-[13px]">
-          Assigning one of these to an order is not built yet. It would be the only place in this
-          project where money moves on a human&rsquo;s say-so, so it has to reuse the same
-          settlement a payer gets — and that code cannot be reused as it stands. Refunds are
-          handled off-platform until that is decided.
+          Assigning one of these settles it against an order exactly as a payer&rsquo;s own payment
+          would be settled — same colour rules, same one transaction. Check the fee payer on chain
+          against whoever is asking before you do it.
         </p>
+
+        {applied ? (
+          <p className="text-[13px]">The payment was applied. Its order is paid and its colour is live.</p>
+        ) : null}
+        {errorCode ? (
+          <p className="text-[13px]">
+            {ASSIGN_ERRORS[errorCode] ?? "That assignment was refused. Nothing was changed."}
+          </p>
+        ) : null}
       </section>
 
       {orphans.length === 0 ? (
@@ -97,7 +144,7 @@ export default async function OrphansPage() {
         <ol className="flex flex-col gap-3">
           {orphans.map((orphan) => (
             <li key={orphan.id}>
-              <OrphanCard orphan={orphan} />
+              <OrphanCard orphan={orphan} orders={orders} />
             </li>
           ))}
         </ol>
@@ -125,7 +172,7 @@ export default async function OrphansPage() {
  * tabular — per DESIGN.md §3. Quiet text is `.muted`, a named colour on a
  * panel face; nothing here is quieted with `opacity` or a `filter`.
  */
-function OrphanCard({ orphan }: { orphan: Orphan }) {
+function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrder[] }) {
   const open = orphan.status === "open";
 
   return (
@@ -153,17 +200,38 @@ function OrphanCard({ orphan }: { orphan: Orphan }) {
         <span className="muted numeric text-[12px]">{orphan.reason}</span>
       </Field>
 
-      {orphan.senderFeePayer ? (
-        <Field label="Fee payer on chain">
+      {/*
+        Who the CHAIN says paid, in both forms migration 002 records — the fee
+        payer, and every wallet whose USDC balance went down. These are here so
+        that assigning a payment does not mean trusting whoever is asking for
+        it: an order id is something a claimant supplies, and this is not.
+      */}
+      <Field label="Fee payer on chain">
+        {orphan.senderFeePayer ? (
           <span className="numeric text-[12px] break-all">{orphan.senderFeePayer}</span>
-        </Field>
-      ) : (
-        <Field label="Fee payer on chain">
+        ) : (
           <span className="muted text-[13px]">
             Not recorded. Look the signature up on chain to find who paid.
           </span>
-        </Field>
-      )}
+        )}
+      </Field>
+
+      <Field label="Debited on chain">
+        {orphan.senderDebited.length > 0 ? (
+          <ul className="flex flex-col gap-1">
+            {orphan.senderDebited.map((entry) => (
+              <li key={entry.owner} className="numeric text-[12px] break-all">
+                {entry.owner} &mdash; {entry.amountUsdc} USDC
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span className="muted text-[13px]">
+            Not recorded. Only the verdicts that see a sender carry this; look the signature up on
+            chain.
+          </span>
+        )}
+      </Field>
 
       {orphan.orderId ? (
         <Field label="Submitted against order">
@@ -179,13 +247,71 @@ function OrphanCard({ orphan }: { orphan: Orphan }) {
 
       {orphan.resolvedAt ? (
         <Field label="Resolved">
-          <span className="numeric text-[12px]">{stamp(orphan.resolvedAt)}</span>
+          <span className="numeric text-[12px]">
+            {stamp(orphan.resolvedAt)}
+            {orphan.appliedBy ? ` by ${orphan.appliedBy}` : ""}
+          </span>
           {orphan.resolutionNote ? (
             <span className="muted text-[13px]">{orphan.resolutionNote}</span>
           ) : null}
         </Field>
       ) : null}
+
+      {open ? <AssignForm orphanId={orphan.id} orders={orders} /> : null}
     </article>
+  );
+}
+
+/**
+ * Pick an order, and settle this payment against it.
+ *
+ * A `<select>` rather than a free-text order id: an operator typing a UUID by
+ * hand into the one control in this project that moves money is a transposed
+ * character away from paying the wrong order, and the settlement would happily
+ * oblige because the id would be perfectly valid.
+ *
+ * The button is `.btn-secondary`, not `.btn-primary`. Brass means "this is the
+ * action" (DESIGN.md I5), and a screen whose loudest element urges you to move
+ * somebody's money is the wrong screen.
+ */
+function AssignForm({ orphanId, orders }: { orphanId: string; orders: AssignableOrder[] }) {
+  if (orders.length === 0) {
+    return (
+      <p className="muted text-[13px]">
+        No order can take a payment right now. Every order is paid, failed, or there are none.
+      </p>
+    );
+  }
+
+  return (
+    <form
+      action={`/api/admin/orphans/${orphanId}/assign`}
+      method="post"
+      className="flex flex-col gap-3"
+    >
+      {/*
+        `min-w-0` on the column and `w-full` on the control: a <select> sizes
+        itself to its widest <option>, and these options carry a UUID, so
+        without both it lays out wider than the panel it sits in and pushes the
+        card off the page. Measured in a browser, not reasoned about.
+      */}
+      <label className="flex min-w-0 flex-col gap-1">
+        <span className="section-label muted">Assign to order</span>
+        <select name="orderId" required defaultValue="" className="field w-full px-3 py-2">
+          <option value="" disabled>
+            Pick an order
+          </option>
+          {orders.map((order) => (
+            <option key={order.id} value={order.id}>
+              {`${order.ticker} · slot ${order.colourSlot} · ${order.priceUsd} USD · ${order.status} · ${order.warTitle} · ${order.id}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="submit" className="btn-secondary w-fit px-4 py-2">
+        Assign
+      </button>
+    </form>
   );
 }
 

@@ -6,7 +6,6 @@ import {
   createAdminSession,
   identifyToken,
   recordLoginAttempt,
-  resolveAdminSession,
   revokeAdminSession,
 } from "../../../../lib/admin";
 import { json, NO_STORE } from "../../../../lib/http";
@@ -104,8 +103,11 @@ export async function DELETE(request: Request): Promise<Response> {
     }
     // Revoked whether or not it currently resolves. A session that has already
     // expired, or belongs to a deployment whose token was cleared, still gets
-    // its row marked rather than left live for a token that comes back.
-    await resolveAdminSession(id);
+    // its row marked rather than left live for a token that comes back — which
+    // is exactly why nothing is looked up first. `resolveAdminSession` used to
+    // be called here and its answer discarded: a wasted round trip left behind
+    // when the audit log was dropped, since the UPDATE is unconditional and
+    // needs no permission from a read to run.
     await revokeAdminSession(id);
   }
 

@@ -15,10 +15,10 @@ import { formatUsdc } from "./config";
  * driving the surface with `x-admin-token` and no browser — the header path
  * `authenticateAdmin` exists for. Both are guarded.
  *
- * Read-only, deliberately. Assigning a filed payment to an order is the one
- * place in this project where money would move on a human's say-so, and it is
- * NOT built here — `settlePayment` cannot be reused as-is for it. See
- * `.superpowers/sdd/2026-08-26-admin-orphans/task-2-report.md` §1.
+ * Read-only. The one act on this data that moves money — assigning a filed
+ * payment to an order — is `settleAssignedPayment` in `settle.ts`, so that it
+ * shares the payer's own settlement rather than growing a second one beside
+ * it. Nothing in this file writes.
  */
 
 export type Orphan = {
@@ -36,12 +36,27 @@ export type Orphan = {
   resolvedAt: Date | null;
   resolutionNote: string | null;
   appliedOrderId: string | null;
+  /** Which operator applied it, from `admin_sessions.token_label`. Null means no human did. */
+  appliedBy: string | null;
   /**
    * The fee payer the chain itself reported, when we have one. Public chain
    * data, so rendering it is fine — and it is the one fact a claimant cannot
    * forge, which is exactly what an operator reuniting a payment needs.
    */
   senderFeePayer: string | null;
+  /**
+   * The wallets whose USDC balance went DOWN in this transaction — whoever
+   * actually funded it. Usually one; more than one means the operator should
+   * look harder, not less.
+   *
+   * Surfaced beside the fee payer for the reason migration 002 gives when it
+   * declares both: they exist so that "reuniting a stray payment from /admin
+   * does not mean trusting the claimant's word for who paid it". The schema
+   * anticipated this screen. Showing the signature and the amount alone would
+   * leave an operator judging a money decision on exactly the facts a
+   * claimant can assert.
+   */
+  senderDebited: { owner: string; amountUsdc: string }[];
 };
 
 type OrphanRow = {
@@ -56,7 +71,10 @@ type OrphanRow = {
   resolved_at: Date | null;
   resolution_note: string | null;
   applied_order_id: string | null;
+  applied_by: string | null;
   sender_fee_payer: string | null;
+  /** JSONB, as `pg` hands it back: already parsed. */
+  sender_debited: { owner?: string; amountBaseUnits?: string }[] | null;
 };
 
 /**
@@ -86,7 +104,8 @@ export const ORPHAN_PAGE_SIZE = 200;
 export async function listOrphans(limit: number = ORPHAN_PAGE_SIZE): Promise<Orphan[]> {
   const rows = await query<OrphanRow>(
     `SELECT id, signature, order_id, received_base_units, expected_base_units, reason,
-            created_at, status, resolved_at, resolution_note, applied_order_id, sender_fee_payer
+            created_at, status, resolved_at, resolution_note, applied_order_id, applied_by,
+            sender_fee_payer, sender_debited
        FROM unmatched_payments
       ORDER BY created_at DESC, id DESC
       LIMIT $1`,
@@ -108,6 +127,68 @@ export async function listOrphans(limit: number = ORPHAN_PAGE_SIZE): Promise<Orp
     resolvedAt: row.resolved_at,
     resolutionNote: row.resolution_note,
     appliedOrderId: row.applied_order_id,
+    appliedBy: row.applied_by,
     senderFeePayer: row.sender_fee_payer,
+    // Same treatment as the amounts above: base units in the column, dollars
+    // on the screen. An entry with no owner is dropped rather than rendered as
+    // a blank line claiming somebody paid.
+    senderDebited: (row.sender_debited ?? [])
+      .filter((entry): entry is { owner: string; amountBaseUnits?: string } => !!entry?.owner)
+      .map((entry) => ({
+        owner: entry.owner,
+        amountUsdc: formatUsdc(BigInt(entry.amountBaseUnits ?? "0")),
+      })),
+  }));
+}
+
+export type AssignableOrder = {
+  id: string;
+  warTitle: string;
+  ticker: string;
+  colourSlot: number;
+  priceUsd: number;
+  status: string;
+};
+
+/**
+ * Orders an operator may assign a filed payment to.
+ *
+ * `pending` and `expired` only: a `paid` order already holds a payment and a
+ * `failed` one can never take another, and `settleAssignedPayment` refuses
+ * both anyway. This query is the convenience — the refusal is the guarantee,
+ * and the two are deliberately not the same mechanism. An order that becomes
+ * unassignable between this list being rendered and the form being submitted
+ * is caught by the settlement's own FOR UPDATE, not by this list being fresh.
+ *
+ * ponytail: a flat cap and no search box. A war seats at most 24 tokens, so
+ * the realistic candidate set is small; if it stops being small, the answer is
+ * a filter by war rather than a longer list.
+ */
+export async function assignableOrders(limit = 100): Promise<AssignableOrder[]> {
+  const rows = await query<{
+    id: string;
+    war_title: string;
+    ticker: string;
+    colour_slot: number;
+    amount_usd: number;
+    status: string;
+  }>(
+    `SELECT o.id, w.title AS war_title, t.ticker, t.colour_slot, o.amount_usd, o.status
+       FROM entry_orders o
+       JOIN war_tokens t ON t.id = o.war_token_id
+       JOIN wars w ON w.id = o.war_id
+      WHERE o.status IN ('pending', 'expired')
+      ORDER BY o.created_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    warTitle: row.war_title,
+    ticker: row.ticker,
+    colourSlot: row.colour_slot,
+    priceUsd: row.amount_usd,
+    status: row.status,
   }));
 }

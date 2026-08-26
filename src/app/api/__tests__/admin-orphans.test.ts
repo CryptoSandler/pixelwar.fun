@@ -6,8 +6,9 @@ import {
   revokeAdminSession,
 } from "../../../lib/admin";
 import { base58Encode } from "../../../lib/base58";
-import { execute } from "../../../lib/db";
+import { execute, query } from "../../../lib/db";
 import { GET as orphansRoute } from "../admin/orphans/route";
+import { POST as assignRoute } from "../admin/orphans/[id]/assign/route";
 
 /**
  * The unmatched-payment surface: `GET /api/admin/orphans` and the
@@ -63,6 +64,11 @@ vi.mock("next/navigation", () => ({
 // Imported after the mocks above so the page picks them up.
 const { default: OrphansPage } = await import("../../admin/orphans/page");
 
+/** The page takes `searchParams` like any Next 16 page; tests never pass any. */
+function pageProps(search: Record<string, string> = {}) {
+  return { searchParams: Promise.resolve(search) };
+}
+
 function randomSignature(): string {
   return base58Encode(new Uint8Array(randomBytes(64)));
 }
@@ -99,6 +105,64 @@ async function file(options: {
     ],
   );
   return signature;
+}
+
+/** A live war, a reserved colour, and the order that would pay for it. */
+async function orderFixture(options: { tokenStatus?: "reserved" | "released"; orderStatus?: "pending" | "expired" | "paid" } = {}) {
+  const warId = randomUUID();
+  const tokenId = randomUUID();
+  const orderId = randomUUID();
+  const tokenStatus = options.tokenStatus ?? "reserved";
+  const orderStatus = options.orderStatus ?? "pending";
+
+  await execute(
+    `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
+                       entry_price_usd, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1,$1,'Fixture war','live',8,8,24,25,30, now() - interval '1 hour', now() + interval '1 hour')`,
+    [warId],
+  );
+  await execute(
+    `INSERT INTO war_tokens
+       (id, war_id, chain_id, contract, contract_key, colour_slot, status,
+        name, ticker, metadata_fetched_at, reserved_at, released_at, released_reason)
+     VALUES ($1,$2,'solana',$1,$1,7,$3,'Fixture','FIX', now(), now(),
+             CASE WHEN $3 = 'released' THEN now() ELSE NULL END,
+             CASE WHEN $3 = 'released' THEN 'order_expired' ELSE NULL END)`,
+    [tokenId, warId, tokenStatus],
+  );
+  await execute(
+    `INSERT INTO entry_orders
+       (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
+        created_at, expires_at)
+     VALUES ($1,$2,$3,25,NULL,$1,$4, now() - interval '40 minutes', now() - interval '10 minutes')`,
+    [orderId, warId, tokenId, orderStatus],
+  );
+
+  return { warId, tokenId, orderId };
+}
+
+/** The id of the row `file()` just wrote, by signature. */
+async function orphanIdFor(signature: string): Promise<string> {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM unmatched_payments WHERE signature = $1`,
+    [signature],
+  );
+  return rows[0].id;
+}
+
+function assignRequest(
+  orphanId: string,
+  orderId: string,
+  headers: Record<string, string> = {},
+): [Request, { params: Promise<{ id: string }> }] {
+  return [
+    new Request(`https://pixelwar.fun/api/admin/orphans/${orphanId}/assign`, {
+      method: "POST",
+      headers: { "x-forwarded-for": IP, ...headers },
+      body: new URLSearchParams({ orderId }),
+    }),
+    { params: Promise.resolve({ id: orphanId }) },
+  ];
 }
 
 /** Status, body and headers together — what a prober can actually observe. */
@@ -229,8 +293,8 @@ describe("GET /api/admin/orphans", () => {
 
 describe("/admin/orphans", () => {
   it("redirects a signed-out visitor to /admin", { timeout: 20_000 }, async () => {
-    await expect(OrphansPage()).rejects.toThrow(Redirected);
-    await expect(OrphansPage()).rejects.toMatchObject({ to: "/admin" });
+    await expect(OrphansPage(pageProps())).rejects.toThrow(Redirected);
+    await expect(OrphansPage(pageProps())).rejects.toMatchObject({ to: "/admin" });
   });
 
   it("redirects a revoked session to the same place", { timeout: 20_000 }, async () => {
@@ -238,7 +302,7 @@ describe("/admin/orphans", () => {
     await revokeAdminSession(session.id);
     cookieJar.value = session.id;
 
-    await expect(OrphansPage()).rejects.toMatchObject({ to: "/admin" });
+    await expect(OrphansPage(pageProps())).rejects.toMatchObject({ to: "/admin" });
   });
 
   it(
@@ -249,7 +313,7 @@ describe("/admin/orphans", () => {
       cookieJar.value = session.id;
       vi.unstubAllEnvs();
 
-      await expect(OrphansPage()).rejects.toMatchObject({ to: "/admin" });
+      await expect(OrphansPage(pageProps())).rejects.toMatchObject({ to: "/admin" });
     },
   );
 
@@ -265,7 +329,7 @@ describe("/admin/orphans", () => {
     cookieJar.value = session.id;
 
     const { renderToStaticMarkup } = await import("react-dom/server");
-    const html = renderToStaticMarkup(await OrphansPage());
+    const html = renderToStaticMarkup(await OrphansPage(pageProps()));
 
     expect(html).toContain(signature);
     expect(html).toContain("12.50 USDC");
@@ -282,5 +346,320 @@ describe("/admin/orphans", () => {
     expect(html).toContain("numeric");
     expect(html).toContain("muted");
     expect(html).not.toContain("opacity");
+  });
+});
+
+/**
+ * The one endpoint in this project that moves money on a human's say-so.
+ *
+ * What these prove, in order: that it is guarded like everything else; that it
+ * settles through the payer's own settlement rather than beside it (payment
+ * row + order paid + token active, together); that a double-click cannot
+ * settle twice; that the same signature cannot pay two orders; and that a
+ * human's say-so is not an exemption from the war's own rules.
+ */
+describe("POST /api/admin/orphans/[id]/assign", () => {
+  it(
+    "answers an unauthenticated request exactly as it answers a wrong token, and settles nothing",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId } = await orderFixture();
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+
+      const anonymous = await shape(await assignRoute(...assignRequest(orphanId, orderId)));
+      const wrongToken = await shape(
+        await assignRoute(...assignRequest(orphanId, orderId, { "x-admin-token": "not-the-token" })),
+      );
+      const junkCookie = await shape(
+        await assignRoute(...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=nonsense` })),
+      );
+
+      expect(anonymous.status).toBe(401);
+      expect(wrongToken).toEqual(anonymous);
+      expect(junkCookie).toEqual(anonymous);
+
+      // The guard runs before anything is read or written. Nothing moved.
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(await query(`SELECT status FROM unmatched_payments WHERE id = $1`, [orphanId])).toEqual([
+        { status: "open" },
+      ]);
+      expect(await query(`SELECT status FROM entry_orders WHERE id = $1`, [orderId])).toEqual([
+        { status: "pending" },
+      ]);
+    },
+  );
+
+  it(
+    "settles the payment, the order and the colour together, and records who did it",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId, tokenId } = await orderFixture();
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+        feePayer: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(200);
+      // USDC on the way out, never base units.
+      expect(await response.json()).toEqual({ ok: true, orderId, amountUsdc: "25.00" });
+
+      // The settlement trio, all three, from the payer's own code path.
+      expect(
+        await query(`SELECT signature, order_id, amount_base_units, payer FROM payments`),
+      ).toEqual([
+        {
+          signature,
+          order_id: orderId,
+          amount_base_units: "25000000",
+          // The chain's fee payer, not the order's payer_pubkey (which is NULL
+          // here). An operator must never be shown a claim nobody on chain made.
+          payer: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+        },
+      ]);
+      expect(await query(`SELECT status FROM entry_orders WHERE id = $1`, [orderId])).toEqual([
+        { status: "paid" },
+      ]);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "active" },
+      ]);
+
+      // The audit answer: which operator, on the same row, in the same act.
+      const [row] = await query<{ status: string; applied_by: string; applied_order_id: string }>(
+        `SELECT status, applied_by, applied_order_id FROM unmatched_payments WHERE id = $1`,
+        [orphanId],
+      );
+      expect(row).toEqual({ status: "applied", applied_by: "admin", applied_order_id: orderId });
+    },
+  );
+
+  it(
+    "is idempotent under a double-click: the second request settles nothing",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId } = await orderFixture();
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+      const cookie = { cookie: `${ADMIN_COOKIE}=${session.id}` };
+
+      const first = await assignRoute(...assignRequest(orphanId, orderId, cookie));
+      const second = await assignRoute(...assignRequest(orphanId, orderId, cookie));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(409);
+      expect(await second.json()).toMatchObject({ reason: "already_resolved" });
+
+      // ONE payment row. This is the assertion the whole endpoint exists to
+      // keep true: a signature cannot be settled twice.
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(1);
+    },
+  );
+
+  it(
+    "settles nothing when two clicks land at once",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId } = await orderFixture();
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+      const cookie = { cookie: `${ADMIN_COOKIE}=${session.id}` };
+
+      // Genuinely concurrent, not sequential: both requests are in flight
+      // before either commits, which is the case a status check would lose to
+      // and the FOR UPDATE lock on the unmatched_payments row is there for.
+      const [a, b] = await Promise.all([
+        assignRoute(...assignRequest(orphanId, orderId, cookie)),
+        assignRoute(...assignRequest(orphanId, orderId, cookie)),
+      ]);
+
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(1);
+      expect(await query(`SELECT status FROM entry_orders WHERE id = $1`, [orderId])).toEqual([
+        { status: "paid" },
+      ]);
+    },
+  );
+
+  it(
+    "refuses to spend one signature on a second order",
+    { timeout: 20_000 },
+    async () => {
+      const first = await orderFixture();
+      const second = await orderFixture();
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+      const cookie = { cookie: `${ADMIN_COOKIE}=${session.id}` };
+
+      expect((await assignRoute(...assignRequest(orphanId, first.orderId, cookie))).status).toBe(200);
+
+      // The row is closed, so this stops at the idempotency lock. Re-opening it
+      // by hand is the only way to reach the ledger constraint underneath, and
+      // that constraint is the thing worth proving: even with the application
+      // check defeated, `payments.signature UNIQUE` refuses the second write.
+      await execute(`UPDATE unmatched_payments SET status = 'open' WHERE id = $1`, [orphanId]);
+
+      const response = await assignRoute(...assignRequest(orphanId, second.orderId, cookie));
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: "signature_settled" });
+
+      // And the rollback is whole: the second order's colour was flipped to
+      // active inside that transaction before the ledger refused it, and must
+      // not have survived.
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(1);
+      expect(await query(`SELECT status FROM entry_orders WHERE id = $1`, [second.orderId])).toEqual([
+        { status: "pending" },
+      ]);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [second.tokenId])).toEqual([
+        { status: "reserved" },
+      ]);
+    },
+  );
+
+  it("refuses an order that is already paid", { timeout: 20_000 }, async () => {
+    const { orderId } = await orderFixture({ orderStatus: "paid" });
+    const signature = await file({
+      received: "25000000",
+      expected: "25000000",
+      reason: "war_full",
+      createdAt: new Date(),
+    });
+    const orphanId = await orphanIdFor(signature);
+    const session = await createAdminSession("admin", "hashed");
+
+    const response = await assignRoute(
+      ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: "order_not_assignable" });
+    expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+  });
+
+  it(
+    "will not seat a token whose colour someone else took while it waited",
+    { timeout: 20_000 },
+    async () => {
+      // An expired order: its reservation released the colour, and somebody
+      // else has since taken it. A human's say-so is authorisation, never an
+      // exemption from the war's own rules — same check a payer's late confirm
+      // faces, same code.
+      const { warId, orderId, tokenId } = await orderFixture({
+        tokenStatus: "released",
+        orderStatus: "expired",
+      });
+      await execute(
+        `INSERT INTO war_tokens
+           (id, war_id, chain_id, contract, contract_key, colour_slot, status,
+            name, ticker, metadata_fetched_at, reserved_at, joined_at)
+         VALUES ($1,$2,'solana',$1,$1,7,'active','Rival','RIV', now(), now(), now())`,
+        [randomUUID(), warId],
+      );
+
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "late_confirm_past_grace",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: "colour_taken" });
+
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "released" },
+      ]);
+      expect(await query(`SELECT status FROM unmatched_payments WHERE id = $1`, [orphanId])).toEqual([
+        { status: "open" },
+      ]);
+    },
+  );
+
+  it(
+    "reclaims a released colour when nothing else has taken it",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId, tokenId } = await orderFixture({
+        tokenStatus: "released",
+        orderStatus: "expired",
+      });
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "late_confirm_past_grace",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(200);
+
+      // Past LATE_CONFIRM_GRACE_MINUTES, which is deliberately not a bound on
+      // this path: the grace window governs what happens automatically, and a
+      // human looking at a filed payment later is what this screen is for.
+      expect(await query(`SELECT status, released_at FROM war_tokens WHERE id = $1`, [tokenId])).toEqual(
+        [{ status: "active", released_at: null }],
+      );
+    },
+  );
+
+  it("answers a browser with a redirect, not JSON", { timeout: 20_000 }, async () => {
+    const { orderId } = await orderFixture();
+    const signature = await file({
+      received: "25000000",
+      expected: "25000000",
+      reason: "war_full",
+      createdAt: new Date(),
+    });
+    const orphanId = await orphanIdFor(signature);
+    const session = await createAdminSession("admin", "hashed");
+
+    const response = await assignRoute(
+      ...assignRequest(orphanId, orderId, {
+        cookie: `${ADMIN_COOKIE}=${session.id}`,
+        accept: "text/html,application/xhtml+xml",
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/admin/orphans?applied=1");
   });
 });

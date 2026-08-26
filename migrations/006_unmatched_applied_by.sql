@@ -1,0 +1,30 @@
+-- Who moved the money.
+--
+-- Assigning a filed payment to an order, from /admin/orphans, is the only
+-- place in this project where money moves on a human's say-so. Every other
+-- settlement is decided by chain evidence, and the chain is its own record.
+-- This one needs a record of its own, and "which operator did this" is the
+-- audit question a money action raises.
+--
+-- A column rather than free text inside resolution_note, because a note is
+-- prose and this is a fact that gets queried. It is written in the SAME
+-- transaction as the settlement it belongs to (see settleAssignedPayment in
+-- src/lib/payments/settle.ts), so an applied row and an unsettled payment
+-- cannot exist separately in either direction.
+--
+-- The value is `admin_sessions.token_label` — the operator's label, which is
+-- what that table stores precisely so the secret never has to be handled
+-- again after sign-in. Never a token, never a session id.
+--
+-- NULLable, and deliberately: every row already in this table was filed by an
+-- automatic path and applied by nobody, and rows that `finishSettlement`
+-- closes automatically (a signature that later settled a different order on
+-- its own) still have no operator behind them. NULL means "no human did
+-- this", which is the truth for all of them.
+--
+-- Note for a reader coming from outbid-tokens: its admin_audit_log is still
+-- deliberately NOT copied. This column answers the question this screen
+-- raises; a separate append-only table with nothing reading it is the shape
+-- AGENTS.md warns about, and it arrives with the surface that displays it or
+-- not at all.
+ALTER TABLE unmatched_payments ADD COLUMN applied_by TEXT;
