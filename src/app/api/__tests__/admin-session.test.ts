@@ -174,4 +174,32 @@ describe("DELETE /api/admin/session", () => {
     );
     expect(response.status).toBe(200);
   });
+
+  it(
+    "writes nothing when ADMIN_TOKEN is unset, whatever cookie is presented",
+    { timeout: 20_000 },
+    async () => {
+      // Sign-out grants nothing, so this is not an auth hole — but "unset
+      // ADMIN_TOKEN refuses everything" has to be true of every path and not
+      // only of the paths that grant, or the sentence means something narrower
+      // than it says. Without the gate this endpoint was an unauthenticated,
+      // unmetered UPDATE against admin_sessions on a deployment with no admin
+      // surface at all.
+      const id = sessionCookie(await signIn(signInRequest(TOKEN)))!;
+      vi.unstubAllEnvs();
+
+      const response = await signOut(
+        new Request("https://pixelwar.fun/api/admin/session", {
+          method: "DELETE",
+          headers: { cookie: `${ADMIN_COOKIE}=${id}` },
+        }),
+      );
+
+      expect(response.status).toBe(503);
+      // The row is untouched: the refusal happened before any statement ran.
+      expect(await query(`SELECT revoked_at FROM admin_sessions WHERE id = $1`, [id])).toEqual([
+        { revoked_at: null },
+      ]);
+    },
+  );
 });

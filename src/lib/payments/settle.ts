@@ -575,6 +575,12 @@ async function settleLateConfirmation(
  * means every settlement path locks `wars` at the same point in the same
  * order, rather than some of them locking it and some not.
  */
+/**
+ * What a war check answers. Named because `settleAssignedPayment` holds one
+ * between taking the lock and acting on it — see the lock ordering there.
+ */
+type SeatVerdict = { ok: true } | { ok: false; reason: "war_closed" | "war_full" };
+
 async function warIsOpen(
   client: PoolClient,
   warId: string,
@@ -818,9 +824,15 @@ function filedClause(): string {
  * uncaught on both sides, a 500 for the payer.
  *
  * So the order is settled here, at the shared end, where one line fixes both
- * callers: **`unmatched_payments`, then `payments`.** Nothing else changes.
- * Both statements are in the same transaction, so a failure in either still
- * rolls back both, and no caller can observe the intermediate state.
+ * callers: **`unmatched_payments`, then `payments`.** Both statements are in
+ * the same transaction, so a failure in either still rolls back both, and no
+ * caller can observe the intermediate state.
+ *
+ * That is one pair. **It is not the only pair, and reasoning about one pair is
+ * how the others were missed** — this comment used to end "nothing else
+ * changes", which was true and was the problem. The whole ordering, for both
+ * paths, is written out at the top of `settleAssignedPayment`'s transaction;
+ * change either path's locks only against that list.
  */
 async function finishSettlement(
   client: PoolClient,
@@ -987,12 +999,27 @@ type UnmatchedRow = {
  *    (`wrong_payer`, `insufficient_amount`, `outside_bid_window`), which are
  *    deliberately left unclaimed. A signature can never verify against an
  *    order created after it, so it cannot be re-presented inside a fresher
- *    order's window. The recovery pass widens `expiresAtMs` to `now()` and
- *    does defeat that for `outside_bid_window` — and is caught instead by
- *    `LATE_CONFIRM_GRACE_MINUTES`, because recovery only ever examines expired
- *    orders and `settleLateConfirmation` refuses past the grace window. Past
- *    `RECOVERY_MAX_AGE_DAYS` the widening is withdrawn entirely and the order's
- *    own `expiresAt` comes back, so that half is bounded twice over.
+ *    order's window. The recovery pass widens `expiresAtMs` to `now()`, which
+ *    defeats that for `outside_bid_window`. Past `RECOVERY_MAX_AGE_DAYS` the
+ *    widening is withdrawn and the order's own `expiresAt` comes back; past
+ *    `LATE_CONFIRM_GRACE_MINUTES` the reclaim is refused before
+ *    `finishSettlement` is reached.
+ *
+ *    **Inside the grace window it is reachable, and the consequence is a 500.**
+ *    Stated plainly rather than left as "caught": within
+ *    `LATE_CONFIRM_GRACE_MINUTES` of an order expiring, a recovery pass can
+ *    re-verify a signature this path has already assigned, reclaim the seat,
+ *    and reach `finishSettlement`, whose `payments` INSERT then hits
+ *    `payments_signature_key` — the constraint `settlePayment` has no handler
+ *    for. The 23505 escapes `settlePayment`, escapes
+ *    `recoverUnclaimedOrders`'s per-order `try`/`finally` (a `finally` with no
+ *    `catch`), and aborts the rest of that pass; `POST /api/cron/reconcile`
+ *    answers 500 and the workflow's JSON assertion correctly fails the run.
+ *    Money is safe — the transaction rolls back — the poisoned order is stamped
+ *    by the `finally` so the next pass sorts it last, and the whole thing
+ *    self-clears once the order passes grace. The fix is the same three lines
+ *    this function already has below; it is not applied to `settlePayment`
+ *    here because that is a change to the payer's own money path.
  *
  * Nothing is broken today: no sequence exists where the ledger and the seat
  * disagree, because every refusal reachable after a durable write in either
@@ -1007,17 +1034,21 @@ type UnmatchedRow = {
  * ## Idempotent under a double-click
  *
  * The `unmatched_payments` row is the idempotency token. It is locked FOR
- * UPDATE as the first act of the transaction, and only a row still `open` is
+ * UPDATE before any decision is made on it, and only a row still `open` is
  * acted on. A second request — a double-click, a retried POST, two operators
  * at once — blocks on that lock until the first commits, then reads the true
  * post-settlement `status` and returns `already_resolved` having touched
  * nothing. That is a lock, not a check-then-act, so there is no window between
  * the read and the write for a second caller to slip through.
  *
- * That lock is also why `finishSettlement` writes `unmatched_payments` before
- * `payments` rather than after: this path cannot take those two resources in
- * the other order without giving up the idempotency token, so the shared code
- * takes them in this one. See `finishSettlement`.
+ * **It is taken third, not first, and that was a deadlock fix.** It used to be
+ * the transaction's opening statement, which read like the stronger claim and
+ * was in fact the dangerous one: `settlePayment` takes `entry_orders` and
+ * `wars` before it ever reaches the filed row, so opening with
+ * `unmatched_payments` had the two money paths acquiring the same rows in
+ * opposite orders. What the guarantee actually needs is that nothing is
+ * WRITTEN before the lock is held and the `status` is read under it — not that
+ * the lock comes first — and that is still exactly true.
  *
  * Underneath the lock, `payments.signature UNIQUE` and `payments_order_unique`
  * are the backstop for THIS path — the same signature cannot settle twice and
@@ -1036,47 +1067,78 @@ export async function settleAssignedPayment(params: {
 
   try {
     return await transaction(async (client): Promise<AssignResult> => {
-      // The idempotency token, locked before anything else is read. See the
-      // doc above: everything about a double-click resolving safely rests on
-      // this being a lock rather than a status check.
-      const filedResult = await client.query<UnmatchedRow>(
-        `SELECT id, signature, received_base_units, status, sender_fee_payer
-           FROM unmatched_payments WHERE id = $1 FOR UPDATE`,
-        [unmatchedId],
-      );
-      const filed = filedResult.rows[0];
-      if (!filed) return refuseAssignment("not_found");
-      if (filed.status !== "open") return refuseAssignment("already_resolved");
-
-      // The same lock, on the same row, that `settlePayment` takes — so a
-      // payer confirming this order and an operator assigning to it serialise
-      // against each other rather than racing.
+      // --- Locks, in `settlePayment`'s order ------------------------------
+      //
+      // entry_orders, then wars, then unmatched_payments. That order is not a
+      // preference, it is the whole of the deadlock fix: `settlePayment` takes
+      // entry_orders, then wars, then reaches the filed row last through
+      // `finishSettlement`'s qualified UPDATE. Two transactions taking the same
+      // two rows in opposite orders is the textbook cycle, and `40P01` is
+      // caught nowhere in this codebase — `isUniqueViolation` only matches
+      // `23505` — so it surfaces as a 500 on the payer's /confirm, on this
+      // assignment, or on the reconcile cron.
+      //
+      // The one pair still acquired in different orders is
+      // {war_tokens, unmatched_payments}, and it cannot cycle: `war_tokens` is
+      // only ever locked through `order.war_token_id`, and
+      // `entry_orders_token_unique` makes that one-to-one with the order — so
+      // two transactions wanting the same `war_tokens` row necessarily want the
+      // same `entry_orders` row, which they both take first, and they
+      // serialise there instead.
       const orderResult = await client.query<OrderRow>(
         `SELECT id, status, war_id, war_token_id, expires_at
            FROM entry_orders WHERE id = $1 FOR UPDATE`,
         [orderId],
       );
       const order = orderResult.rows[0];
-      if (!order) return refuseAssignment("order_not_found");
-      if (order.status === "paid" || order.status === "failed") {
-        return refuseAssignment("order_not_assignable");
+
+      // The war's row, locked HERE rather than beside the check it feeds.
+      //
+      // Splitting the lock from its verdict is what lets the lock move ahead of
+      // `unmatched_payments` without changing which refusal a caller sees: the
+      // verdict is not acted on until below, in the same position it always
+      // held. Skipped entirely for an order that can never be assigned to —
+      // skipping a lock cannot create a cycle, only taking one out of order can.
+      //
+      // `warIsOpen` for `pending`, `warHasRoom` for `expired`: the pending
+      // order's own `reserved` seat is already inside the capacity count, so
+      // asking about capacity there would refuse the last legitimate assignment
+      // in a full war. Only the reclaim branch is ADDING a seat. See
+      // `warHasRoom`.
+      let seat: SeatVerdict | null = null;
+      if (order?.status === "pending") {
+        seat = await warIsOpen(client, order.war_id);
+      } else if (order?.status === "expired") {
+        seat = await warHasRoom(client, order.war_id);
       }
 
-      if (order.status === "pending") {
-        // The war first, exactly as the payer's own `pending` branch now does.
-        // A live reservation says nothing about whether its war is still open,
-        // and on this path there is no window at all bounding how stale the
-        // pairing can be: an operator can arrive weeks after the war ended.
-        // Without this, "authorisation, never an exemption" was true of the
-        // `expired` branch and false of this one.
-        //
-        // `warIsOpen`, never `warHasRoom`: this order's own `reserved` seat is
-        // already inside the capacity count, so asking about capacity would
-        // refuse the last legitimate assignment in a full war. See
-        // `warHasRoom`.
-        const open = await warIsOpen(client, order.war_id);
-        if (!open.ok) return refuseAssignment(open.reason);
+      // The idempotency token. Taken last of the three, and that is safe:
+      // nothing has been WRITTEN yet, so the guarantee was never about being
+      // first — it is about this row being under `FOR UPDATE` before any
+      // decision is made on it, which it is.
+      const filedResult = await client.query<UnmatchedRow>(
+        `SELECT id, signature, received_base_units, status, sender_fee_payer
+           FROM unmatched_payments WHERE id = $1 FOR UPDATE`,
+        [unmatchedId],
+      );
+      const filed = filedResult.rows[0];
 
+      // --- Verdicts, in their original precedence -------------------------
+      //
+      // The filed row first, so a double-click still answers `already_resolved`
+      // rather than whatever became true of the order in the meantime.
+      if (!filed) return refuseAssignment("not_found");
+      if (filed.status !== "open") return refuseAssignment("already_resolved");
+
+      if (!order) return refuseAssignment("order_not_found");
+      if (order.status !== "pending" && order.status !== "expired") {
+        // `paid` and `failed` can never take a payment; any other status is not
+        // one this schema defines. Fail closed on both.
+        return refuseAssignment("order_not_assignable");
+      }
+      if (seat && !seat.ok) return refuseAssignment(seat.reason);
+
+      if (order.status === "pending") {
         // Its reservation is still live and holding the colour, so there is no
         // race to lose: the same flip `settlePayment` does.
         const flip = await client.query(
@@ -1085,26 +1147,15 @@ export async function settleAssignedPayment(params: {
           [order.war_token_id],
         );
         if (flip.rowCount === 0) return refuseAssignment("token_state_mismatch");
-      } else if (order.status === "expired") {
-        // The reservation lapsed and released its colour, so this is ADDING a
-        // seat back rather than paying for one the war already counts — hence
-        // `warHasRoom` here and `warIsOpen` above, which is the whole
-        // difference between the two branches. An operator does not get to
-        // skip the war's own rules to take it back: same capacity check, same
-        // two unique indexes, same code as a payer's late confirm.
-        // Deliberately NOT gated on LATE_CONFIRM_GRACE_MINUTES: that window
-        // bounds what happens automatically, and a human looking at a filed
-        // payment weeks later is the case this screen exists for. What it may
-        // never do is take a seat that is gone, and that is what these two
-        // checks are.
-        const room = await warHasRoom(client, order.war_id);
-        if (!room.ok) return refuseAssignment(room.reason);
-
-        const seat = await reclaimReleasedSeat(client, order.war_token_id);
-        if (!seat.ok) return refuseAssignment(seat.reason);
       } else {
-        // Any other status is not one this schema defines — fail closed.
-        return refuseAssignment("order_not_assignable");
+        // The reservation lapsed and released its colour. Taking it back faces
+        // the same two partial unique indexes a payer's late confirm faces, in
+        // the same code. Deliberately NOT gated on LATE_CONFIRM_GRACE_MINUTES:
+        // that window bounds what happens automatically, and a human looking at
+        // a filed payment weeks later is the case this screen exists for. What
+        // it may never do is take a seat that is gone.
+        const reclaimed = await reclaimReleasedSeat(client, order.war_token_id);
+        if (!reclaimed.ok) return refuseAssignment(reclaimed.reason);
       }
 
       let settled: SettleResult;

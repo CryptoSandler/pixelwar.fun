@@ -15,10 +15,15 @@ export const dynamic = "force-dynamic";
 /**
  * Signing in and out of the admin surface.
  *
- * What comes out of POST is a cookie holding a SESSION ID, never the token: a
- * leaked cookie is then a row to revoke rather than a secret to rotate across
- * every deployment. DELETE revokes that row server-side, so signing out is a
- * fact about the server and not a request the browser was asked to honour.
+ * What comes out of POST is a cookie holding a SESSION ID, never the token, so
+ * the secret is never handled again after sign-in. DELETE revokes that row
+ * server-side, so signing out is a fact about the server and not a request the
+ * browser was asked to honour.
+ *
+ * DELETE revokes THE CALLER'S OWN session and nothing else. There is no
+ * revoke-any-session surface in this product, and rotating `ADMIN_TOKEN` does
+ * not kill live sessions — see the note on `admin.ts`'s first finding for what
+ * an operator with a leaked cookie actually has today.
  *
  * WHO CALLS THIS: the sign-in form on `/admin`, which is Task 2 of this batch.
  * A plain HTML form, hence form-encoded in and a 303 back out rather than
@@ -87,6 +92,20 @@ export async function POST(request: Request): Promise<Response> {
 
 /** Signs out: revokes the session server-side, not just in the browser. */
 export async function DELETE(request: Request): Promise<Response> {
+  // Fails closed here too, and not because anything is granted — nothing is.
+  // Without this, a deployment with no admin surface at all still ran an
+  // unauthenticated, unmetered UPDATE against `admin_sessions` for any cookie
+  // value a stranger cared to send. "Unset ADMIN_TOKEN refuses everything"
+  // should be true of every path, not only of the paths that grant something,
+  // or the sentence quietly means something narrower than it says.
+  if (!adminConfigured()) {
+    console.error("admin/session: ADMIN_TOKEN is not set; refusing every request.");
+    return json(
+      { error: "Admin access is not configured on this deployment." },
+      { status: 503, headers: NO_STORE },
+    );
+  }
+
   const raw = request.headers
     .get("cookie")
     ?.split(";")

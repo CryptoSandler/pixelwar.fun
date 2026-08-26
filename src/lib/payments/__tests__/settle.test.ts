@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { execute, query, queryOne } from "../../db";
+import { execute, pool, query, queryOne } from "../../db";
 import type { War } from "../../wars/lifecycle";
 import { orderById } from "../orders";
-import { recordVerificationAttempt, settlePayment, verifyRateLimited } from "../settle";
+import {
+  recordVerificationAttempt,
+  settleAssignedPayment,
+  settlePayment,
+  verifyRateLimited,
+} from "../settle";
 import type { PaymentFailure, SenderInfo, VerifyResult } from "../solana";
 
 /**
@@ -270,6 +275,139 @@ describe("settlePayment: a pending order whose war is over", () => {
       });
 
       expect(result).toEqual({ ok: true, amountBaseUnits: 25_000_000n });
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "active" },
+      ]);
+    },
+  );
+});
+
+
+/**
+ * The two money paths, in flight against each other.
+ *
+ * This is the only test that can tell one lock ordering from the other. Every
+ * other test in this file and in `admin-orphans.test.ts` runs one path at a
+ * time, and a lock order is invisible to a transaction with nobody to contend
+ * with — which is exactly why an inverted pair survived a task review, a fix
+ * round, and a whole-branch read of `finishSettlement`'s own ordering comment.
+ *
+ * `settlePayment` takes `entry_orders`, then `wars`, then reaches the filed row
+ * last through `finishSettlement`'s qualified UPDATE. `settleAssignedPayment`
+ * used to open with `unmatched_payments` — the opposite order on two separate
+ * pairs, {entry_orders, unmatched_payments} and {wars, unmatched_payments}.
+ * Postgres resolves a cycle with `40P01`, which nothing in `src/` catches
+ * (`isUniqueViolation` matches `23505` only), so it surfaces as a 500 on the
+ * payer's /confirm, on the operator's assign, or on the reconcile cron.
+ *
+ * **The interleaving is forced, not raced.** A bare `Promise.all` of the two
+ * calls reproduces the deadlock only about half the time — whichever
+ * transaction reaches `entry_orders` first simply wins and the other queues
+ * behind it — and a coin-flip test is worse than none, because it goes green on
+ * the broken code often enough to be believed. So a third connection holds the
+ * `wars` row, which parks the payer between the two locks that matter and makes
+ * the window wide enough to step into deliberately:
+ *
+ *   1. a holder transaction locks `wars`;
+ *   2. the payer starts, takes `entry_orders`, and blocks on `wars`;
+ *   3. the operator starts. Under the OLD order it takes `unmatched_payments`
+ *      and then blocks on `entry_orders` — holding one, waiting on the other.
+ *      Under the CURRENT order it asks for `entry_orders` first and blocks
+ *      there holding nothing at all, which is the whole difference;
+ *   4. the holder commits. The payer runs on and asks for
+ *      `unmatched_payments` — and under the old order that closes the cycle.
+ *
+ * FALSIFY by moving the `unmatched_payments` SELECT ... FOR UPDATE back above
+ * `entry_orders` in `settleAssignedPayment`: one promise rejects with code
+ * `40P01`. If it does not, this is not testing what it claims.
+ */
+describe("the two money paths in flight together", () => {
+  /**
+   * Waits until `count` backends are parked on a lock.
+   *
+   * Polling `pg_stat_activity` rather than sleeping a hopeful number of
+   * milliseconds: this suite runs against a shared Neon branch where a round
+   * trip is tens of milliseconds and variable, and a fixed sleep would either
+   * be slow or be flaky, which for this test means green on broken code.
+   */
+  async function waitForBlocked(count: number): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const [row] = await query<{ n: string }>(
+        `SELECT count(*) AS n FROM pg_stat_activity
+          WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+      );
+      if (Number(row?.n ?? 0) >= count) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`timed out waiting for ${count} blocked backend(s)`);
+  }
+
+  it(
+    "do not deadlock on the same signature and the same order",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId, amountUsd: 25 });
+      const signature = randomUUID();
+
+      // What an `outside_bid_window` verdict leaves behind: a filed row naming
+      // the order it was submitted against, with the signature deliberately NOT
+      // claimed in consumed_signatures so the payer can still spend it. That is
+      // the state the reachable sequence starts from — the payer pays a few
+      // minutes late, the row appears in the queue naming their order, and the
+      // operator assigns it back to that order while the five-minute reconcile
+      // cron re-verifies the same signature with its widened window.
+      const unmatchedId = randomUUID();
+      await execute(
+        `INSERT INTO unmatched_payments
+           (id, signature, order_id, received_base_units, expected_base_units, reason, created_at)
+         VALUES ($1, $2, $3, '25000000', '25000000', 'outside_bid_window', now())`,
+        [unmatchedId, signature, order.id],
+      );
+
+      const holder = await pool().connect();
+      let outcomes: PromiseSettledResult<unknown>[];
+      try {
+        await holder.query("BEGIN");
+        await holder.query("SELECT id FROM wars WHERE id = $1 FOR UPDATE", [w.id]);
+
+        // Parks holding `entry_orders`, waiting on `wars`.
+        const payer = settlePayment({ order, signature, verified: okVerified(25_000_000n) });
+        await waitForBlocked(1);
+
+        // Reaches its second lock while the payer is still parked.
+        const operator = settleAssignedPayment({
+          unmatchedId,
+          orderId: order.id,
+          operatorLabel: "admin",
+        });
+        await waitForBlocked(2);
+
+        await holder.query("COMMIT");
+        outcomes = await Promise.allSettled([payer, operator]);
+      } finally {
+        holder.release();
+      }
+
+      // Neither side may throw. Reported by Postgres error code rather than as
+      // a bare count, so a failure names the deadlock instead of saying
+      // "1 !== 0".
+      const thrown = outcomes
+        .filter((o): o is PromiseRejectedResult => o.status === "rejected")
+        .map((o) => (o.reason as { code?: string })?.code ?? String(o.reason));
+      expect(thrown).toEqual([]);
+
+      // One settles and the other is refused. Which one wins is a real race and
+      // nothing here depends on it.
+      const settled = outcomes.filter(
+        (o) => o.status === "fulfilled" && (o.value as { ok: boolean }).ok,
+      );
+      expect(settled).toHaveLength(1);
+
+      // And the ledger agrees: one payment, one paid order, one active token.
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(1);
+      expect((await orderById(order.id))?.status).toBe("paid");
       expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
         { status: "active" },
       ]);

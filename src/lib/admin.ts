@@ -9,9 +9,22 @@ import { clientIp, hashIp } from "./paint/client-ip";
  * Adapted from outbid-tokens' `src/lib/admin.ts`, which was shaped by three
  * findings and keeps their answers here:
  *
- *  1. The cookie carries a REVOCABLE SESSION ID, never the master secret. A
- *     leaked cookie is then a row to revoke rather than an environment
- *     variable to rotate across every deployment.
+ *  1. The cookie carries a SESSION ID, never the master secret. The secret is
+ *     never handled again after sign-in, and never leaves the environment.
+ *
+ *     **What that does NOT currently buy, stated because the doc used to
+ *     claim it did:** there is no way to revoke somebody else's session.
+ *     `revokeAdminSession` has exactly one caller, `DELETE
+ *     /api/admin/session`, and it revokes the id in the calling browser's own
+ *     cookie — revocation is self-service only. Rotating `ADMIN_TOKEN` to a
+ *     NEW value does not kill live sessions either, because a session row
+ *     stores a label and never the secret, so nothing about it changes when
+ *     the secret does. An operator whose cookie leaked has two real options:
+ *     CLEAR `ADMIN_TOKEN`, which does kill every live session
+ *     (`resolveAdminSession` gates on `adminConfigured`) at the cost of taking
+ *     the whole surface down, or psql. A revoke-any-session surface is the
+ *     missing piece; it is named here rather than implied, per CLAUDE.md's
+ *     rule that a capability nobody built is a capability nobody has.
  *  2. FAILED LOGINS ARE COUNTED AND LOCKED OUT. An endpoint that answers "is
  *     this the token?" without limit is a brute-force oracle, and a short
  *     hand-typed secret does not survive one.
