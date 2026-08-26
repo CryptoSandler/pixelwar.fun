@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execute, query } from "../../../lib/db";
 
 /**
  * The guard on the reconcile trigger.
@@ -10,7 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * wrong thing — a guard that leaks is a guard that leaks whether or not the
  * work behind it succeeds.
  *
- * No database, so no per-test timeout is needed here.
+ * The guard tests touch no database and need no per-test timeout. The one
+ * test below that does — the expire-before-recover wiring — carries its own
+ * `{ timeout: 20_000 }`.
  */
 const recover = vi.hoisted(() =>
   vi.fn<() => Promise<{ recovered: string[]; filed: string[] }>>(async () => ({
@@ -114,4 +118,73 @@ describe("POST /api/cron/reconcile", () => {
 
     expect(body).not.toContain(SECRET);
   });
+
+  it(
+    "expires stale orders BEFORE recovering, so a quiet site still gets a candidate set",
+    { timeout: 20_000 },
+    async () => {
+      // The failure this pins down is not "expiry never happens" — it is
+      // "expiry happens somewhere else, on somebody else's schedule".
+      // `recoverUnclaimedOrders` selects on `status = 'expired'`, and the two
+      // lazy call sites in orders.ts only set that status when a visitor loads
+      // the colour picker or opens an order. This is the no-visitor case: a
+      // reservation whose window closed, and not one request to the site
+      // since. Nothing but this route can have expired it.
+      const warId = randomUUID();
+      await execute(
+        `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
+                            entry_price_usd, cooldown_seconds, starts_at, ends_at)
+         VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 30, $2, $3)`,
+        [warId, new Date(Date.now() - 3_600_000), new Date(Date.now() + 3_600_000)],
+      );
+
+      const tokenId = randomUUID();
+      await execute(
+        `INSERT INTO war_tokens
+           (id, war_id, chain_id, contract, contract_key, colour_slot, status,
+            name, ticker, metadata_fetched_at, reserved_at)
+         VALUES ($1, $2, 'solana', $1, $1, 5, 'reserved', 'Fixture', 'FIX', now(), now())`,
+        [tokenId, warId],
+      );
+
+      const orderId = randomUUID();
+      await execute(
+        `INSERT INTO entry_orders
+           (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
+            created_at, expires_at)
+         VALUES ($1, $2, $3, 25, NULL, $1, 'pending',
+                 now() - interval '40 minutes', now() - interval '10 minutes')`,
+        [orderId, warId, tokenId],
+      );
+
+      // Reading the row from inside the mock is what makes this an ORDERING
+      // test rather than merely a "the call exists somewhere" test: it records
+      // what the recovery pass itself could see at the moment it ran. Moving
+      // the expiry call below the recovery call fails this exactly as deleting
+      // it does.
+      let statusSeenByRecovery: string | undefined;
+      recover.mockImplementation(async () => {
+        const [row] = await query<{ status: string }>(
+          `SELECT status FROM entry_orders WHERE id = $1`,
+          [orderId],
+        );
+        statusSeenByRecovery = row?.status;
+        return { recovered: [], filed: [] };
+      });
+
+      const response = await reconcileRoute(post({ "x-cron-secret": SECRET }));
+
+      expect(response.status).toBe(200);
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(statusSeenByRecovery).toBe("expired");
+
+      // And the colour the dead reservation was sitting on is genuinely back.
+      const [tokenRow] = await query<{ status: string; released_reason: string | null }>(
+        `SELECT status, released_reason FROM war_tokens WHERE id = $1`,
+        [tokenId],
+      );
+      expect(tokenRow.status).toBe("released");
+      expect(tokenRow.released_reason).toBe("order_expired");
+    },
+  );
 });
