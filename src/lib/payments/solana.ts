@@ -1,4 +1,4 @@
-import { base58Decode } from "../base58";
+import { isSignatureShaped } from "./signature";
 import {
   BLOCKTIME_SKEW_SECONDS,
   RPC_BACKOFF_MAX_MS,
@@ -90,19 +90,6 @@ export type SolanaTransaction = {
 
 /** Injected so tests can drive the verifier with fixture transactions. */
 export type TransactionFetcher = (signature: string) => Promise<SolanaTransaction>;
-
-/**
- * A Solana signature is 64 bytes of base58 — usually 87 or 88 characters.
- *
- * The decoder itself lives in `lib/base58.ts`, shared with the address
- * checks in `lib/tokens/addresses.ts`. What stays here is this shape check:
- * a signature is not an address, and nothing else in this codebase judges
- * "is this 64 bytes of base58" but this function.
- */
-function isSignatureShaped(signature: string): boolean {
-  const decoded = base58Decode(signature.trim());
-  return decoded !== null && decoded.length === 64;
-}
 
 function sumFor(balances: TokenBalance[] | undefined, wallet: string, mint: string): bigint {
   let total = 0n;

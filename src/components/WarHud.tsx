@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 export function WarHud({
   hovered,
@@ -42,7 +43,20 @@ export function WarHud({
   return (
     <div className="pointer-events-none flex justify-between font-mono text-sm">
       <span>{hovered ? `(${hovered.x}, ${hovered.y}) ${scale.toFixed(1)}x` : `${scale.toFixed(1)}x`}</span>
-      <span>{notStarted ? `Starts in ${remaining}` : `${remaining} left`}</span>
+      <span className="flex items-center gap-4">
+        <span>{notStarted ? `Starts in ${remaining}` : `${remaining} left`}</span>
+        {/* The only route to the checkout there was. Nothing anywhere linked
+            to /join, so the one screen that takes a token into a war could be
+            reached by typing the path and no other way.
+
+            `pointer-events-auto` because this whole strip is deliberately
+            `pointer-events-none` — it sits above the canvas and must not eat
+            clicks meant for pixels — and a link inside it would otherwise be
+            there to read and impossible to press. */}
+        <Link className="pointer-events-auto underline" href="/join">
+          Add your token
+        </Link>
+      </span>
     </div>
   );
 }

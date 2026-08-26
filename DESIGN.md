@@ -66,13 +66,17 @@ in [chrome.ts](src/lib/wars/chrome.ts).
 | Chip outline, light surfaces | `#21242E` | — | — |
 | Chip outline, dark surfaces | `#F2F3F7` | — | — |
 | Muted ink (panels only) | `#3A3F4D` | 0.075 | 60 away |
+| Muted ink, dark faces | `#B0B5C2` | 0.071 | 87 away |
 | Disabled ink (panels only) | `#6B7285` | 0.102 | 85 away |
 | Disabled button face | `#909090` | 0.000 | 92 away |
 
 **Quieter text is a colour, never opacity or a filter.** `#21242E` at 80% renders 5.37:1 on
 the readout against a floor of 8:1 — the colour still passes every test in this
 file while the element on screen fails, which is the whole failure mode I6
-exists for. The muted ink is measured like any other colour, and it is declared
+exists for. The quiet step exists twice, once per polarity, for the same
+reason the ink does: `#3A3F4D` reads **1.89:1** on the board's dark chrome, so
+a dark face needs `#B0B5C2` — 9.70:1 there and 7.26:1 in the board well —
+rather than a lighter version of a colour that was never going to work. The muted ink is measured like any other colour, and it is declared
 only for panel and control faces: the readout and the surround have no headroom
 at all, since the full ink itself reads 8.40 and 7.20 against floors of 8 and 7.
 Text that needs to be quiet does not belong on those two surfaces. A disabled
@@ -281,7 +285,11 @@ tests, and a colour must pass both.
 > every surface in `MUTED_INK_SURFACES`, plus two controls: that the readout
 > and the surround are absent from that list and would indeed fail it, and
 > that ink composited at 80% — the way the first checkout expressed quiet
-> text — falls under the floor it claimed to meet. `DISABLED_INK` is measured
+> text — falls under the floor it claimed to meet. `MUTED_INK_INVERSE` is
+> measured the same way against every surface in `BOARD_SURFACES`, with the
+> whole dark scale asserted in order and a control proving `MUTED_INK` could
+> not have been used there instead — so the second quiet ink has to justify
+> its own existence — plus the six composited board sites it replaced. `DISABLED_INK` is measured
 > the same way, against `DISABLED_TEXT_CONTRAST` and against `MUTED_INK`, so
 > the quiet end of the scale keeps its order; `DISABLED_FACE` against
 > `AA_NORMAL_TEXT` and against `ACCENT`, so a dead key is legible and never
@@ -301,6 +309,15 @@ written as `opacity` on text, which turns a measured contrast into an
 unmeasured one and does it invisibly at review time. Hence `MUTED_INK` — a
 named colour with a declared list of surfaces it is allowed on — and hence the
 rule that no text in this application is ever quieted with opacity.
+
+**And it came back a third time, in the six sites the rule was written a batch
+too late to catch.** All six were in the board UI, and measuring them is what
+found the more interesting half: they were on `zinc-950` and `zinc-800`, not
+on the surround, so four of the six cleared 7:1 by accident and the batch that
+recorded them had them wrong by up to 5 points in both directions. A number
+nobody measured is not safe merely because it turns out to be fine — which is
+what `BOARD_SURFACES` is: the three dark faces written down, so the text drawn
+on them can be measured at all.
 
 **Partially enforced, in the same way and for the same reason as I5.** The
 tests measure the *colours*: `MUTED_INK` against every surface in

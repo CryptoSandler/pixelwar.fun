@@ -45,8 +45,20 @@ export function TokenRail({
             >
               <span aria-hidden className="h-4 w-4 rounded-sm" style={{ background: colour }} />
               <span className="font-mono">{token.ticker}</span>
-              <span className="tabular-nums opacity-70">{token.owned}</span>
-              {index < 9 ? <kbd className="opacity-40">{index + 1}</kbd> : null}
+              {/* The count is not quiet text at all. It is the leaderboard —
+                  pixels held right now, which DESIGN.md §8 calls the thing the
+                  interface is for — and it was being dimmed to `opacity-70`
+                  beside the ticker it belongs to. Full strength, and the two
+                  now read as one row.
+
+                  The hint below it IS ancillary, so it takes the quiet colour
+                  and keeps the hierarchy the opacities were reaching for.
+                  Named, because `opacity-40` rendered 3.63:1 — under the body
+                  floor this owes as text somebody has to read to use it. */}
+              <span className="tabular-nums">{token.owned}</span>
+              {index < 9 ? (
+                <kbd className="text-[var(--chrome-ink-muted-inverse)]">{index + 1}</kbd>
+              ) : null}
             </button>
           </li>
         );

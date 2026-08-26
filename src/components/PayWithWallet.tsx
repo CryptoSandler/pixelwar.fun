@@ -393,8 +393,22 @@ export function PayWithWallet({
           <span className="numeric">{amount}</span>
         </Row>
         <Row label="Network">
+          {/* When the deployment's own cluster could not be classified, this
+              row does not get to name one. `getChainForEndpoint` answers
+              `solana:mainnet` for every endpoint it does not recognise —
+              including `/api/rpc`, which is every endpoint this browser ever
+              sees — so printing its label here put "Solana mainnet" directly
+              above an alert saying the connection could not be identified. The
+              alert was right and the row was a guess, and a panel that
+              contradicts itself teaches a payer to distrust the half that is
+              correct. Uncertainty says so, exactly as CLAUDE.md's rule
+              requires of any "which network am I on" surface. */}
           <span className="numeric">
-            {inBrowser ? clusterLabel(signingChain) : "Checking…"}
+            {!inBrowser
+              ? "Checking…"
+              : proxyCluster === "unknown"
+                ? "Could not be identified"
+                : clusterLabel(signingChain)}
           </span>
         </Row>
         <Row label="Recipient">

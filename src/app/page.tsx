@@ -10,7 +10,12 @@ export default async function Page() {
       <main className="grid min-h-screen place-items-center p-8 text-center">
         <div>
           <h1 className="text-2xl font-semibold">No war is running.</h1>
-          <p className="opacity-70">The next one will appear here when it opens.</p>
+          {/* Full-strength ink, not a quiet one. This sits on the surround,
+              where DESIGN.md §9 leaves no headroom at all — INK itself reaches
+              only 7.20:1 against a body floor of 7 — so quiet text does not
+              belong here and the fix is to stop quieting it. It was
+              `opacity-70`, which rendered 3.85:1. */}
+          <p>The next one will appear here when it opens.</p>
         </div>
       </main>
     );

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { Cabinet } from "../../../components/Cabinet";
+import { PasteSignature } from "../../../components/PasteSignature";
 import { PayWithWallet } from "../../../components/PayWithWallet";
 import { queryOne } from "../../../lib/db";
 import { classifyEndpoints } from "../../../lib/payments/cluster";
@@ -100,6 +101,14 @@ export default async function OrderPage({
           },
         }}
       />
+
+      {/* Only while there is still something to pay. An order that is already
+          paid, expired or failed has nothing a signature could settle, and
+          offering the form would invite somebody to spend a verification
+          attempt proving that. */}
+      {order.status === "pending" ? (
+        <PasteSignature orderId={order.id} payerPubkey={order.payerPubkey} />
+      ) : null}
     </Cabinet>
   );
 }

@@ -202,21 +202,30 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
           {image ? (
             <Board image={image} version={version} onPaint={paintAt} onHover={handleHover} />
           ) : (
-            <div className="grid h-full place-items-center text-sm opacity-70">Loading the canvas...</div>
+            // Quiet text is a named colour, never `opacity` (DESIGN.md §9).
+            // MUTED_INK_INVERSE reads 7.26:1 in this well; the `opacity-70`
+            // it replaced rendered 7.76:1 and recorded that nowhere.
+            <div className="grid h-full place-items-center text-sm text-[var(--chrome-ink-muted-inverse)]">
+              Loading the canvas...
+            </div>
           )}
 
           {warNotStarted ? (
             <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
               <div>
                 <h2 className="text-xl font-semibold">This war has not started yet.</h2>
-                <p className="opacity-80">Painting opens for {war.title} soon.</p>
+                <p className="text-[var(--chrome-ink-muted-inverse)]">
+                  Painting opens for {war.title} soon.
+                </p>
               </div>
             </div>
           ) : warEnded ? (
             <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
               <div>
                 <h2 className="text-xl font-semibold">This war has ended.</h2>
-                <p className="opacity-80">Painting is closed for {war.title}.</p>
+                <p className="text-[var(--chrome-ink-muted-inverse)]">
+                  Painting is closed for {war.title}.
+                </p>
               </div>
             </div>
           ) : null}

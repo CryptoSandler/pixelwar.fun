@@ -11,6 +11,7 @@ import {
   INK,
   INK_INVERSE,
   MUTED_INK,
+  MUTED_INK_INVERSE,
 } from "../lib/wars/chrome";
 
 /**
@@ -40,19 +41,27 @@ const plexMono = IBM_Plex_Mono({
  * polices, and the first thing to drift.
  *
  * `INK` and `INK_INVERSE` are not new colours — they are the header and panel
- * surfaces read back as text. `MUTED_INK` is a colour of its own, and it is
- * how quiet text is expressed here: nothing in this application is quieted
- * with opacity, because compositing turns a measured contrast into an
- * unmeasured one.
+ * surfaces read back as text. The two that are colours of their own are
+ * `MUTED_INK` and `MUTED_INK_INVERSE`, one per polarity, and they are how
+ * quiet text is expressed here: **no text in this application, and no control
+ * carrying text, is quieted with `opacity` or a `filter` any more**, because
+ * compositing turns a measured contrast into an unmeasured one.
+ *
+ * That sentence was written one batch before it was true. Six composited sites
+ * survived it in the board UI — the last of them a keyboard hint — and they
+ * were replaced with named colours in the same commit this comment changed.
+ * The rule now describes the tree rather than the intention.
  *
  * What actually renders, at full strength, since that is the only claim worth
  * making: `INK` reads 11.51:1 on a panel, 8.40:1 on the readout and 7.20:1 on
  * the surround; `MUTED_INK` reads 7.81:1 on the panel and control faces, the
  * only two surfaces `MUTED_INK_SURFACES` declares it for; `DISABLED_INK`
- * reads 3.57:1 on those same faces; `DISABLED_FACE` carries `INK` at 4.85:1.
- * DESIGN.md §9 asks for 8:1 in the readout and 7:1 for body text, and I6 tests
- * every one of these numbers rather than trusting this comment. Which surface a class is *used* on is not something
- * a unit test can see — see I6's own caveat.
+ * reads 3.57:1 on those same faces and 4.14:1 on the board's own dark shell;
+ * `MUTED_INK_INVERSE` reads 9.70:1 there and 7.26:1 in the board well;
+ * `DISABLED_FACE` carries `INK` at 4.85:1. DESIGN.md §9 asks for 8:1 in the
+ * readout and 7:1 for body text, and I6 tests every one of these numbers
+ * rather than trusting this comment. Which surface a class is *used* on is not
+ * something a unit test can see — see I6's own caveat.
  */
 const chrome = {
   "--chrome-surround": CHROME_SURFACES.surround,
@@ -64,6 +73,7 @@ const chrome = {
   "--chrome-accent": ACCENT,
   "--chrome-ink": INK,
   "--chrome-ink-muted": MUTED_INK,
+  "--chrome-ink-muted-inverse": MUTED_INK_INVERSE,
   "--chrome-ink-disabled": DISABLED_INK,
   "--chrome-disabled-face": DISABLED_FACE,
   "--chrome-ink-inverse": INK_INVERSE,

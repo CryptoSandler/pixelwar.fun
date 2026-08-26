@@ -44,7 +44,11 @@ export function PaintButton({
       type="button"
       disabled={disabled || waiting}
       onClick={onPaint}
-      className="rounded-full px-8 py-3 text-lg font-semibold disabled:opacity-60"
+      // A dead key says so with a colour, never `opacity` (DESIGN.md §9).
+      // DISABLED_INK reads 4.14:1 on the shell behind this button — over
+      // DISABLED_TEXT_CONTRAST, and the same named colour the secondary
+      // button already uses on the light side.
+      className="rounded-full px-8 py-3 text-lg font-semibold disabled:text-[var(--chrome-ink-disabled)]"
     >
       {text}
     </button>

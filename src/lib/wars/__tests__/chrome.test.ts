@@ -14,13 +14,16 @@ import { PALETTE, CANVAS_GROUND, rgbDistance } from "../palette";
 import {
   AA_NORMAL_TEXT,
   ACCENT,
+  BOARD_SURFACES,
   BODY_TEXT_CONTRAST,
   CHIP_OUTLINE,
   DISABLED_FACE,
   DISABLED_INK,
   DISABLED_TEXT_CONTRAST,
   INK,
+  INK_INVERSE,
   MUTED_INK,
+  MUTED_INK_INVERSE,
   MUTED_INK_SURFACES,
   READOUT_TEXT_CONTRAST,
   contrastRatio,
@@ -216,6 +219,67 @@ describe("a chrome colour is legible under the text it carries", () => {
     expect(
       contrastRatio(composite(INK, CHROME_SURFACES.control, 0.5), CHROME_SURFACES.control),
     ).toBeLessThan(DISABLED_TEXT_CONTRAST);
+  });
+
+  // The quiet step exists twice, once per polarity. `MUTED_INK` is a dark ink
+  // for light faces and reads 1.89:1 on the board's own chrome — not a quieter
+  // colour, an invisible one — so a dark surface needs its own, and it is
+  // measured exactly the way the light one is.
+  it("carries body text at the floor on every dark surface the board draws on", () => {
+    const surfaces = Object.entries(BOARD_SURFACES);
+    expect(surfaces.length).toBeGreaterThan(0);
+    for (const [name, face] of surfaces) {
+      expect(contrastRatio(MUTED_INK_INVERSE, face), `${name} (${face})`).toBeGreaterThanOrEqual(
+        BODY_TEXT_CONTRAST,
+      );
+    }
+  });
+
+  it("keeps the dark scale in order: full ink, muted, disabled", () => {
+    for (const [name, face] of Object.entries(BOARD_SURFACES)) {
+      const full = contrastRatio(INK_INVERSE, face);
+      const muted = contrastRatio(MUTED_INK_INVERSE, face);
+      const dead = contrastRatio(DISABLED_INK, face);
+      expect(muted, `${name} muted vs full`).toBeLessThan(full);
+      expect(dead, `${name} disabled vs muted`).toBeLessThan(muted);
+      expect(dead, `${name} disabled floor`).toBeGreaterThanOrEqual(DISABLED_TEXT_CONTRAST);
+    }
+  });
+
+  it("proves the light muted ink could not have been used there instead", () => {
+    // The control that makes the second colour a necessity rather than a
+    // preference: if MUTED_INK ever clears the body floor on a board surface,
+    // MUTED_INK_INVERSE is redundant and should go.
+    for (const [name, face] of Object.entries(BOARD_SURFACES)) {
+      expect(contrastRatio(MUTED_INK, face), `${name} (${face})`).toBeLessThan(BODY_TEXT_CONTRAST);
+    }
+  });
+
+  it("rejects the six opacities the board's named colours replaced", () => {
+    // Measured in a real browser before they were removed, and reproduced here
+    // from the same compositing the browser does. `zinc-50` over `zinc-950`,
+    // `zinc-800`, and black-at-80%-over-`zinc-800`; plus INK over the surround,
+    // which is the one site that inherited the chrome rather than Tailwind.
+    const ZINC_50 = "#FAFAFA";
+    const under = (over: string, base: string, alpha: number, floor: number) =>
+      expect(contrastRatio(composite(over, base, alpha), base)).toBeLessThan(floor);
+
+    // The two that were genuinely below their floor as rendered.
+    under(INK, CHROME_SURFACES.surround, 0.7, BODY_TEXT_CONTRAST); // page.tsx, 3.85
+    under(ZINC_50, BOARD_SURFACES.shell, 0.4, BODY_TEXT_CONTRAST); // the keyboard hint, 3.63
+
+    // The other four cleared 7:1 by accident, on a dark surface nobody had
+    // written down. An unmeasured number that happens to be fine is still an
+    // unmeasured number, which is the whole point of the rule — so they are
+    // asserted as composited, not as acceptable.
+    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.well, 0.7), BOARD_SURFACES.well))
+      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.well));
+    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.overlay, 0.8), BOARD_SURFACES.overlay))
+      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.overlay));
+    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.shell, 0.7), BOARD_SURFACES.shell))
+      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.shell));
+    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.shell, 0.6), BOARD_SURFACES.shell))
+      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.shell));
   });
 
   it("rejects opacity as a way to quiet text — the failure that added this rule", () => {

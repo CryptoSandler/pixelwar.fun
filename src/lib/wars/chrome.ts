@@ -109,6 +109,46 @@ export const MUTED_INK_SURFACES = ["panel", "control"] as const satisfies readon
 export const DISABLED_INK = "#6B7285";
 
 /**
+ * Quiet text on a DARK surface — the inverse of `MUTED_INK`, and needed for
+ * exactly the same reason `INK_INVERSE` is needed beside `INK`.
+ *
+ * `MUTED_INK` is a dark ink for light faces and cannot cross: it reads 1.89:1
+ * on the board's own chrome, which is not a quieter colour, it is an invisible
+ * one. So the quiet step exists twice, once per polarity, and both halves are
+ * measured.
+ *
+ * 7.26:1 on the lightest surface it is drawn on and 9.70:1 on the darkest —
+ * over §9's body floor of 7 on all of them, and roughly half the contrast of
+ * the ink it is quieting, so the de-emphasis is something a reader can
+ * actually see. Low chroma, in the same blue-grey family as the rest of the
+ * chrome, so it survives the board being restyled to direction C.
+ */
+export const MUTED_INK_INVERSE = "#B0B5C2";
+
+/**
+ * The dark surfaces the board UI draws on today.
+ *
+ * These are **Batch A Tailwind values**, not design decisions: `zinc-950` on
+ * the shell, `zinc-800` in the board well, and black at 80% over `zinc-800`
+ * for the two overlays — the last one derived, since the compositor is what
+ * produces it and `#080808` is what it measures. They are recorded here for
+ * one purpose only: text drawn on a surface nobody wrote down is text nobody
+ * can measure, and this batch is replacing six composited opacities on
+ * exactly these three.
+ *
+ * Deliberately NOT in `CHROME_SURFACES`. That list is the design's own
+ * surfaces and everything in it owes I2 an outline and I4 a chroma ceiling;
+ * these were chosen by a batch that predates DESIGN.md and claiming them
+ * would say the design picked them. They go away when the board is restyled,
+ * and so does this constant.
+ */
+export const BOARD_SURFACES = {
+  shell: "#09090B",
+  well: "#27272A",
+  overlay: "#080808",
+} as const;
+
+/**
  * The primary button when it cannot be pressed.
  *
  * A face of its own rather than the accent run through a filter, which is
