@@ -111,8 +111,28 @@ a checkout failure rather than a slow admin page.
 The directory at [solana.com/skills](https://solana.com/skills) carries skills
 from **Helius** (DAS API, enhanced transactions, webhooks) and **QuickNode**
 (Solana RPC, Jupiter, Yellowstone gRPC). Nothing from Triton, Alchemy, Syndica
-or Shyft. Pick a provider before Batch B and the matching skill gets the same
-audit as this one.
+or Shyft.
+
+**Decided after Batch B: Helius.** This reverses an earlier call, and the
+reversal is the owner's. Helius was ruled out first because its free quota is
+per account and another project of theirs already spends it; the decision to
+use it here anyway is theirs to make and is recorded rather than re-argued.
+
+Two things follow, neither of them done yet:
+
+- `SOLANA_RPC_URL` takes the endpoint. The owner sets it; no value is committed
+  here and none should be. The variable already exists and already defaults to
+  the public mainnet endpoint, so nothing breaks while it is unset — it is
+  simply slow and rate limited, which is the state Batch B shipped in.
+- The Helius skill has **not** been audited. It gets the same treatment as
+  `solana-dev` before it is installed: authorship verified, cloned by hand,
+  read in full, patched if it instructs an agent to add an MCP server, hashed
+  into `skills-lock.json`. Until then it is not installed and must not be.
+
+Note for whoever wires it: a Helius URL carries its key in the query string.
+`CLAUDE.md`'s network rule already forbids that URL reaching the browser, and
+the cluster classifier reads `hostname + pathname` only — deliberately not the
+query — so a key cannot leak through the screen that names the network.
 
 ## Firecrawl MCP
 
