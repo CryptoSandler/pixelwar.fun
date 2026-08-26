@@ -4,8 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
-import { WalletConnect } from "./WalletProvider";
+import { getChainForEndpoint } from "@solana/wallet-standard-util";
+import { SOLANA_MAINNET_CHAIN } from "@solana/wallet-standard-chains";
+import { WalletConnect, useInBrowser } from "./WalletProvider";
 import { buildPaymentTransaction } from "../lib/payments/transfer";
+import { formatUsdc, usdToBaseUnits } from "../lib/payments/config";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
 import { colourForSlot } from "../lib/wars/palette";
 import { getChain } from "../lib/tokens/chains";
@@ -67,6 +70,41 @@ const STATUS_POLL_MS = 2_000;
  */
 const CONFIRM_RETRY_MS = 5_000;
 const CONFIRM_MAX_ATTEMPTS = 5;
+
+/**
+ * What each cluster is called on screen.
+ *
+ * Keyed by the Wallet Standard chain id rather than by anything of our own,
+ * because that id is what the adapter actually signs against: it picks the
+ * chain from `connection.rpcEndpoint`, so reading it back is the one way the
+ * label and the signature cannot disagree. They already disagree in
+ * development — a localhost origin maps to `solana:localnet` — and a
+ * hard-coded "Solana mainnet" said so to nobody.
+ */
+const NETWORK_LABEL: Record<string, string> = {
+  "solana:mainnet": "Solana mainnet",
+  "solana:devnet": "Solana devnet",
+  "solana:testnet": "Solana testnet",
+  "solana:localnet": "Solana localnet",
+};
+
+/**
+ * A wallet's own failure, as a sentence.
+ *
+ * Wallet errors are developer strings — `Transaction simulation failed: Error
+ * processing Instruction 1: custom program error: 0x1` is what an underfunded
+ * payer gets from a preflight — and DESIGN.md §8 rules that out. The detail
+ * still goes to the console, where it is useful; it just does not go on
+ * screen as the explanation.
+ */
+function walletErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  if (/reject|denied|cancel/i.test(raw)) return "You dismissed the payment in your wallet.";
+  if (/insufficient|0x1\b/i.test(raw)) {
+    return "The payment did not go through. Check the wallet holds enough USDC, and a little SOL for the fee.";
+  }
+  return "Your wallet could not send this payment. Try again in a moment.";
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -146,7 +184,26 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
     [order.id],
   );
 
+  /**
+   * Wraps the whole attempt, because a throw here has nowhere else to go: it
+   * is called as `void pay()`, so an unhandled rejection would leave the UI
+   * in `building` with the button disabled, nothing on screen, and no way out
+   * but a reload. Every individual step below already guards its own failure;
+   * this is for the one nobody predicted.
+   */
   async function pay() {
+    try {
+      await attemptPayment();
+    } catch (error) {
+      console.error("pay:", error);
+      setPhase({
+        kind: "error",
+        message: "Something went wrong preparing this payment. Nothing was charged.",
+      });
+    }
+  }
+
+  async function attemptPayment() {
     if (!publicKey) return;
     setPhase({ kind: "building" });
 
@@ -167,7 +224,11 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
       recipient,
       mint,
       decimals: order.decimals,
-      amountBaseUnits: BigInt(order.amountUsd) * 10n ** BigInt(order.decimals),
+      // The server's own helper, not the same arithmetic written again: it
+      // carries a whole-dollar guard this component would otherwise be
+      // missing, and a client and a server that compute a price differently
+      // is a class of bug worth spending an import to make impossible.
+      amountBaseUnits: usdToBaseUnits(order.amountUsd),
       reference,
     });
     if (!built.ok) {
@@ -182,13 +243,8 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
         preflightCommitment: "confirmed",
       });
     } catch (error) {
-      setPhase({
-        kind: "error",
-        message:
-          error instanceof Error && error.message
-            ? error.message
-            : "The wallet did not send the payment.",
-      });
+      console.error("sendTransaction:", error);
+      setPhase({ kind: "error", message: walletErrorMessage(error) });
       return;
     }
 
@@ -237,6 +293,17 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
     const confirmed = await confirmWithServer(signature);
     if (!alive.current) return;
     if (!confirmed.ok) {
+      // Before showing a payer a failure, ask the order itself. A dropped
+      // response to a `/confirm` that actually settled makes the retry post a
+      // signature the server has already claimed, and the answer to that is
+      // `signature_reused` or `already_settled` — so the one message this
+      // flow must never produce, "your payment failed", is exactly what a
+      // successful payment would get. The order's own status is the
+      // authority, and it costs one request to ask.
+      if ((await pollOrder()) === "paid") {
+        setPhase({ kind: "paid" });
+        return;
+      }
       setPhase({ kind: "error", message: confirmed.message, signature });
       return;
     }
@@ -253,6 +320,15 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
   }
 
   const chain = getChain(order.token.chainId);
+  // The cluster the adapter will actually sign against, read from the same
+  // function it uses, so the disclosure cannot drift from the signature. Only
+  // meaningful in a browser: during a server render `rpcEndpoint` is the
+  // placeholder `WalletProvider` uses to satisfy `Connection`'s constructor,
+  // which would answer for the wrong cluster and mismatch on hydration.
+  const inBrowser = useInBrowser();
+  const signingChain = getChainForEndpoint(connection.rpcEndpoint);
+  const offMainnet = inBrowser && signingChain !== SOLANA_MAINNET_CHAIN;
+  const amount = `$${formatUsdc(usdToBaseUnits(order.amountUsd))} USDC`;
   const wrongWallet =
     order.payerPubkey !== null && publicKey !== null && publicKey.toBase58() !== order.payerPubkey;
   const expired = remaining === 0 && phase.kind !== "paid";
@@ -282,10 +358,12 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
       <section className="readout bevel-in flex flex-col gap-2 p-4">
         <h2 className="section-label">Check before you sign</h2>
         <Row label="Amount">
-          <span className="numeric">${order.amountUsd}.00 USDC</span>
+          <span className="numeric">{amount}</span>
         </Row>
         <Row label="Network">
-          <span className="numeric">Solana mainnet</span>
+          <span className="numeric">
+            {inBrowser ? (NETWORK_LABEL[signingChain] ?? signingChain) : "Checking…"}
+          </span>
         </Row>
         <Row label="Recipient">
           <span className="numeric" title={order.payTo}>
@@ -319,18 +397,26 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
         <Row label="Order closes in">
           <span className="numeric">{formatRemaining(remaining)}</span>
         </Row>
+        {offMainnet ? (
+          <p role="alert" className="text-[13px]">
+            Your wallet will be asked to sign on{" "}
+            <span className="numeric">{NETWORK_LABEL[signingChain] ?? signingChain}</span>, not
+            mainnet. That is a configuration of this deployment, not of your wallet, and no real
+            USDC would move. Do not pay from this screen.
+          </p>
+        ) : null}
       </section>
 
       <section className="panel bevel flex flex-col gap-2 p-4">
         <h2 className="section-label">Wallet</h2>
         <WalletConnect disabled={busy} />
         {order.payerPubkey ? (
-          <p className="text-[12px] opacity-80">
+          <p className="muted text-[12px]">
             This order accepts payment only from{" "}
             <span className="numeric">{shortenAddress(order.payerPubkey, 6, 6)}</span>.
           </p>
         ) : (
-          <p className="text-[12px] opacity-80">
+          <p className="muted text-[12px]">
             This order was started without a wallet, so it accepts the first payment that matches
             it while the window is open.
           </p>
@@ -369,10 +455,12 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
       <button
         type="button"
         className="btn-primary px-6 py-3"
-        disabled={!connected || !publicKey || busy || wrongWallet || expired}
+        disabled={
+          !inBrowser || !connected || !publicKey || busy || wrongWallet || expired || offMainnet
+        }
         onClick={() => void pay()}
       >
-        {phaseLabel(phase, order.amountUsd)}
+        {phaseLabel(phase, amount)}
       </button>
 
       {busy ? (
@@ -387,7 +475,7 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
   );
 }
 
-function phaseLabel(phase: Phase, amountUsd: number): string {
+function phaseLabel(phase: Phase, amount: string): string {
   switch (phase.kind) {
     case "building":
       return "Preparing…";
@@ -398,9 +486,9 @@ function phaseLabel(phase: Phase, amountUsd: number): string {
     case "verifying":
       return "Verifying…";
     case "error":
-      return `Try again — $${amountUsd} USDC`;
+      return `Try again — ${amount}`;
     default:
-      return `Pay $${amountUsd} USDC`;
+      return `Pay ${amount}`;
   }
 }
 
@@ -414,7 +502,10 @@ function formatRemaining(ms: number): string {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-2 text-[13px]">
-      <span className="section-label opacity-80">{label}</span>
+      {/* Full-strength ink, not quiet: this is readout text, and DESIGN.md §9
+          asks 8:1 there — a floor the ink clears at 8.40 and nothing lighter
+          can. */}
+      <span className="section-label">{label}</span>
       {children}
     </div>
   );

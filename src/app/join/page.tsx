@@ -21,7 +21,7 @@ export default async function JoinPage() {
       <Cabinet label="Entry">
         <section className="panel bevel p-6">
           <h1 className="text-[20px] font-medium">No war is open for entry.</h1>
-          <p className="mt-2 text-[13px] opacity-80">
+          <p className="mt-2 muted text-[13px]">
             The next one will appear here when it is scheduled.
           </p>
         </section>
@@ -35,7 +35,7 @@ export default async function JoinPage() {
     <Cabinet label="Entry">
       <section className="panel bevel flex flex-col gap-1 p-4">
         <h1 className="text-[20px] font-medium">Enter {war.title}</h1>
-        <p className="text-[13px] opacity-80">
+        <p className="muted text-[13px]">
           One token, one colour, for the length of the war. Anyone can paint in it, and any pixel
           can be painted over — the leaderboard counts the pixels a token holds right now.
         </p>

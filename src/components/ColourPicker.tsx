@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef } from "react";
-import { CHIP_OUTLINE, CHROME_SURFACES } from "../lib/wars/chrome";
+import { CHIP_OUTLINE, CHROME_SURFACES, contrastRatio } from "../lib/wars/chrome";
 import { colourForSlot } from "../lib/wars/palette";
 
 /**
@@ -21,6 +21,30 @@ import { colourForSlot } from "../lib/wars/palette";
  */
 
 const COLUMNS = 8;
+
+/**
+ * The mark drawn on top of a taken colour, in whichever of the two declared
+ * chip outlines is legible against that colour.
+ *
+ * The same problem `CHIP_OUTLINE` solves, one level further in: a strike is
+ * chrome drawn ON a token rather than around it, so a fixed dark mark would
+ * disappear on the black token exactly as a missing outline erases the white
+ * one. Chosen by measurement, not by eye.
+ */
+function strikeInk(fill: string): string {
+  return contrastRatio(CHIP_OUTLINE.panel, fill) >= contrastRatio(CHIP_OUTLINE.header, fill)
+    ? CHIP_OUTLINE.panel
+    : CHIP_OUTLINE.header;
+}
+
+/** `fill`, crossed corner to corner by a 2px line that is legible on it. */
+function struckThrough(fill: string): string {
+  const mark = strikeInk(fill);
+  return (
+    `linear-gradient(to top right, transparent calc(50% - 1px), ${mark} calc(50% - 1px), ` +
+    `${mark} calc(50% + 1px), transparent calc(50% + 1px)), ${fill}`
+  );
+}
 
 export type ColourPickerProps = {
   /** How many slots this war offers, `wars.max_tokens`. Never more than the palette. */
@@ -111,15 +135,20 @@ export function ColourPicker({
               aria-hidden
               className="block h-6 w-full"
               style={{
-                background: colourForSlot(slot),
+                // A taken colour is struck through, not faded. Fading it would
+                // be chrome adjusting a token's colour to say something about
+                // availability, which is not chrome's to adjust — the same
+                // reason the panel hover stopped using a filter. The strike is
+                // drawn in the chip's own outline colour, over a fill that
+                // stays exactly the token's.
+                background: isFree ? colourForSlot(slot) : struckThrough(colourForSlot(slot)),
                 outline: `1px solid ${outline}`,
                 outlineOffset: "-1px",
-                opacity: isFree ? 1 : 0.3,
               }}
             />
             <span
-              className="font-mono text-[11px] leading-none tabular-nums"
-              style={{ textDecoration: isFree ? undefined : "line-through", opacity: isFree ? 1 : 0.5 }}
+              className={`font-mono text-[11px] leading-none tabular-nums${isFree ? "" : " muted"}`}
+              style={{ textDecoration: isFree ? undefined : "line-through" }}
             >
               {slot}
             </span>

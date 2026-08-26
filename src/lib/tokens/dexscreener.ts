@@ -1,5 +1,5 @@
 import { getChain, type Chain } from "./chains";
-import { normalizeLink, normalizeXHandle } from "./links";
+import { hostMatches, normalizeLink, normalizeXHandle } from "./links";
 
 /**
  * A minimal slice of the sibling project's `EntryLinks` type: just the social
@@ -115,6 +115,27 @@ function safeImage(imageUrl?: string): string | undefined {
     return undefined;
   }
   return url.protocol === "https:" ? url.toString() : undefined;
+}
+
+/**
+ * DexScreener's own page for the pair we read, checked before it is kept.
+ *
+ * The only URL this module emitted without a check, and the one a component
+ * puts straight into an `href`. Everything else here is already validated —
+ * images against the CDN host list, socials through `normalizeLink` — on the
+ * principle that an upstream API is a trusted source for *which* links belong
+ * to a token, never for whether a link is one we will hand a visitor. The
+ * `hostMatches` check on top of the normalizer is the same reasoning
+ * `safeImage` applies: this value is only ever DexScreener's own page, so a
+ * URL pointing anywhere else is not a source link and is dropped. Consumers
+ * fall back to `dexscreenerTokenUrl`, which is constructed rather than
+ * received.
+ */
+function safeSourceUrl(sourceUrl?: string): string | undefined {
+  if (!sourceUrl) return undefined;
+  const checked = normalizeLink(sourceUrl, "website");
+  if (!checked.ok) return undefined;
+  return hostMatches(checked.host, "dexscreener.com") ? checked.url : undefined;
 }
 
 /**
@@ -243,7 +264,7 @@ export async function resolveToken(
             logoUrl: safeImage(pair.info?.imageUrl),
             bannerUrl: safeImage(pair.info?.header),
             links: extractLinks(pair),
-            sourceUrl: pair.url,
+            sourceUrl: safeSourceUrl(pair.url),
             fetchedAt: new Date().toISOString(),
           },
         };

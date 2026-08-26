@@ -66,11 +66,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The three halves of "are we in a browser yet", in the shape
- * `useSyncExternalStore` wants: nothing to subscribe to, true once the client
- * is running, false while the server renders. A `useState` set from an effect
- * would say the same thing by re-rendering after the fact.
+ * "Are we in a browser yet", in the shape `useSyncExternalStore` wants:
+ * nothing to subscribe to, true once the client is running, false while the
+ * server renders. A `useState` set from an effect would say the same thing by
+ * re-rendering after the fact.
+ *
+ * Exported because more than one thing on this screen is a fact about the
+ * browser that the server cannot know and must not guess: which wallets exist,
+ * and which cluster the adapter will sign against — the latter is read from
+ * `connection.rpcEndpoint`, which is a placeholder during a server render.
+ * Rendering either of them before mount is a hydration mismatch.
  */
+export function useInBrowser(): boolean {
+  return useSyncExternalStore(subscribeToNothing, onClient, onServer);
+}
+
 const subscribeToNothing = () => () => {};
 const onClient = () => true;
 const onServer = () => false;
@@ -109,7 +119,7 @@ export function WalletConnect({ disabled = false }: { disabled?: boolean }) {
    * keeps that from being a hydration mismatch — caught in a browser, not by
    * a type.
    */
-  const mounted = useSyncExternalStore(subscribeToNothing, onClient, onServer);
+  const mounted = useInBrowser();
 
   const [installed, notInstalled] = useMemo(() => {
     const ready = wallets.filter(

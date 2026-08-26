@@ -65,6 +65,15 @@ in [chrome.ts](src/lib/wars/chrome.ts).
 | **Accent (brass)** | `#B1923B` | 0.463 | 100 away |
 | Chip outline, light surfaces | `#21242E` | — | — |
 | Chip outline, dark surfaces | `#F2F3F7` | — | — |
+| Muted ink (panels only) | `#3A3F4D` | 0.075 | 60 away |
+
+**Quieter text is a colour, never opacity.** `#21242E` at 80% renders 5.37:1 on
+the readout against a floor of 8:1 — the colour still passes every test in this
+file while the element on screen fails, which is the whole failure mode I6
+exists for. The muted ink is measured like any other colour, and it is declared
+only for panel and control faces: the readout and the surround have no headroom
+at all, since the full ink itself reads 8.40 and 7.20 against floors of 8 and 7.
+Text that needs to be quiet does not belong on those two surfaces.
 
 **Brass is the only saturated thing in the chrome, and it means "you can act".**
 The Paint button, the selected swatch, the wordmark. Nothing else. One accent
@@ -260,7 +269,11 @@ tests, and a colour must pass both.
 
 > *Test:* `contrastRatio(ACCENT, header)` >= `AA_NORMAL_TEXT` (4.5), plus a
 > control asserting the guard fires on the accent that failed, plus the
-> readout and body floors from §9.
+> readout and body floors from §9 for `INK`, plus `MUTED_INK` measured against
+> every surface in `MUTED_INK_SURFACES`, plus two controls: that the readout
+> and the surround are absent from that list and would indeed fail it, and
+> that ink composited at 80% — the way the first checkout expressed quiet
+> text — falls under the floor it claimed to meet.
 
 **Why this exists.** The first brass chosen for this design, `#B87A1E`, cleared
 the token palette by 90 and then failed WCAG AA on the primary button at
@@ -268,6 +281,12 @@ the token palette by 90 and then failed WCAG AA on the primary button at
 was hard to read. No amount of colour-distance work would have found that; it
 took building the button. The replacement reads 5.19:1 and is *further* from
 the palette, at 100.
+
+The same class of defect came back one layer out, in the checkout: de-emphasis
+written as `opacity` on text, which turns a measured contrast into an
+unmeasured one and does it invisibly at review time. Hence `MUTED_INK` — a
+named colour with a declared list of surfaces it is allowed on — and hence the
+rule that no text in this application is ever quieted with opacity.
 
 ### I5 — The accent means action, and only action
 

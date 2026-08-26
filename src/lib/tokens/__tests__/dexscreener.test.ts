@@ -237,4 +237,35 @@ describe("failure modes", () => {
     const retry = await resolveToken("solana", MINT, serve([pair()]));
     expect(retry.ok).toBe(true);
   });
+  // The source link is the one value from this response that a component puts
+  // straight into an href, so it is checked like every other URL here rather
+  // than trusted for being upstream.
+  it("keeps DexScreener's own page as the source link", async () => {
+    const result = await resolveToken("solana", MINT, serve([pair()]));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.metadata.sourceUrl).toBe("https://dexscreener.com/solana/abc");
+  });
+
+  it("drops a source link pointing anywhere but DexScreener", async () => {
+    const result = await resolveToken(
+      "solana",
+      MINT,
+      serve([pair({ url: "https://not-dexscreener.example/solana/abc" })]),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.metadata.sourceUrl).toBeUndefined();
+  });
+
+  it("drops a source link that is not an https URL at all", async () => {
+    const result = await resolveToken(
+      "solana",
+      MINT,
+      serve([pair({ url: "javascript:alert(1)" })]),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.metadata.sourceUrl).toBeUndefined();
+  });
 });

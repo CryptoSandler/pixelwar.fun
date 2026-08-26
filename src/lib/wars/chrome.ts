@@ -62,6 +62,45 @@ export const CHROME_SURFACES = {
 export const ACCENT = "#B1923B";
 
 /**
+ * The three inks, and the surfaces each one is allowed on.
+ *
+ * `INK` and `INK_INVERSE` are not new colours — they are the header and panel
+ * surfaces read back as text, which is why they carry no second literal. The
+ * one that is its own colour is `MUTED_INK`, and it exists because of a bug
+ * this file is the right place to make impossible: quieter text was expressed
+ * as `opacity` on the ink, which silently turns a measured contrast into an
+ * unmeasured one. `#21242E` at 80% over the readout renders 5.37:1 against a
+ * stated floor of 8:1, and nothing in the code says so — the colour still
+ * passes its own test while the element on screen does not.
+ *
+ * So de-emphasis is a colour here, not a filter, and it is measured like every
+ * other colour. `MUTED_INK` is only declared for the surfaces in
+ * `MUTED_INK_SURFACES`, and that list is short for a reason worth stating: at
+ * §9's floors there is no headroom anywhere else. The readout demands 8:1 and
+ * `INK` itself only reaches 8.40, the surround demands 7:1 and `INK` reaches
+ * 7.20. A muted ink is lighter by definition, so on those two surfaces there
+ * is no quieter colour that still clears the floor — quiet text simply does
+ * not belong there, and the test below asserts that rather than leaving it as
+ * a habit.
+ */
+export const INK = CHROME_SURFACES.header;
+export const INK_INVERSE = CHROME_SURFACES.panel;
+
+/** Body text that is deliberately quieter. 7.81:1 on a panel; see above. */
+export const MUTED_INK = "#3A3F4D";
+
+/**
+ * Where `MUTED_INK` may be used. Adding a surface here without checking it
+ * against `BODY_TEXT_CONTRAST` is the mistake this list exists to prevent —
+ * the same job `CHIP_OUTLINE`'s completeness test does for chips.
+ */
+export const MUTED_INK_SURFACES = ["panel", "control"] as const satisfies readonly (keyof typeof CHROME_SURFACES)[];
+
+/** DESIGN.md §9's floors, as numbers something can be tested against. */
+export const READOUT_TEXT_CONTRAST = 8;
+export const BODY_TEXT_CONTRAST = 7;
+
+/**
  * The outline every token chip carries, per surface it is drawn on.
  *
  * This is the fix for a failure that is invisible until it happens: a token

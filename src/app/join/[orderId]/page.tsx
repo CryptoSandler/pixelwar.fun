@@ -43,7 +43,7 @@ export default async function OrderPage({
       <Cabinet label="Payment">
         <section className="panel bevel p-6">
           <h1 className="text-[20px] font-medium">Payments are not available right now.</h1>
-          <p className="mt-2 text-[13px] opacity-80">
+          <p className="mt-2 muted text-[13px]">
             Nothing has been charged. Try again shortly.
           </p>
         </section>
@@ -67,7 +67,7 @@ export default async function OrderPage({
         <h1 className="text-[20px] font-medium">
           {token.ticker} in {war.title}
         </h1>
-        <p className="text-[13px] opacity-80">
+        <p className="muted text-[13px]">
           Entry is paid once, in USDC on Solana. Painting is free for everyone afterwards, and any
           pixel can be painted over — the leaderboard counts what a token holds right now.
         </p>

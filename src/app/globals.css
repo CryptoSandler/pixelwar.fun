@@ -21,6 +21,7 @@
    */
   --bevel-light: rgb(255 255 255 / 0.55);
   --bevel-dark: rgb(0 0 0 / 0.32);
+  --bevel-light-hover: rgb(255 255 255 / 0.85);
 }
 
 body {
@@ -54,14 +55,37 @@ textarea {
   border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
 }
 
-/* DESIGN.md §6: hover lightens the bevel. No scale, no lift. */
-.bevel:hover:not(:disabled) {
-  border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
-  filter: brightness(1.04);
+/**
+ * DESIGN.md §6: hover lightens the bevel. No scale, no lift.
+ *
+ * Scoped to things that are actually controls, and expressed as the bevel's
+ * own light tone rather than a `filter`. A filter applies to the whole
+ * rendered subtree, so putting one on `.bevel` — which containers wear too —
+ * meant hovering the Colour panel brightened all twenty-four token chips
+ * inside it. Chrome does not get to adjust a token's colour; that is I5's
+ * spirit, reached here by a selector rather than by a test.
+ */
+button.bevel:hover:not(:disabled),
+button.swatch:hover:not(:disabled),
+.btn-primary:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--bevel-light-hover) var(--bevel-dark) var(--bevel-dark)
+    var(--bevel-light-hover);
 }
 
 .panel {
   background: var(--chrome-panel);
+}
+
+/**
+ * Quiet text. A colour, never `opacity` — compositing ink over a surface
+ * changes a measured contrast into an unmeasured one, and does it invisibly.
+ * Declared only for panel and control faces (`MUTED_INK_SURFACES`); the
+ * readout and the surround have no headroom under DESIGN.md §9 and carry
+ * quiet text nowhere.
+ */
+.muted {
+  color: var(--chrome-ink-muted);
 }
 
 .readout {

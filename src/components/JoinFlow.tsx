@@ -35,6 +35,31 @@ export type JoinWar = {
   entryPriceUsd: number;
 };
 
+/**
+ * Every reason `POST /api/orders` can refuse for, as a sentence.
+ *
+ * The route answers a refusal with both a message and a machine `reason`, and
+ * its message is built as `That order could not be started: colour_taken.` —
+ * an enum name in front of a payer, which is the exact shape DESIGN.md §8
+ * rules out. The reason is the part worth reading, so it is the part that is
+ * read: the four values are `CreateOrderFailureReason` in
+ * `lib/payments/orders.ts`, and every one of them has a sentence here.
+ *
+ * Anything else the route returns — a bad address, a rate limit, a token no
+ * DEX has seen — already arrives as a written sentence and is shown as it
+ * came.
+ */
+const REFUSAL_COPY: Record<string, string> = {
+  // The likeliest failure in the whole flow, and the one the picker recovers
+  // from by itself: the list is refreshed on this reason, so the second
+  // sentence is a description of what just happened, not a suggestion.
+  colour_taken:
+    "That colour was taken while you were choosing. The picker now shows what is still open.",
+  already_entered: "This token is already in this war. A token can hold one colour, once.",
+  war_full: "This war is full. Every colour has been claimed.",
+  war_closed: "This war is not open for entry any more.",
+};
+
 /** How often the free list is refreshed while somebody is looking at it. */
 const COLOUR_REFRESH_MS = 20_000;
 
@@ -130,7 +155,11 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
       });
       const body = await response.json();
       if (!response.ok) {
-        setError(typeof body?.error === "string" ? body.error : "That order could not be started.");
+        const written = typeof body?.reason === "string" ? REFUSAL_COPY[body.reason] : undefined;
+        setError(
+          written ??
+            (typeof body?.error === "string" ? body.error : "That order could not be started."),
+        );
         if (body?.reason === "colour_taken" || body?.reason === "war_full") void refreshColours();
         // Re-enabled here rather than in a `finally`: on the success path the
         // page is already navigating away, and a button that came back to
@@ -191,7 +220,7 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
             {resolving ? "Looking…" : "Find token"}
           </button>
         </div>
-        <p className="text-[12px] opacity-80">{chain?.addressHint}</p>
+        <p className="muted text-[12px]">{chain?.addressHint}</p>
 
         {token ? (
           <div className="bevel-in mt-2 flex items-center gap-3 p-3" style={{ background: "var(--chrome-readout)" }}>
@@ -229,43 +258,48 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
               onSelect={setSelected}
               surface="control"
             />
-            <p className="text-[12px] opacity-80">
+            <p className="muted text-[12px]">
               {free.length} of {war.maxTokens} colours are still open. A colour belongs to one
               token for the whole war.
             </p>
           </>
         ) : (
-          <p className="text-[13px] opacity-80">Find your token first.</p>
+          <p className="muted text-[13px]">Find your token first.</p>
         )}
       </Step>
 
       <Step label="3 · Wallet">
         <WalletConnect />
-        <p className="text-[12px] opacity-80">
+        <p className="muted text-[12px]">
           {publicKey
             ? "Only this wallet will be able to pay for the order."
             : "You can connect on the next screen instead. An order started without a wallet accepts the first payment that matches it."}
         </p>
       </Step>
 
-      {error ? (
-        <p role="alert" className="bevel-in p-3 text-[13px]" style={{ background: "var(--chrome-panel)" }}>
-          {error}
-        </p>
-      ) : null}
+      {/* Text lives on panels, never on the bare surround: quiet text needs a
+          surface with headroom under DESIGN.md §9, and the surround has none.
+          The action and its footnote share one panel for that reason. */}
+      <section className="panel bevel flex flex-col gap-3 p-4">
+        {error ? (
+          <p role="alert" className="bevel-in p-3 text-[13px]" style={{ background: "var(--chrome-control)" }}>
+            {error}
+          </p>
+        ) : null}
 
-      <button
-        type="button"
-        className="btn-primary px-6 py-3"
-        disabled={!token || chosen === null || starting}
-        onClick={() => void startOrder()}
-      >
-        {starting ? "Starting…" : `Continue — $${war.entryPriceUsd} USDC`}
-      </button>
-      <p className="text-[12px] opacity-80">
-        Payment is USDC on Solana, whichever chain the token itself lives on. The colour is held
-        for you while the order is open.
-      </p>
+        <button
+          type="button"
+          className="btn-primary px-6 py-3"
+          disabled={!token || chosen === null || starting}
+          onClick={() => void startOrder()}
+        >
+          {starting ? "Starting…" : `Continue — $${war.entryPriceUsd} USDC`}
+        </button>
+        <p className="muted text-[12px]">
+          Payment is USDC on Solana, whichever chain the token itself lives on. The colour is held
+          for you while the order is open.
+        </p>
+      </section>
     </div>
   );
 }

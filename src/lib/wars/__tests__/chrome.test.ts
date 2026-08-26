@@ -14,7 +14,12 @@ import { PALETTE, CANVAS_GROUND, rgbDistance } from "../palette";
 import {
   AA_NORMAL_TEXT,
   ACCENT,
+  BODY_TEXT_CONTRAST,
   CHIP_OUTLINE,
+  INK,
+  MUTED_INK,
+  MUTED_INK_SURFACES,
+  READOUT_TEXT_CONTRAST,
   contrastRatio,
   CHROME_SURFACES,
   CHROME_TOKEN_DISTANCE,
@@ -133,7 +138,51 @@ describe("a chrome colour is legible under the text it carries", () => {
   });
 
   it("holds readout and body text well above the floor, per DESIGN.md §9", () => {
-    expect(contrastRatio("#21242E", CHROME_SURFACES.readout)).toBeGreaterThanOrEqual(8);
-    expect(contrastRatio("#21242E", CHROME_SURFACES.panel)).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio(INK, CHROME_SURFACES.readout)).toBeGreaterThanOrEqual(READOUT_TEXT_CONTRAST);
+    expect(contrastRatio(INK, CHROME_SURFACES.panel)).toBeGreaterThanOrEqual(BODY_TEXT_CONTRAST);
+    expect(contrastRatio(INK, CHROME_SURFACES.surround)).toBeGreaterThanOrEqual(BODY_TEXT_CONTRAST);
+  });
+
+  // De-emphasis is a colour, never opacity on the ink. Opacity turns a
+  // measured value into an unmeasured one and does it invisibly: #21242E at
+  // 80% over the readout renders 5.37:1 against a stated floor of 8:1, and
+  // the colour still passes every test in this file while the element on
+  // screen fails. These cases exist so the quiet ink is measured too.
+  it("carries body text at the floor on every surface it is allowed on", () => {
+    for (const surface of MUTED_INK_SURFACES) {
+      expect(contrastRatio(MUTED_INK, CHROME_SURFACES[surface])).toBeGreaterThanOrEqual(
+        BODY_TEXT_CONTRAST,
+      );
+    }
+  });
+
+  it("is not allowed on the surfaces where it would not clear the floor", () => {
+    // The control that keeps MUTED_INK_SURFACES honest rather than decorative.
+    // The readout and the surround are excluded because they have no headroom
+    // at all — INK itself reads 8.40 against a floor of 8, and 7.20 against a
+    // floor of 7 — so any lighter ink fails there, and this asserts it does.
+    expect(MUTED_INK_SURFACES).not.toContain("readout");
+    expect(MUTED_INK_SURFACES).not.toContain("surround");
+    expect(contrastRatio(MUTED_INK, CHROME_SURFACES.readout)).toBeLessThan(READOUT_TEXT_CONTRAST);
+    expect(contrastRatio(MUTED_INK, CHROME_SURFACES.surround)).toBeLessThan(BODY_TEXT_CONTRAST);
+  });
+
+  it("rejects opacity as a way to quiet text — the failure that added this rule", () => {
+    // 80% ink over the readout, composited the way a browser does it. This is
+    // what shipped, and it is 5.37:1.
+    expect(contrastRatio(composite(INK, CHROME_SURFACES.readout, 0.8), CHROME_SURFACES.readout))
+      .toBeLessThan(READOUT_TEXT_CONTRAST);
+    expect(contrastRatio(composite(INK, CHROME_SURFACES.panel, 0.8), CHROME_SURFACES.panel))
+      .toBeLessThan(BODY_TEXT_CONTRAST);
   });
 });
+
+/** `alpha` of `over` composited on `under`, per-channel, as a browser does it. */
+function composite(over: string, under: string, alpha: number): string {
+  const channel = (hex: string, index: number) =>
+    Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16);
+  const mixed = [0, 1, 2].map((i) =>
+    Math.round(channel(over, i) * alpha + channel(under, i) * (1 - alpha)),
+  );
+  return `#${mixed.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
