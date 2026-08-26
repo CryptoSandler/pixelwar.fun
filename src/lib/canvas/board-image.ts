@@ -1,4 +1,4 @@
-import { PALETTE_SIZE, rgba } from "../wars/palette";
+import { rgba } from "../wars/palette";
 
 /**
  * The board as pixels, kept as two parallel buffers: the palette slot per
@@ -14,12 +14,24 @@ import { PALETTE_SIZE, rgba } from "../wars/palette";
 export class BoardImage {
   readonly slots: Uint8Array;
   readonly rgbaBuffer: Uint8ClampedArray;
-  private readonly palette = rgba();
+  private readonly palette: Uint8ClampedArray;
 
+  /**
+   * `palette` decides what a byte MEANS, and the two layers disagree about
+   * that — the colour layer's bytes are painted colours (0..24), the
+   * territory layer's are owning token slots (0..255). Passing the wrong
+   * table does not throw; it silently blanks every pixel the table cannot
+   * name, because `isKnownSlot` degrades an unrenderable byte to unpainted.
+   * That is the right policy for a corrupt board and the wrong one for a
+   * layer mismatch, which is why the table is an argument rather than
+   * something this class guesses.
+   */
   constructor(
     readonly width: number,
     readonly height: number,
+    palette: Uint8ClampedArray = rgba(),
   ) {
+    this.palette = palette;
     this.slots = new Uint8Array(width * height);
     this.rgbaBuffer = new Uint8ClampedArray(width * height * 4);
     this.repaintAll();
@@ -52,8 +64,15 @@ export class BoardImage {
     return this.slots[idx] ?? 0;
   }
 
+  /**
+   * Derived from the palette table this instance was given, not from
+   * `PALETTE_SIZE`. Hard-coding the palette's own size here was correct while
+   * a byte could only ever be a painted colour; it would now silently blank
+   * every territory pixel owned by a token past the 24th, because that table
+   * is 256 entries long and this test would still stop at 24.
+   */
   private isKnownSlot(slot: number): boolean {
-    return Number.isInteger(slot) && slot >= 0 && slot <= PALETTE_SIZE;
+    return Number.isInteger(slot) && slot >= 0 && slot < this.palette.length / 4;
   }
 
   private repaintAll(): void {

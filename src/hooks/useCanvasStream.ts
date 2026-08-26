@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BoardImage } from "../lib/canvas/board-image";
+import { flagRgba, rgba } from "../lib/wars/palette";
 
 const POLL_MS = 1500;
 
@@ -38,7 +39,10 @@ export function useCanvasStream(warSlug: string, layer: "colour" | "token" = "co
     const height = Number(response.headers.get("x-canvas-height"));
     seq.current = Number(response.headers.get("x-canvas-seq"));
 
-    const next = new BoardImage(width, height);
+    // The table has to match the layer: a byte on the colour layer is a
+    // painted colour, on the territory layer it is an owning token's slot,
+    // and those run past the palette's own range. See `BoardImage`.
+    const next = new BoardImage(width, height, layer === "token" ? flagRgba() : rgba());
     next.setBase(new Uint8Array(await response.arrayBuffer()));
     setImage(next);
     setVersion((v) => v + 1);

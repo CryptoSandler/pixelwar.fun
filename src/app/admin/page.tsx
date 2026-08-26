@@ -42,6 +42,9 @@ export default async function AdminPage({
             <Link href="/admin/orphans" className="btn-primary px-4 py-2">
               Unmatched payments
             </Link>
+            <Link href="/admin/wars" className="btn-secondary px-4 py-2">
+              Wars
+            </Link>
             <AdminSignOut />
           </div>
         </section>

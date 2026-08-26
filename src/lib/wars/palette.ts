@@ -70,3 +70,56 @@ export function rgba(): Uint8ClampedArray {
   }
   return table;
 }
+
+/**
+ * The maximum token slot a war can seat, and therefore the maximum value the
+ * territory layer's byte can carry. 0 is reserved for unpainted.
+ *
+ * Not a preference — see migration 008. It is what one byte can name.
+ */
+export const MAX_TOKEN_SLOT = 255;
+
+/**
+ * A TOKEN's flag colour, which is not the same function as `colourForSlot`
+ * and must not be merged with it.
+ *
+ * `colourForSlot` answers "what colour is this painted pixel" and is strict:
+ * a slot outside 0..24 is a corrupt byte and throws, because there is no
+ * honest colour to return for one. This answers "what colour stands for this
+ * token", where slots run to `MAX_TOKEN_SLOT` and the palette has 24 entries,
+ * so it WRAPS.
+ *
+ * The wrap is the visible cost of a 24-colour palette and is documented in
+ * migration 008: past 24 tokens, two of them carry the same flag and are told
+ * apart on the scoreboard by ticker. A war that wants every token visually
+ * distinct keeps its admission cap at 24, which is still the default.
+ *
+ * Merging the two functions would mean one of the two callers silently gets
+ * the other's policy — either a corrupt canvas byte quietly rendering as a
+ * valid colour, or a legitimate 25th token throwing and taking a page down.
+ */
+export function flagColourForSlot(slot: number): string {
+  if (!Number.isInteger(slot) || slot < 0 || slot > MAX_TOKEN_SLOT) {
+    throw new RangeError(`Token slot ${slot} is outside 0..${MAX_TOKEN_SLOT}`);
+  }
+  if (slot === 0) return CANVAS_GROUND;
+  return PALETTE[(slot - 1) % PALETTE_SIZE];
+}
+
+/**
+ * Slot-indexed RGBA for the TERRITORY layer, covering every token slot a war
+ * can seat rather than only the palette's own range.
+ *
+ * A separate table from `rgba()` because the two layers disagree about what a
+ * byte means, and `BoardImage` rejects any byte its table cannot name. Handing
+ * the colour layer's 25-entry table to the territory layer would silently
+ * blank every pixel owned by a token past the 24th.
+ */
+export function flagRgba(): Uint8ClampedArray {
+  const table = new Uint8ClampedArray((MAX_TOKEN_SLOT + 1) * 4);
+  for (let slot = 0; slot <= MAX_TOKEN_SLOT; slot++) {
+    const [r, g, b] = toRgb(flagColourForSlot(slot));
+    table.set([r, g, b, 255], slot * 4);
+  }
+  return table;
+}
