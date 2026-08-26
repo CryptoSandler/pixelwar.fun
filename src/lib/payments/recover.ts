@@ -29,7 +29,8 @@ import { verifyPayment, type TransactionFetcher } from "./solana";
  * anything, exactly as they do for a signature a payer submits by hand, and
  * a candidate that turns out to be junk (a stranger's dust transfer naming
  * this reference, say) must never be allowed to stop the search for the real
- * one. See the loop below for how that is kept true.
+ * one, or to crowd it out of the search entirely. See the loop below and
+ * `collectOldestCandidates` for how both are kept true.
  *
  * Every order this function can help has already expired unpaid — a fresh
  * `pending` order still has a payer's own browser polling `/confirm` for it,
@@ -39,18 +40,38 @@ import { verifyPayment, type TransactionFetcher } from "./solana";
  * disagree, and settlement is where a mistake costs somebody real money.
  */
 
-/** Fetches the signatures of every transaction that ever touched one reference account. */
-export type SignaturesFetcher = (reference: string) => Promise<string[]>;
+/** One entry from `getSignaturesForAddress`, reduced to what this file needs. */
+export type SignatureCandidate = {
+  signature: string;
+  /**
+   * Unix seconds, as the chain reports it. `null` when the chain does not
+   * report one for this entry — treated conservatively throughout this file
+   * (never assumed to be old enough to stop paging on, never assumed to
+   * predate an order's `createdAt`).
+   */
+  blockTime: number | null;
+};
+
+/**
+ * Fetches one page of the signatures whose transaction named `reference`,
+ * newest first, strictly older than `before` when it is supplied (omitted
+ * for the newest page). Mirrors `getSignaturesForAddress`'s own paging
+ * contract so the default implementation is a thin wrapper over the real
+ * RPC call.
+ */
+export type SignaturesPageFetcher = (
+  reference: string,
+  before?: string,
+) => Promise<SignatureCandidate[]>;
 
 export type RecoveryFetcher = {
   /**
-   * Signatures whose transaction named this order's reference account, in
-   * the order the chain returns them (newest first from a real
-   * `getSignaturesForAddress`). Defaults to a real RPC call. Untrusted —
-   * see the module doc comment — and capped at `MAX_SIGNATURES_PER_REFERENCE`
-   * regardless of how many this returns.
+   * Untrusted — see the module doc comment. Defaults to a real, paged RPC
+   * call. `collectOldestCandidates` is what turns however many pages this
+   * returns into the bounded, oldest-first candidate list the loop below
+   * actually verifies.
    */
-  signatures?: SignaturesFetcher;
+  signatures?: SignaturesPageFetcher;
   /**
    * Forwarded to `verifyPayment` unchanged. Omit it and `verifyPayment`
    * reaches the real RPC itself, exactly as it does for `/confirm`.
@@ -65,9 +86,9 @@ export type RecoveryFetcher = {
  * is configured — see `solanaRpcUrls`), whose rate limit is shared with
  * every payer's live checkout: `verifyPayment` alone spends a real
  * `getTransaction` request per signature it looks at, on top of the
- * `getSignaturesForAddress` call this function makes per order. A recovery
- * pass that exhausts the quota to rescue old payments would break the
- * checkout it exists to protect. Called "lazily today" and, later, on a
+ * `getSignaturesForAddress` calls `collectOldestCandidates` makes per order.
+ * A recovery pass that exhausts the quota to rescue old payments would break
+ * the checkout it exists to protect. Called "lazily today" and, later, on a
  * schedule (Batch E's reconcile cron); either caller can simply run this
  * again a moment later to keep working through a longer backlog — which is
  * only true because `recovery_attempted_at` (see `unclaimedOrders` below)
@@ -77,17 +98,39 @@ export type RecoveryFetcher = {
 const MAX_ORDERS_PER_PASS = 20;
 
 /**
- * How many signatures we ask the chain for, and act on, per reference. A
- * reference is minted for one order and should have at most one real
- * transfer; a handful of extra slots covers a payer who retried (e.g.
- * topping up an underpayment) in a second transaction against the same
- * reference — or, since the reference is public the moment the real payment
- * lands (see the module doc comment), a stranger naming it in a handful of
- * junk transactions. Enforced twice: sent as the RPC request's own `limit`
- * (`callGetSignaturesForAddress` below), and sliced again on whatever comes
- * back, so an injected fetcher — or an endpoint that simply ignores the
- * request parameter — cannot hand this function an unbounded list to work
- * through.
+ * How many signatures we request per `getSignaturesForAddress` call.
+ * Deliberately wide: the ordinary order (one real transfer, maybe one retry)
+ * is fully covered by a single page at this size, so `collectOldestCandidates`
+ * makes exactly one RPC call for it — the same cost as before this file paged
+ * at all.
+ */
+const SIGNATURE_PAGE_SIZE = 25;
+
+/**
+ * How many pages `collectOldestCandidates` will fetch, backward, per order,
+ * looking for a transaction at or before that order's own `createdAt` (see
+ * that function for why finding one means the search is complete).
+ * `SIGNATURE_PAGE_SIZE * SIGNATURE_PAGE_CEILING` = 100 transactions examined
+ * for paging purposes, which is generous room for a determined but not
+ * extraordinary flood of dust naming one reference, while keeping the worst
+ * case — this many RPC round trips, per order, on top of the unchanged
+ * `getTransaction` spend below — small enough that `MAX_ORDERS_PER_PASS`
+ * orders in one pass cannot turn into an unbounded request storm. Past this
+ * many pages without ever finding the boundary is treated as an operator
+ * problem, not something to keep retrying silently — see the `console.error`
+ * in `collectOldestCandidates`.
+ */
+const SIGNATURE_PAGE_CEILING = 4;
+
+/**
+ * How many candidates `verifyPayment` — and the real `getTransaction` request
+ * each call spends — is run against, per order, per pass. Independent of how
+ * many pages `collectOldestCandidates` had to fetch to assemble that list:
+ * `SIGNATURE_PAGE_CEILING` widens the (cheaper, batchable) *fetch*, this caps
+ * the (expensive) *verification spend*, and the two are deliberately not the
+ * same knob. A reference should have at most one real transfer; a handful of
+ * extra slots covers a payer who retried (e.g. topping up an underpayment) in
+ * a second transaction against the same reference.
  */
 const MAX_SIGNATURES_PER_REFERENCE = 5;
 
@@ -101,6 +144,14 @@ const MAX_SIGNATURES_PER_REFERENCE = 5;
  * being short enough that abandoned reservations — the overwhelming majority
  * of expired orders — eventually age out of the candidate set entirely,
  * rather than sitting in it, unresolvable, forever.
+ *
+ * The cost of that bound, stated plainly rather than only in its own favour:
+ * a real payment against an order older than this is never recovered *and
+ * never filed to `unmatched_payments`* — it is invisible to the only people
+ * who could return it, with no log line anywhere marking the moment it
+ * stopped being looked for. If that ever needs to be undone by hand, the
+ * order row and its `reference_pubkey` are still sitting in `entry_orders`;
+ * nothing about this bound deletes either.
  */
 const RECOVERY_MAX_AGE_DAYS = 7;
 
@@ -131,10 +182,9 @@ const FILED_REASONS = new Set<SettleFailureReason>([
  * Runs one recovery pass.
  *
  * For each expired, still-unpaid order (capped at `MAX_ORDERS_PER_PASS`,
- * least-recently-examined first — see `unclaimedOrders`), asks the chain for
- * signatures that touched its reference and tries every one, in the order
- * the chain returned them (capped at `MAX_SIGNATURES_PER_REFERENCE`), until
- * one settles the order.
+ * least-recently-examined first — see `unclaimedOrders`), assembles that
+ * order's oldest-first candidate signatures (`collectOldestCandidates`) and
+ * tries every one, in that order, until one settles the order.
  *
  * A filed verdict (`FILED_REASONS`) does not stop the search: it means
  * *this candidate* is not this order's payment — a stray transfer that
@@ -160,6 +210,16 @@ const FILED_REASONS = new Set<SettleFailureReason>([
  * stays the order's real `createdAt`: a payment cannot predate the order
  * whose reference it names, so widening backward would only ever admit more
  * candidates a hostile sender could throw at this loop, never a real one.
+ *
+ * Every order is examined and stamped exactly once per pass, whatever
+ * happens while examining it — `collectOldestCandidates` or `settlePayment`
+ * throwing included. Without that, an order with a persistently failing
+ * signature fetch would keep `recovery_attempted_at IS NULL` forever, sort
+ * ahead of every other candidate on every future pass (`NULLS FIRST` —
+ * see `unclaimedOrders`), and the pass would walk into it and die each time,
+ * starving every order behind it — the exact failure mode the marker exists
+ * to prevent, reintroduced through the error path instead of the selection
+ * query.
  */
 export async function recoverUnclaimedOrders(
   fetcher: RecoveryFetcher = {},
@@ -173,51 +233,58 @@ export async function recoverUnclaimedOrders(
     return { recovered, filed };
   }
 
-  const fetchSignatures = fetcher.signatures ?? defaultFetchSignatures;
+  const fetchSignaturePage = fetcher.signatures ?? defaultFetchSignaturesPage;
   const orders = await unclaimedOrders(MAX_ORDERS_PER_PASS);
 
   for (const order of orders) {
-    const candidates = (await fetchSignatures(order.referencePubkey)).slice(
-      0,
-      MAX_SIGNATURES_PER_REFERENCE,
-    );
-
     let orderFiled = false;
 
-    for (const signature of candidates) {
-      const verified = await verifyPayment({
-        signature,
-        expectedBaseUnits: usdToBaseUnits(order.amountUsd),
-        wallet: wallet.address,
-        expectedPayer: order.payerPubkey ?? undefined,
-        // See the widened-window paragraph on this function.
-        createdAtMs: order.createdAt.getTime(),
-        expiresAtMs: Date.now(),
-        fetchTransaction: fetcher.transaction,
-      });
+    try {
+      const candidates = await collectOldestCandidates(
+        fetchSignaturePage,
+        order.id,
+        order.referencePubkey,
+        order.createdAt.getTime(),
+      );
 
-      const result = await settlePayment({ order, signature, verified });
+      for (const signature of candidates) {
+        const verified = await verifyPayment({
+          signature,
+          expectedBaseUnits: usdToBaseUnits(order.amountUsd),
+          wallet: wallet.address,
+          expectedPayer: order.payerPubkey ?? undefined,
+          // See the widened-window paragraph on this function.
+          createdAtMs: order.createdAt.getTime(),
+          expiresAtMs: Date.now(),
+          fetchTransaction: fetcher.transaction,
+        });
 
-      if (result.ok) {
-        recovered.push(order.id);
-        break;
+        const result = await settlePayment({ order, signature, verified });
+
+        if (result.ok) {
+          recovered.push(order.id);
+          break;
+        }
+
+        if (FILED_REASONS.has(result.reason) && !orderFiled) {
+          filed.push(order.id);
+          orderFiled = true;
+        }
+
+        // Not a break: signature_reused, a filed verdict, or a verdict
+        // settlePayment leaves entirely unclaimed all mean only that THIS
+        // candidate is not (or is no longer usable as) this order's payment.
+        // The next one might still be — see the function's own doc comment.
       }
-
-      if (FILED_REASONS.has(result.reason) && !orderFiled) {
-        filed.push(order.id);
-        orderFiled = true;
-      }
-
-      // Not a break: signature_reused, a filed verdict, or a verdict
-      // settlePayment leaves entirely unclaimed all mean only that THIS
-      // candidate is not (or is no longer usable as) this order's payment.
-      // The next one might still be — see the function's own doc comment.
+    } finally {
+      // Examined either way — settled, filed, exhausted its candidates
+      // without a verdict, or the search itself threw: this is what lets
+      // the next pass move on to different candidates instead of re-reading
+      // this row forever. See `unclaimedOrders` and this function's own doc
+      // comment on why the stamp must survive a throw, not just the happy
+      // path.
+      await execute(`UPDATE entry_orders SET recovery_attempted_at = now() WHERE id = $1`, [order.id]);
     }
-
-    // Examined either way, whatever was found: this is what lets the next
-    // pass move on to different candidates instead of re-reading this row
-    // forever. See `unclaimedOrders`.
-    await execute(`UPDATE entry_orders SET recovery_attempted_at = now() WHERE id = $1`, [order.id]);
   }
 
   return { recovered, filed };
@@ -230,21 +297,22 @@ export async function recoverUnclaimedOrders(
  *
  * `recovery_attempted_at IS NULL` sorts first (`NULLS FIRST`): an order no
  * pass has ever looked at outranks one already checked and found wanting, so
- * — combined with `recoverUnclaimedOrders` stamping every order it examines
- * — a pass makes forward progress through the whole candidate set instead of
- * re-reading the same oldest rows every single time (migration 004's own
- * comment has the full failure mode this closes). Ties (including "never
- * examined", where every value is the same NULL) break on `expires_at DESC`:
- * the most-recently-expired orders are the only ones still inside
- * `LATE_CONFIRM_GRACE_MINUTES` of their own expiry, i.e. the only ones a
- * settlement can still reclaim a colour for rather than merely file, so among
- * equally-unexamined candidates those get first look.
+ * — combined with `recoverUnclaimedOrders` stamping every order it examines,
+ * even one it threw on — a pass makes forward progress through the whole
+ * candidate set instead of re-reading the same oldest rows every single time
+ * (migration 004's own comment has the full failure mode this closes). Ties
+ * (including "never examined", where every value is the same NULL) break on
+ * `expires_at DESC`: the most-recently-expired orders are the only ones
+ * still inside `LATE_CONFIRM_GRACE_MINUTES` of their own expiry, i.e. the
+ * only ones a settlement can still reclaim a colour for rather than merely
+ * file, so among equally-unexamined candidates those get first look.
  *
  * `RECOVERY_MAX_AGE_DAYS` keeps a genuinely dead order — the ordinary,
  * abandoned reservation nobody ever paid for — from being a candidate
  * forever: without it, a large enough backlog of those still limits how much
  * of the truly live set fits in one `MAX_ORDERS_PER_PASS`-sized pass, even
- * with the progress marker rotating through them.
+ * with the progress marker rotating through them. See that constant's own
+ * comment for what this costs, not just what it buys.
  *
  * Reads through `orderById` rather than mapping `entry_orders` rows a second
  * time, so this file carries no second copy of that mapping to drift from
@@ -267,7 +335,98 @@ async function unclaimedOrders(limit: number): Promise<Order[]> {
   return orders;
 }
 
-type SignatureEntry = { signature?: string };
+/**
+ * Assembles one order's candidate signatures, oldest first, capped at
+ * `MAX_SIGNATURES_PER_REFERENCE`.
+ *
+ * This is the fix for the attack `getSignaturesForAddress`'s newest-first
+ * ordering otherwise enables: the reference only becomes public once the
+ * payer's own transfer lands on chain (it is a read-only account in that
+ * transaction, and is returned to the browser no earlier). Nobody can build
+ * a transaction naming a reference they have not yet observed, so the real
+ * transfer — if one exists — is always the OLDEST transaction naming a given
+ * reference; nothing sent later, by anyone, can ever get in front of it.
+ * Taking the newest few (the original shape) is exactly backward for that
+ * reason: enough recent junk, all sent after the real payment, pushes the
+ * one transaction that matters out of a fixed-size newest-first window
+ * entirely — permanently, since a reference that has already collected five
+ * newer dust transfers collects the identical five again on every future
+ * pass. Paging backward and keeping the oldest few instead means a real
+ * payment survives any amount of newer dust, up to the page ceiling below.
+ *
+ * Paging stops, and the search is considered complete, the moment a page's
+ * oldest entry has a block time at or before `createdAtMs`: a fresh
+ * reference has no history before the order that minted it, so a
+ * transaction that old cannot be the real payment, and everything newer than
+ * it has, by construction, already been collected in an earlier page. Paging
+ * also stops on an empty or short page (there is no more history to fetch)
+ * or after `SIGNATURE_PAGE_CEILING` pages, whichever comes first; the last
+ * case is logged (see below), since it means a reference has more than
+ * `SIGNATURE_PAGE_SIZE * SIGNATURE_PAGE_CEILING` transactions naming it
+ * without the boundary ever being found, which is not something a well-
+ * behaved order produces on its own.
+ *
+ * This widens the *fetch* only: `getTransaction` — the expensive per-
+ * signature RPC call `verifyPayment` makes — is still capped at
+ * `MAX_SIGNATURES_PER_REFERENCE` regardless of how many pages were fetched
+ * to find those candidates; only the cheaper, batchable
+ * `getSignaturesForAddress` calls scale with `SIGNATURE_PAGE_CEILING`.
+ */
+async function collectOldestCandidates(
+  fetchPage: SignaturesPageFetcher,
+  orderId: string,
+  reference: string,
+  createdAtMs: number,
+): Promise<string[]> {
+  const collected: SignatureCandidate[] = [];
+  let before: string | undefined;
+  let stoppedEarly = false;
+
+  for (let page = 0; page < SIGNATURE_PAGE_CEILING; page++) {
+    const entries = await fetchPage(reference, before);
+    if (entries.length === 0) {
+      stoppedEarly = true;
+      break;
+    }
+    collected.push(...entries);
+
+    const oldestInPage = entries[entries.length - 1];
+    const pageCoversCreation =
+      typeof oldestInPage.blockTime === "number" && oldestInPage.blockTime * 1000 <= createdAtMs;
+    const noMoreHistory = entries.length < SIGNATURE_PAGE_SIZE;
+
+    if (pageCoversCreation || noMoreHistory) {
+      stoppedEarly = true;
+      break;
+    }
+    before = oldestInPage.signature;
+  }
+
+  if (!stoppedEarly) {
+    // The page ceiling was reached without ever finding a transaction at or
+    // before this order's own createdAt — a flood, not ordinary usage. Made
+    // visible rather than silently retried every pass, since nothing here
+    // can distinguish "extraordinary but real" from "an attacker is
+    // deliberately burying this order's payment".
+    console.error(
+      `recoverUnclaimedOrders: order ${orderId}, reference ${reference} — reached the ` +
+        `${SIGNATURE_PAGE_CEILING}-page ceiling (${collected.length} transactions seen) ` +
+        `without finding one at or before the order's own createdAt; examining the oldest ` +
+        `${MAX_SIGNATURES_PER_REFERENCE} found so far.`,
+    );
+  }
+
+  // Anything at or before createdAt cannot be this order's payment (see the
+  // function's own doc comment) and would only waste a verification slot —
+  // excluded here rather than left for verifyPayment's own window check to
+  // reject one candidate at a time.
+  const relevant = collected.filter(
+    (entry) => entry.blockTime === null || entry.blockTime * 1000 > createdAtMs,
+  );
+
+  const oldestFirst = relevant.slice().reverse();
+  return oldestFirst.slice(0, MAX_SIGNATURES_PER_REFERENCE).map((entry) => entry.signature);
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -277,17 +436,22 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * having a bad moment for either RPC method, and the same rotation-plus-
  * backoff shape covers it here without inventing a second policy.
  */
-async function defaultFetchSignatures(reference: string): Promise<string[]> {
+async function defaultFetchSignaturesPage(
+  reference: string,
+  before?: string,
+): Promise<SignatureCandidate[]> {
   const endpoints = solanaRpcUrls();
   let lastError: unknown = new Error("No RPC endpoint configured");
 
   for (let attempt = 0; attempt < RPC_MAX_ATTEMPTS; attempt++) {
     const endpoint = endpoints[attempt % endpoints.length];
     try {
-      const entries = await callGetSignaturesForAddress(endpoint, reference);
+      const entries = await callGetSignaturesForAddress(endpoint, reference, before);
       return entries
-        .map((entry) => entry.signature)
-        .filter((signature): signature is string => Boolean(signature));
+        .filter((entry): entry is { signature: string; blockTime?: number | null } =>
+          Boolean(entry.signature),
+        )
+        .map((entry) => ({ signature: entry.signature, blockTime: entry.blockTime ?? null }));
     } catch (error) {
       lastError = error;
       if (attempt < RPC_MAX_ATTEMPTS - 1) {
@@ -299,10 +463,19 @@ async function defaultFetchSignatures(reference: string): Promise<string[]> {
   throw lastError;
 }
 
+type RawSignatureEntry = { signature?: string; blockTime?: number | null };
+
 async function callGetSignaturesForAddress(
   endpoint: string,
   reference: string,
-): Promise<SignatureEntry[]> {
+  before: string | undefined,
+): Promise<RawSignatureEntry[]> {
+  const params: { limit: number; commitment: string; before?: string } = {
+    limit: SIGNATURE_PAGE_SIZE,
+    commitment: RPC_COMMITMENT,
+  };
+  if (before) params.before = before;
+
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -312,12 +485,12 @@ async function callGetSignaturesForAddress(
       jsonrpc: "2.0",
       id: 1,
       method: "getSignaturesForAddress",
-      params: [reference, { limit: MAX_SIGNATURES_PER_REFERENCE, commitment: RPC_COMMITMENT }],
+      params: [reference, params],
     }),
   });
 
   if (!response.ok) throw new Error(`RPC responded ${response.status}`);
-  const payload = (await response.json()) as { result?: SignatureEntry[]; error?: unknown };
+  const payload = (await response.json()) as { result?: RawSignatureEntry[]; error?: unknown };
   if (payload.error) throw new Error("RPC returned an error");
   return payload.result ?? [];
 }

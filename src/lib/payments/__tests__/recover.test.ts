@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { base58Encode } from "../../base58";
 import { execute, query, queryOne } from "../../db";
 import type { War } from "../../wars/lifecycle";
@@ -164,13 +164,22 @@ function fixtureTransaction(options: {
   };
 }
 
-/** Builds a fetcher from plain maps: reference -> its signatures, signature -> its transaction. */
+/**
+ * Builds a fetcher from plain maps: reference -> its signatures (newest
+ * first, exactly as given), signature -> its transaction. `blockTime` is
+ * always `null` — every array here is far shorter than `SIGNATURE_PAGE_SIZE`,
+ * so `collectOldestCandidates` always stops after the single page this
+ * returns regardless of `before`, the same as it did before paging existed.
+ * Tests that need genuine multi-page behaviour build their own fetcher
+ * instead — see the "pages backward" and "page ceiling" tests below.
+ */
 function mapFetcher(
   signaturesByReference: Record<string, string[]>,
   transactionsBySignature: Record<string, SolanaTransaction>,
 ): RecoveryFetcher {
   return {
-    signatures: async (reference) => signaturesByReference[reference] ?? [],
+    signatures: async (reference) =>
+      (signaturesByReference[reference] ?? []).map((signature) => ({ signature, blockTime: null })),
     transaction: async (signature) => transactionsBySignature[signature] ?? null,
   };
 }
@@ -530,10 +539,13 @@ describe("recoverUnclaimedOrders", () => {
     "settles the real payment even when an earlier candidate for the same order is filed first",
     { timeout: 20_000 },
     async () => {
-      // getSignaturesForAddress returns newest first, and the reference is
-      // public the instant the real payment lands, so a junk candidate can
-      // easily be found before the genuine one. A filed verdict must not
-      // stop the search.
+      // Candidates are examined oldest first (see collectOldestCandidates),
+      // and the real payment is always the OLDEST transaction naming a
+      // reference — so the realistic way a filed verdict lands ahead of the
+      // real one is the payer's own earlier, genuine attempt: an
+      // underpayment, topped up moments later from the same wallet. Listed
+      // here newest-first, exactly like the real RPC: the top-up first, the
+      // original underpayment last (oldest).
       const w = await war();
       const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
       const order = await expiredOrder({ warId: w.id, warTokenId: tokenId });
@@ -542,7 +554,7 @@ describe("recoverUnclaimedOrders", () => {
 
       const result = await recoverUnclaimedOrders(
         mapFetcher(
-          { [order.referencePubkey]: [dustSignature, realSignature] },
+          { [order.referencePubkey]: [realSignature, dustSignature] },
           {
             // Far under the order's price: insufficient_amount, filed, and —
             // per settle.ts — the signature is NOT consumed.
@@ -614,30 +626,51 @@ describe("recoverUnclaimedOrders", () => {
   );
 
   it(
-    "caps a pass at MAX_ORDERS_PER_PASS candidates, and the deferred ones are reachable on the next pass",
-    // Well past the usual 20_000: 21 orders created, then two full passes
-    // that each genuinely settle every order they examine (21 real
-    // settlePayment transactions in total) — the most database round trips
-    // of any test in this file, not a sign of a hung test.
-    { timeout: 120_000 },
+    "caps a pass at MAX_ORDERS_PER_PASS candidates",
+    { timeout: 20_000 },
     async () => {
+      // 21 candidates, none of them resolvable — this test is purely about
+      // how many of the 21 one pass examines (and therefore stamps), not
+      // about settlement, so it tests the cap directly rather than through
+      // the side effect of orders leaving the candidate set once paid. "The
+      // deferred ones are reachable on the next pass" is proven better, and
+      // already, by the starvation test below.
+      // One combined statement per order (token + order together, via a
+      // CTE) rather than the usual two-helper-calls-plus-a-readback shape:
+      // this test's own setup cost is otherwise the dominant part of its
+      // 20s budget, on top of the pass itself examining 20 real candidates.
       const w = await war({ maxTokens: 24 });
-      const { orders, signaturesByReference, transactionsBySignature } = await manyResolvableOrders(
-        w,
-        21,
-        1,
+      const orderIds: string[] = [];
+      for (let i = 0; i < 21; i++) {
+        const tokenId = randomUUID();
+        const orderId = randomUUID();
+        await execute(
+          `WITH new_token AS (
+             INSERT INTO war_tokens
+               (id, war_id, chain_id, contract, contract_key, colour_slot, status,
+                name, ticker, metadata_fetched_at, reserved_at, released_at, released_reason)
+             VALUES ($1, $2, 'solana', $1, $3, $4, 'released', 'Fixture', 'FIX', now(), now(),
+                     now(), 'order_expired')
+             RETURNING id
+           )
+           INSERT INTO entry_orders
+             (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
+              created_at, expires_at)
+           SELECT $5, $2, new_token.id, 25, NULL, $6, 'expired',
+                  now() - interval '1 hour', now() - interval '2 minutes'
+             FROM new_token`,
+          [tokenId, w.id, randomUUID(), i + 1, orderId, randomUUID()],
+        );
+        orderIds.push(orderId);
+      }
+
+      await recoverUnclaimedOrders(mapFetcher({}, {}));
+
+      const stamped = await query<{ id: string }>(
+        `SELECT id FROM entry_orders WHERE id = ANY($1::text[]) AND recovery_attempted_at IS NOT NULL`,
+        [orderIds],
       );
-      const fetcher = mapFetcher(signaturesByReference, transactionsBySignature);
-
-      const first = await recoverUnclaimedOrders(fetcher);
-      expect(first.recovered).toHaveLength(20);
-
-      const second = await recoverUnclaimedOrders(fetcher);
-      expect(second.recovered).toHaveLength(1);
-
-      const allRecovered = [...first.recovered, ...second.recovered];
-      expect(new Set(allRecovered).size).toBe(21);
-      expect(allRecovered.sort()).toEqual(orders.map((o) => o.id).sort());
+      expect(stamped).toHaveLength(20);
     },
   );
 
@@ -711,7 +744,7 @@ describe("recoverUnclaimedOrders", () => {
 
       const fetcher: RecoveryFetcher = {
         signatures: async (reference) => {
-          if (reference === orderA.referencePubkey) return [sigA];
+          if (reference === orderA.referencePubkey) return [{ signature: sigA, blockTime: null }];
           if (reference === orderB.referencePubkey) throw boom;
           return [];
         },
@@ -730,14 +763,205 @@ describe("recoverUnclaimedOrders", () => {
       );
       expect(rowA.recovery_attempted_at).toBeTruthy();
 
-      // orderB was never reached: nothing committed for it, and its own
-      // progress marker is untouched, so it is still a fresh candidate.
+      // orderB WAS reached — its own signature fetch is exactly what threw
+      // — so nothing about it settled or was filed, but the `finally` block
+      // still stamps it: without that, orderB would keep
+      // recovery_attempted_at NULL forever, sort ahead of every other
+      // candidate on every future pass, and the pass would walk into it and
+      // die again each time. See the re-review's N1.
       const [rowB] = await query<{ recovery_attempted_at: Date | null; status: string }>(
         `SELECT recovery_attempted_at, status FROM entry_orders WHERE id = $1`,
         [orderB.id],
       );
       expect(rowB.status).toBe("expired");
-      expect(rowB.recovery_attempted_at).toBeNull();
+      expect(rowB.recovery_attempted_at).toBeTruthy();
+    },
+  );
+
+  it(
+    "excludes an order from candidacy once it is older than RECOVERY_MAX_AGE_DAYS, even with a real payment waiting",
+    { timeout: 20_000 },
+    async () => {
+      // The age bound is enforced in the candidate query's own WHERE clause
+      // (see unclaimedOrders), so an order past it is never even examined:
+      // no fetch, no verify, no stamp, and — the cost of the bound, not just
+      // its benefit — no unmatched_payments row either. The real payment,
+      // if one exists, is simply never found again.
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
+      const order = await expiredOrder({
+        warId: w.id,
+        warTokenId: tokenId,
+        expiredMinutesAgo: 8 * 24 * 60, // 8 days — past the 7-day age bound
+      });
+      const signature = randomSignature();
+
+      const result = await recoverUnclaimedOrders(
+        mapFetcher(
+          { [order.referencePubkey]: [signature] },
+          {
+            [signature]: fixtureTransaction({
+              amount: "25000000",
+              blockTimeMs: order.expiresAt.getTime() + 60_000,
+            }),
+          },
+        ),
+      );
+
+      expect(result.recovered).toEqual([]);
+      expect(result.filed).toEqual([]);
+
+      const [row] = await query<{ recovery_attempted_at: Date | null; status: string }>(
+        `SELECT recovery_attempted_at, status FROM entry_orders WHERE id = $1`,
+        [order.id],
+      );
+      expect(row.status).toBe("expired");
+      expect(row.recovery_attempted_at).toBeNull();
+      const unmatched = await query(`SELECT 1 FROM unmatched_payments WHERE order_id = $1`, [order.id]);
+      expect(unmatched).toHaveLength(0);
+    },
+  );
+
+  it(
+    "settles a real payment that arrived behind more than MAX_SIGNATURES_PER_REFERENCE newer dust transfers naming the same reference",
+    { timeout: 20_000 },
+    async () => {
+      // getSignaturesForAddress is newest-first. Five dust transfers, all
+      // necessarily sent after the real payment — a reference is public only
+      // once the real transfer lands, so nothing can be sent naming it
+      // earlier — would have crowded the real payment out of a fixed
+      // newest-N window entirely, on every pass, forever. Recovery pages
+      // backward and keeps the OLDEST candidates instead, so the real
+      // payment survives.
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
+      const order = await expiredOrder({ warId: w.id, warTokenId: tokenId });
+      const realSignature = randomSignature();
+      const dustSignatures = Array.from({ length: 5 }, () => randomSignature());
+
+      const transactionsBySignature: Record<string, SolanaTransaction> = {
+        [realSignature]: fixtureTransaction({ amount: "25000000" }),
+      };
+      for (const dust of dustSignatures) {
+        transactionsBySignature[dust] = fixtureTransaction({ amount: "1" });
+      }
+
+      const result = await recoverUnclaimedOrders(
+        mapFetcher(
+          // Newest first, exactly like the real RPC: five dust, then the
+          // real payment last — the oldest.
+          { [order.referencePubkey]: [...dustSignatures, realSignature] },
+          transactionsBySignature,
+        ),
+      );
+
+      expect(result.recovered).toEqual([order.id]);
+      const [paymentRow] = await query<{ signature: string }>(
+        `SELECT signature FROM payments WHERE order_id = $1`,
+        [order.id],
+      );
+      expect(paymentRow.signature).toBe(realSignature);
+    },
+  );
+
+  it(
+    "pages backward with `before` across multiple calls, and still finds the real payment several pages behind fresher dust",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
+      const order = await expiredOrder({ warId: w.id, warTokenId: tokenId });
+      const realSignature = randomSignature();
+
+      // Three full pages (SIGNATURE_PAGE_SIZE = 25 each, so none of them
+      // alone stops the paging) of dust, then a short fourth page holding
+      // only the real payment — proving collectOldestCandidates genuinely
+      // chains `before` across calls rather than only ever looking at the
+      // first page. The dust signatures never need transaction fixtures:
+      // only the oldest 5 collected candidates are ever verified, and the
+      // real payment — fetched last, so oldest once reversed — is always
+      // first among those.
+      const fullPage = () => Array.from({ length: 25 }, () => randomSignature());
+      const pages = [fullPage(), fullPage(), fullPage(), [realSignature]];
+      const beforeSeen: (string | undefined)[] = [];
+
+      const fetcher: RecoveryFetcher = {
+        signatures: async (reference, before) => {
+          expect(reference).toBe(order.referencePubkey);
+          beforeSeen.push(before);
+          const page = pages[beforeSeen.length - 1] ?? [];
+          return page.map((signature) => ({ signature, blockTime: null }));
+        },
+        transaction: async (signature) =>
+          signature === realSignature ? fixtureTransaction({ amount: "25000000" }) : null,
+      };
+
+      const result = await recoverUnclaimedOrders(fetcher);
+
+      expect(result.recovered).toEqual([order.id]);
+      expect(beforeSeen).toEqual([
+        undefined,
+        pages[0][pages[0].length - 1],
+        pages[1][pages[1].length - 1],
+        pages[2][pages[2].length - 1],
+      ]);
+    },
+  );
+
+  it(
+    "logs and still examines what it found when the page ceiling is reached without ever finding the order's own createdAt",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
+      const order = await expiredOrder({ warId: w.id, warTokenId: tokenId });
+
+      // Four full pages — SIGNATURE_PAGE_CEILING pages of SIGNATURE_PAGE_SIZE
+      // each, 100 signatures total — none of them short, none reaching the
+      // order's own createdAt: a flood, not ordinary usage.
+      const fullPage = () => Array.from({ length: 25 }, () => randomSignature());
+      const pages = [fullPage(), fullPage(), fullPage(), fullPage()];
+      const transactionsBySignature: Record<string, SolanaTransaction> = {};
+      for (const page of pages) {
+        for (const signature of page) {
+          transactionsBySignature[signature] = fixtureTransaction({ amount: "1" });
+        }
+      }
+
+      let call = 0;
+      const fetcher: RecoveryFetcher = {
+        signatures: async () => {
+          const page = pages[call] ?? [];
+          call += 1;
+          return page.map((signature) => ({ signature, blockTime: null }));
+        },
+        transaction: async (signature) => transactionsBySignature[signature] ?? null,
+      };
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await recoverUnclaimedOrders(fetcher);
+
+        // Nothing settles (every examined candidate is dust), but the search
+        // did not just give up: the oldest MAX_SIGNATURES_PER_REFERENCE of
+        // what was found are still tried and filed.
+        expect(result.recovered).toEqual([]);
+        expect(result.filed).toEqual([order.id]);
+
+        const floodLog = errorSpy.mock.calls.find(
+          (call) => typeof call[0] === "string" && call[0].includes(order.id),
+        );
+        expect(floodLog).toBeDefined();
+        expect(String(floodLog?.[0])).toMatch(/100/);
+
+        const [row] = await query<{ recovery_attempted_at: Date | null }>(
+          `SELECT recovery_attempted_at FROM entry_orders WHERE id = $1`,
+          [order.id],
+        );
+        expect(row.recovery_attempted_at).toBeTruthy();
+      } finally {
+        errorSpy.mockRestore();
+      }
     },
   );
 });
