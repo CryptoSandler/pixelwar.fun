@@ -343,9 +343,17 @@ async function unclaimedOrders(limit: number): Promise<Order[]> {
  * ordering otherwise enables: the reference only becomes public once the
  * payer's own transfer lands on chain (it is a read-only account in that
  * transaction, and is returned to the browser no earlier). Nobody can build
- * a transaction naming a reference they have not yet observed, so the real
- * transfer — if one exists — is always the OLDEST transaction naming a given
- * reference; nothing sent later, by anyone, can ever get in front of it.
+ * a transaction naming a reference they have not yet observed, so no
+ * outsider can ever get in front of the payer's FIRST transaction against
+ * it. That is the whole guarantee, and it is deliberately weaker than "the
+ * real payment is the oldest": a payer who underpays and then tops up has a
+ * settling transaction that is not the oldest, which is why this keeps the
+ * oldest `MAX_SIGNATURES_PER_REFERENCE` rather than only the single oldest.
+ * The residual is narrow and worth naming: if the payer's first attempt is
+ * not the one that settles, an outsider who wins a seconds-wide race could
+ * fill the remaining slots. That needs a precondition the plain attack did
+ * not.
+ *
  * Taking the newest few (the original shape) is exactly backward for that
  * reason: enough recent junk, all sent after the real payment, pushes the
  * one transaction that matters out of a fixed-size newest-first window

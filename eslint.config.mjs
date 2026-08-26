@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Design mockups. Kept as the record of how docs/design/*.png were
+    // produced, not shipped and not imported by anything — so they answer to
+    // the eye, not to the app's lint rules.
+    "docs/design/**",
   ]),
 ]);
 
