@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { orderStatus } from "../lib/payments/order-status";
 import { isSignatureShaped } from "../lib/payments/signature";
 import { shortenAddress } from "../lib/tokens/addresses";
 
@@ -56,18 +57,6 @@ export function PasteSignature({
   const router = useRouter();
   const [signature, setSignature] = useState("");
   const [state, setState] = useState<State>({ kind: "idle" });
-
-  /** The order's own status, which is the only thing that settles this. */
-  async function orderStatus(): Promise<string | null> {
-    try {
-      const response = await fetch(`/api/orders/${orderId}`);
-      if (!response.ok) return null;
-      const body = (await response.json()) as { status?: string };
-      return body.status ?? null;
-    } catch {
-      return null;
-    }
-  }
 
   async function check() {
     const trimmed = signature.trim();
@@ -125,7 +114,7 @@ export function PasteSignature({
     // filed for support. The order does read `paid` then — by other money — so
     // treating it as success would bury the only message that tells this payer
     // they are owed something.
-    if (body?.reason === "signature_reused" && (await orderStatus()) === "paid") {
+    if (body?.reason === "signature_reused" && (await orderStatus(orderId)) === "paid") {
       setState({ kind: "paid" });
       router.refresh();
       return;
@@ -149,71 +138,82 @@ export function PasteSignature({
   }
 
   return (
-    <details className="panel bevel p-4">
-      <summary className="section-label cursor-pointer">Paid from another wallet?</summary>
+    <>
+      <details className="panel bevel p-4">
+        <summary className="section-label cursor-pointer">Paid from another wallet?</summary>
 
-      <div className="mt-3 flex flex-col gap-3">
-        <p className="muted text-[13px]">
-          If the USDC was sent from a phone, a hardware wallet or an exchange, no wallet ever
-          reaches this page — but the transfer is still on Solana. Paste its transaction signature
-          and it is checked against this order. Nothing is sent or signed from here.
-        </p>
-
-        {/* Full-strength ink, not the muted footnote colour: this is the one
-            fact on the screen that decides whether a transfer from somewhere
-            else can be credited at all, and it is different for the two kinds
-            of order. Somebody about to send money from an exchange is entitled
-            to read it before they do. */}
-        {payerPubkey ? (
-          <p className="text-[13px]">
-            This order was started from{" "}
-            <span className="numeric">{shortenAddress(payerPubkey, 6, 6)}</span>, and only that
-            wallet can pay it. A transfer sent from anywhere else cannot be credited here — start a
-            new order without connecting a wallet if you need to pay from elsewhere.
+        <div className="mt-3 flex flex-col gap-3">
+          <p className="muted text-[13px]">
+            If the USDC was sent from a phone, a hardware wallet or an exchange, no wallet ever
+            reaches this page — but the transfer is still on Solana. Paste its transaction signature
+            and it is checked against this order. Nothing is sent or signed from here.
           </p>
-        ) : (
-          <p className="text-[13px]">
-            No wallet is connected to this order, so it is first-to-claim: whichever matching
-            payment arrives first while the window is open takes the colour, whoever sent it. Your
-            transfer is not held for you until it is checked here.
-          </p>
-        )}
 
-        <label className="section-label" htmlFor="signature">
-          Transaction signature
-        </label>
-        <input
-          id="signature"
-          className="field w-full px-2 py-2"
-          value={signature}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder={SHAPE_HINT}
-          onChange={(event) => {
-            setSignature(event.target.value);
-            if (state.kind === "error") setState({ kind: "idle" });
-          }}
-        />
+          {/* Full-strength ink, not the muted footnote colour: this is the one
+              fact on the screen that decides whether a transfer from somewhere
+              else can be credited at all, and it is different for the two kinds
+              of order. Somebody about to send money from an exchange is entitled
+              to read it before they do. */}
+          {payerPubkey ? (
+            <p className="text-[13px]">
+              This order was started from{" "}
+              <span className="numeric">{shortenAddress(payerPubkey, 6, 6)}</span>, and only that
+              wallet can pay it. A transfer sent from anywhere else cannot be credited here — start a
+              new order without connecting a wallet if you need to pay from elsewhere.
+            </p>
+          ) : (
+            <p className="text-[13px]">
+              No wallet is connected to this order, so it is first-to-claim: whichever matching
+              payment arrives first while the window is open takes the colour, whoever sent it. Your
+              transfer is not held for you until it is checked here.
+            </p>
+          )}
 
-        <button
-          type="button"
-          className="btn-secondary self-start px-4 py-2"
-          disabled={state.kind === "checking" || signature.trim() === ""}
-          onClick={() => void check()}
-        >
-          {state.kind === "checking" ? "Checking…" : "Check this payment"}
-        </button>
+          <label className="section-label" htmlFor="signature">
+            Transaction signature
+          </label>
+          <input
+            id="signature"
+            className="field w-full px-2 py-2"
+            value={signature}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder={SHAPE_HINT}
+            onChange={(event) => {
+              setSignature(event.target.value);
+              if (state.kind === "error") setState({ kind: "idle" });
+            }}
+          />
 
-        {state.kind === "error" ? (
-          <p role="alert" className="bevel-in p-3 text-[13px]" style={{ background: "var(--chrome-control)" }}>
-            {state.message}
-          </p>
-        ) : null}
+          <button
+            type="button"
+            className="btn-secondary self-start px-4 py-2"
+            disabled={state.kind === "checking" || signature.trim() === ""}
+            onClick={() => void check()}
+          >
+            {state.kind === "checking" ? "Checking…" : "Check this payment"}
+          </button>
+        </div>
+      </details>
 
-        <p className="muted text-[12px]" aria-live="polite">
-          {state.kind === "checking" ? "Looking the transfer up on Solana…" : null}
-        </p>
-      </div>
-    </details>
+    {/* Outside the disclosure, deliberately. A collapsed `<details>` hides its
+        children with `display: none`, and a hidden `role="alert"` announces
+        nothing and a hidden `aria-live` region says nothing — so an error
+        raised and then collapsed away, or raised while collapsed, reached
+        nobody at all: no text on screen and no announcement either. The
+        success path never had this problem because it replaces the
+        `<details>` outright, and this is the same treatment. It also means a
+        failed check stays visible if somebody folds the panel away while it
+        is running. */}
+    {state.kind === "error" ? (
+      <p role="alert" className="panel bevel-in p-3 text-[13px]">
+        {state.message}
+      </p>
+    ) : null}
+
+    <p className="sr-only" aria-live="polite">
+      {state.kind === "checking" ? "Looking the transfer up on Solana…" : null}
+    </p>
+    </>
   );
 }

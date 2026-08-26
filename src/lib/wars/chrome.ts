@@ -191,6 +191,13 @@ export const DISABLED_TEXT_CONTRAST = 3;
  * designed, and the leaderboard rail draws all twenty-four on `zinc-950`
  * today. So I2 asks this list, not `CHROME_SURFACES`, and the hole that let a
  * chip be drawn with no outline at all closes.
+ *
+ * The spread is only safe while the two key sets are disjoint, and nothing in
+ * the language enforces that: a future `BOARD_SURFACES.header` would shadow
+ * the chrome one here and nowhere else, so I2 would measure the board value
+ * while I1 and I4 kept measuring the chrome value, with no test firing on
+ * either side. `chrome.test.ts` asserts the disjointness rather than trusting
+ * it.
  */
 export const CHIP_SURFACES = { ...CHROME_SURFACES, ...BOARD_SURFACES } as const;
 

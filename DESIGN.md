@@ -259,6 +259,18 @@ ground in any war that had one.
 > were brought in — three surfaces with no outline named — which is how the
 > widening was known to reach anything at all.
 
+**Partially enforced, in the same way and for the same reason as I5 and I6.**
+The test measures the *colours*: that every surface a chip is drawn on has a
+declared outline, and that each outline clears 60 from its surface. It cannot
+see whether a component actually *applies* the outline it is owed. A chip
+drawn on `shell` with no `outline` at all passes the whole suite, because a
+style attribute in a component is not attached to a surface by anything a unit
+test can reach. **That the outline is applied is a rule reviewers enforce**,
+and it is not a hypothetical: it is exactly how the leaderboard rail came to
+draw all twenty-four tokens with no outline for a whole batch. Binding the two
+together — a chip component that takes its surface as a prop and cannot be
+rendered without one — is the way to close it, and it is not closed today.
+
 **Why this exists.** A rejected direction with warm-white chrome erased its
 white token completely — in the leaderboard and the paint bar at once. Nothing
 in the code was wrong; the render is what caught it. The fill cannot solve

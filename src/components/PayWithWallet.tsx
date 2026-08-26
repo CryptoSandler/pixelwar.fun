@@ -8,6 +8,7 @@ import { getChainForEndpoint } from "@solana/wallet-standard-util";
 import { WalletConnect, useInBrowser } from "./WalletProvider";
 import { buildPaymentTransaction } from "../lib/payments/transfer";
 import { formatUsdc, usdToBaseUnits } from "../lib/payments/config";
+import { orderStatus } from "../lib/payments/order-status";
 import { clusterLabel, isLocalHostname, paymentSafety } from "../lib/payments/cluster";
 import type { ProxyCluster } from "../lib/payments/cluster";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
@@ -111,6 +112,37 @@ export function PayWithWallet({
   const [phase, setPhase] = useState<Phase>(
     order.status === "paid" ? { kind: "paid" } : { kind: "idle" },
   );
+
+  /**
+   * The order's status is a prop, and this screen has to follow it.
+   *
+   * The initialiser above runs once, at mount, and for the wallet path that is
+   * enough — this component drives its own payment and sets its own phase. It
+   * is not enough the moment something ELSE settles the order underneath it,
+   * which is exactly what the paste form does: it posts a signature, the
+   * server marks the order paid, `router.refresh()` re-renders this page, and
+   * `PasteSignature` unmounts with its confirmation panel. React keeps this
+   * component mounted across that refresh — same element, same position — so
+   * without this the phase stays `idle`, the "Paid" panel never appears, and a
+   * payer whose money has already moved is shown the screen for somebody who
+   * has not paid. The reservation countdown then runs down to `expired` on a
+   * paid order, and a connected wallet could pay a second time — landing as
+   * `already_settled`, in the unmatched queue, needing a human to refund it.
+   *
+   * Written as a render-time adjustment rather than an effect, which is
+   * React's documented way to reset state when a prop changes: it applies
+   * during the same render that brings the new status in, so there is no
+   * frame where the pay button is on screen next to a paid order.
+   *
+   * Only `paid` is acted on. It is the one status that is terminal, has a
+   * panel of its own, and can arrive from outside this component. `expired`
+   * is already derived from the clock below, and `failed` has no screen.
+   */
+  const [syncedStatus, setSyncedStatus] = useState(order.status);
+  if (order.status !== syncedStatus) {
+    setSyncedStatus(order.status);
+    if (order.status === "paid" && phase.kind !== "paid") setPhase({ kind: "paid" });
+  }
   const [remaining, setRemaining] = useState<number>(() =>
     Math.max(0, Date.parse(order.expiresAt) - Date.now()),
   );
@@ -133,16 +165,7 @@ export function PayWithWallet({
   }, [order.expiresAt, phase.kind]);
 
   /** The order's own status, which is the only thing that settles this. */
-  const pollOrder = useCallback(async (): Promise<string | null> => {
-    try {
-      const response = await fetch(`/api/orders/${order.id}`);
-      if (!response.ok) return null;
-      const body = (await response.json()) as { status?: string };
-      return body.status ?? null;
-    } catch {
-      return null;
-    }
-  }, [order.id]);
+  const pollOrder = useCallback(() => orderStatus(order.id), [order.id]);
 
   /**
    * Posts the signature, retrying while the cluster has not caught up yet.

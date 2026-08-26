@@ -14,10 +14,13 @@ import { Cabinet } from "../components/Cabinet";
  * That page says nothing about what a visitor is looking at and offers no way
  * back to the war.
  *
- * `retry` is the prop's name in Next 16; `reset` was the Pages-era spelling
- * and is not what this version passes. Confirmed against
+ * `retry` is the prop this version documents, and `join/error.tsx` already
+ * uses it. `reset` is not gone — `error.md` in the installed 16.3.2 still
+ * lists it, deprecated in favour of `retry` — so this is the current spelling
+ * rather than the only one that works. Read out of
  * `next/dist/docs/01-app/03-api-reference/03-file-conventions/error.md` in
- * the installed package rather than from memory.
+ * `node_modules`, not from memory, because this version has breaking changes
+ * from what a model is likely to recall.
  *
  * It does not wrap the root layout above it — that is `global-error.js`'s job
  * and there is nothing in the layout that throws.

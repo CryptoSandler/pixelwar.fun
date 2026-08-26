@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { activeTokens, currentWar } from "../lib/wars/lifecycle";
 import { WarView } from "../components/WarView";
 
@@ -16,6 +17,16 @@ export default async function Page() {
               belong here and the fix is to stop quieting it. It was
               `opacity-70`, which rendered 3.85:1. */}
           <p>The next one will appear here when it opens.</p>
+          {/* The other half of "nothing links to /join". The HUD link only
+              exists inside `WarView`, which is exactly what this branch
+              renders instead of — so between wars the checkout was reachable
+              by typing the path and no other way, which is the state somebody
+              arriving early is most likely to be in. */}
+          <p className="mt-4">
+            <Link className="underline" href="/join">
+              Add your token to the next war
+            </Link>
+          </p>
         </div>
       </main>
     );

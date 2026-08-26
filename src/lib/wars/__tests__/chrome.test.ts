@@ -99,6 +99,19 @@ describe("every token chip is visible on every surface chrome draws it on", () =
   it("names an outline for every surface, so a new surface cannot be added silently", () => {
     expect(Object.keys(CHIP_OUTLINE).sort()).toEqual(surfaces.slice().sort());
   });
+
+  it("keeps the two surface lists disjoint, so the union cannot hide a collision", () => {
+    // `CHIP_SURFACES` is a spread, and a spread resolves a duplicate key
+    // silently. A `BOARD_SURFACES` key that shadowed a chrome one would leave
+    // I2 measuring the board value here while I1 and I4 went on measuring the
+    // chrome value there — two invariants disagreeing about what a surface is,
+    // and nothing red anywhere. Disjoint is the property that makes the union
+    // mean what it reads as.
+    const chrome = Object.keys(CHROME_SURFACES);
+    const board = Object.keys(BOARD_SURFACES);
+    expect(chrome.filter((key) => board.includes(key))).toEqual([]);
+    expect(Object.keys(CHIP_SURFACES)).toHaveLength(chrome.length + board.length);
+  });
 });
 
 describe("the empty pixel reads as empty", () => {
@@ -269,31 +282,52 @@ describe("a chrome colour is legible under the text it carries", () => {
     }
   });
 
-  it("rejects the six opacities the board's named colours replaced", () => {
-    // Measured in a real browser before they were removed, and reproduced here
-    // from the same compositing the browser does. `zinc-50` over `zinc-950`,
-    // `zinc-800`, and black-at-80%-over-`zinc-800`; plus INK over the surround,
-    // which is the one site that inherited the chrome rather than Tailwind.
+  it("records what the six opacities the board replaced actually rendered", () => {
+    // The figures, not a relation. This case used to assert that each
+    // composited value was lower than its own full-strength value, which is
+    // true for every colour, every surface and every alpha below 1 by
+    // construction — compositing text toward its background cannot raise
+    // contrast. Four of six assertions could not fail for any input, so they
+    // recorded nothing at all while reading as though they did.
+    //
+    // These are the numbers measured in a real browser before the sites were
+    // replaced, reproduced from the same compositing the compositor does. They
+    // are pinned because the surfaces behind them are Batch A's and will move
+    // when the board is restyled: if `BOARD_SURFACES` changes, the record of
+    // what was wrong here has to be re-measured rather than quietly re-derived.
     const ZINC_50 = "#FAFAFA";
-    const under = (over: string, base: string, alpha: number, floor: number) =>
-      expect(contrastRatio(composite(over, base, alpha), base)).toBeLessThan(floor);
+    const rendered = (over: string, base: string, alpha: number) =>
+      contrastRatio(composite(over, base, alpha), base);
 
-    // The two that were genuinely below their floor as rendered.
-    under(INK, CHROME_SURFACES.surround, 0.7, BODY_TEXT_CONTRAST); // page.tsx, 3.85
-    under(ZINC_50, BOARD_SURFACES.shell, 0.4, BODY_TEXT_CONTRAST); // the keyboard hint, 3.63
+    // page.tsx — the only one of the six that inherited the chrome rather than
+    // Tailwind, and the only one whose figure the previous batch had right.
+    expect(rendered(INK, CHROME_SURFACES.surround, 0.7)).toBeCloseTo(3.85, 2);
+    // WarView, the loading line in the board well.
+    expect(rendered(ZINC_50, BOARD_SURFACES.well, 0.7)).toBeCloseTo(7.76, 2);
+    // WarView, both overlay paragraphs, on black-at-80%-over-zinc-800.
+    expect(rendered(ZINC_50, BOARD_SURFACES.overlay, 0.8)).toBeCloseTo(12.22, 2);
+    // TokenRail, the leaderboard count.
+    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.7)).toBeCloseTo(9.38, 2);
+    // TokenRail, the keyboard hint — reported as 2.04 for a week, and 3.63.
+    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.4)).toBeCloseTo(3.63, 2);
+    // PaintButton, the cooldown countdown on a disabled control.
+    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.6)).toBeCloseTo(7.07, 2);
 
-    // The other four cleared 7:1 by accident, on a dark surface nobody had
-    // written down. An unmeasured number that happens to be fine is still an
-    // unmeasured number, which is the whole point of the rule — so they are
-    // asserted as composited, not as acceptable.
-    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.well, 0.7), BOARD_SURFACES.well))
-      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.well));
-    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.overlay, 0.8), BOARD_SURFACES.overlay))
-      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.overlay));
-    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.shell, 0.7), BOARD_SURFACES.shell))
-      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.shell));
-    expect(contrastRatio(composite(ZINC_50, BOARD_SURFACES.shell, 0.6), BOARD_SURFACES.shell))
-      .toBeLessThan(contrastRatio(ZINC_50, BOARD_SURFACES.shell));
+    // And the part that is a judgement rather than a measurement: two of the
+    // six were genuinely under §9's body floor, and four cleared it by
+    // accident on a surface nobody had written down. An unmeasured number that
+    // happens to be fine is still unmeasured, which is why all six were
+    // replaced and not just the two.
+    expect(rendered(INK, CHROME_SURFACES.surround, 0.7)).toBeLessThan(BODY_TEXT_CONTRAST);
+    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.4)).toBeLessThan(BODY_TEXT_CONTRAST);
+    for (const [base, alpha] of [
+      [BOARD_SURFACES.well, 0.7],
+      [BOARD_SURFACES.overlay, 0.8],
+      [BOARD_SURFACES.shell, 0.7],
+      [BOARD_SURFACES.shell, 0.6],
+    ] as const) {
+      expect(rendered(ZINC_50, base, alpha)).toBeGreaterThanOrEqual(BODY_TEXT_CONTRAST);
+    }
   });
 
   it("rejects opacity as a way to quiet text — the failure that added this rule", () => {
