@@ -1,0 +1,18 @@
+{
+  "description": "Shared project settings. The PostToolUse hook runs eslint --fix on the single file that was just edited. Lint and formatting only: the test suite needs a live test database and takes far longer than a hook should, so tests belong in /cierre, not here.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(python3 -c 'import json,sys;print(json.load(sys.stdin).get(\"tool_input\",{}).get(\"file_path\",\"\"))'); e=\"$CLAUDE_PROJECT_DIR/node_modules/.bin/eslint\"; case \"$f\" in *.ts|*.tsx|*.js|*.jsx|*.mjs|*.mts|*.cjs) [ -x \"$e\" ] && \"$e\" --fix \"$f\" >/dev/null 2>&1;; esac; exit 0",
+            "timeout": 30,
+            "statusMessage": "Linting the edited file"
+          }
+        ]
+      }
+    ]
+  }
+}
