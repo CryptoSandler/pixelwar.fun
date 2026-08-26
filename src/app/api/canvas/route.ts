@@ -1,18 +1,25 @@
-import { canvasBytes } from "../../../lib/canvas/state";
+import { canvasBytes, type CanvasLayer } from "../../../lib/canvas/state";
 import { json } from "../../../lib/http";
 import { advanceWar, warBySlug } from "../../../lib/wars/lifecycle";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const slug = new URL(request.url).searchParams.get("war");
+  const params = new URL(request.url).searchParams;
+  const slug = params.get("war");
   if (!slug) return json({ error: "war is required" }, { status: 400 });
+
+  // Anything that is not the territory layer is the painted board. An unknown
+  // value falls back rather than 400ing: the default layer is always a
+  // truthful answer to "show me the board", so a typo costs a wrong view, not
+  // a broken one.
+  const layer: CanvasLayer = params.get("layer") === "token" ? "token" : "colour";
 
   const found = await warBySlug(slug);
   if (!found) return json({ error: "No such war" }, { status: 404 });
 
   const war = await advanceWar(found);
-  const { seq, bytes } = await canvasBytes(war);
+  const { seq, bytes } = await canvasBytes(war, layer);
 
   return new Response(Buffer.from(bytes), {
     headers: {
@@ -20,6 +27,7 @@ export async function GET(request: Request): Promise<Response> {
       "x-canvas-seq": String(seq),
       "x-canvas-width": String(war.width),
       "x-canvas-height": String(war.height),
+      "x-canvas-layer": layer,
       // "ended" is not actually forever: an operator can extend a war after
       // the fact, and a later batch changes what this endpoint returns for
       // one. A year-long immutable response cannot be recalled once a client

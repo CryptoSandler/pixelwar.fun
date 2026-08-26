@@ -36,7 +36,14 @@ export async function makeToken(warId: string, colourSlot: number): Promise<stri
   return id;
 }
 
-/** Writes a pixel straight to the tables, bypassing every rule. Fixtures only. */
+/**
+ * Writes a pixel straight to the tables, bypassing every rule. Fixtures only.
+ *
+ * `tokenId` and `colourSlot` are independent arguments and callers should
+ * treat them that way: since the free-palette change they are two different
+ * facts about a pixel, and a fixture that always passes the token's own slot
+ * as the colour can only exercise the case where they coincide.
+ */
 export async function paintRaw(
   warId: string,
   idx: number,
@@ -45,15 +52,16 @@ export async function paintRaw(
   seq: number,
 ): Promise<void> {
   await execute(
-    `INSERT INTO pixels (war_id, idx, war_token_id, seq, painted_at)
-     VALUES ($1, $2, $3, $4, now())
-     ON CONFLICT (war_id, idx) DO UPDATE SET war_token_id = $3, seq = $4, painted_at = now()`,
-    [warId, idx, tokenId, seq],
+    `INSERT INTO pixels (war_id, idx, war_token_id, colour_slot, seq, painted_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (war_id, idx) DO UPDATE
+       SET war_token_id = $3, colour_slot = $4, seq = $5, painted_at = now()`,
+    [warId, idx, tokenId, colourSlot, seq],
   );
   await execute(
-    `INSERT INTO pixel_events (war_id, seq, idx, colour_slot, painted_at)
-     VALUES ($1, $2, $3, $4, now())`,
-    [warId, seq, idx, colourSlot],
+    `INSERT INTO pixel_events (war_id, seq, idx, colour_slot, war_token_id, painted_at)
+     VALUES ($1, $2, $3, $4, $5, now())`,
+    [warId, seq, idx, colourSlot, tokenId],
   );
   await execute(`UPDATE wars SET last_seq = GREATEST(last_seq, $2) WHERE id = $1`, [warId, seq]);
 }

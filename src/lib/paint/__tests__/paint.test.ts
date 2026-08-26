@@ -5,7 +5,23 @@ import { warById } from "../../wars/lifecycle";
 import { makeToken, makeWar } from "../../canvas/__tests__/fixtures";
 import { paintPixel } from "../paint";
 
-const KEYS = { painterKey: "painter-a", ipHash: "ip-a", subnetKey: "subnet-a" };
+/**
+ * The painter's identity keys, plus a colour to paint in.
+ *
+ * `colourSlot` lives here because almost every test below cares about the
+ * cooldown, the sequence or the counts rather than about which colour landed
+ * — and since the free-palette change the colour is an independent input that
+ * every call has to supply. It is deliberately NOT the same number as the
+ * token colour these tests use (5), so a test that passes only because those
+ * two happen to coincide cannot hide here.
+ */
+const PAINT_COLOUR = 12;
+const KEYS = {
+  painterKey: "painter-a",
+  ipHash: "ip-a",
+  subnetKey: "subnet-a",
+  colourSlot: PAINT_COLOUR,
+};
 
 beforeEach(() => {
   process.env.RATE_LIMIT_SALT = "test-salt";
@@ -24,7 +40,7 @@ describe("paintPixel", () => {
 
     const result = await paintPixel({ war, x: 2, y: 3, tokenId: token, ...KEYS });
 
-    expect(result).toMatchObject({ ok: true, seq: 1, idx: 26, colourSlot: 5 });
+    expect(result).toMatchObject({ ok: true, seq: 1, idx: 26, colourSlot: PAINT_COLOUR });
     if (!result.ok) throw new Error("unreachable");
     expect(Date.parse(result.cooldownUntil)).toBeGreaterThan(Date.now());
   });
@@ -43,7 +59,7 @@ describe("paintPixel", () => {
     );
 
     expect(pixel).toMatchObject({ idx: 0 });
-    expect(event).toMatchObject({ idx: 0, colour_slot: 5 });
+    expect(event).toMatchObject({ idx: 0, colour_slot: PAINT_COLOUR });
     expect(count).toEqual({ owned: 1, placed: 1 });
   });
 
@@ -54,6 +70,7 @@ describe("paintPixel", () => {
 
     await paintPixel({ war, x: 1, y: 1, tokenId: red, ...KEYS });
     await paintPixel({
+      colourSlot: PAINT_COLOUR,
       war: (await warById(war.id))!,
       x: 1,
       y: 1,
@@ -98,6 +115,7 @@ describe("paintPixel", () => {
 
       await paintPixel({ war, x: 0, y: 0, tokenId: token, ...KEYS });
       const second = await paintPixel({
+        colourSlot: PAINT_COLOUR,
         war,
         x: 1,
         y: 0,
@@ -120,6 +138,7 @@ describe("paintPixel", () => {
 
       await paintPixel({ war, x: 0, y: 0, tokenId: token, ...KEYS });
       const second = await paintPixel({
+        colourSlot: PAINT_COLOUR,
         war,
         x: 1,
         y: 0,
@@ -162,6 +181,7 @@ describe("paintPixel", () => {
     await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
         paintPixel({
+          colourSlot: PAINT_COLOUR,
           war,
           x: i,
           y: 0,
@@ -283,6 +303,7 @@ describe("paintPixel", () => {
         for (let i = 0; i < 5; i++) {
           results.push(
             await paintPixel({
+              colourSlot: PAINT_COLOUR,
               war,
               x: i,
               y: 0,

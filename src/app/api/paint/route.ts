@@ -10,6 +10,7 @@ const STATUS: Record<string, number> = {
   cooldown: 429,
   banned: 403,
   unknown_token: 400,
+  unknown_colour: 400,
   out_of_bounds: 400,
 };
 
@@ -75,15 +76,19 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: "Body must be JSON" }, { status: 400, headers: NO_STORE });
   }
 
-  const { warSlug, x, y, tokenId } = (body ?? {}) as Record<string, unknown>;
+  const { warSlug, x, y, tokenId, colourSlot } = (body ?? {}) as Record<string, unknown>;
   if (
     typeof warSlug !== "string" ||
     typeof tokenId !== "string" ||
     typeof x !== "number" ||
-    typeof y !== "number"
+    typeof y !== "number" ||
+    typeof colourSlot !== "number"
   ) {
     return json(
-      { error: "warSlug and tokenId must be strings; x and y must be numbers" },
+      {
+        error:
+          "warSlug and tokenId must be strings; x, y and colourSlot must be numbers",
+      },
       { status: 400, headers: NO_STORE },
     );
   }
@@ -96,6 +101,10 @@ export async function POST(request: Request): Promise<Response> {
     x,
     y,
     tokenId,
+    // Range-checked in `paintPixel`, not here: it is the trust boundary that
+    // touches the database, and a second copy of the bound here would be a
+    // second thing to keep in step with the palette.
+    colourSlot,
     painterKey: caller.painterKey,
     ipHash: caller.ipHash,
     subnetKey: caller.subnetKey,

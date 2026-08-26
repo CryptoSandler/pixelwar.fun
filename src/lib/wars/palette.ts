@@ -1,9 +1,23 @@
 /**
- * Twenty-four token colours and the ground they sit on.
+ * Twenty-four colours anyone may paint in, and the ground they sit on.
  *
- * The palette IS the attribution model. A canvas byte is a palette slot, a
- * palette slot is a token, so the board needs no second data structure to say
- * who owns what. Slot 0 means unpainted and belongs to no token.
+ * THE PALETTE IS NO LONGER THE ATTRIBUTION MODEL. It used to be: a canvas
+ * byte was a palette slot, a palette slot was a token, and the board needed
+ * no second structure to say who owned what. That is over — every painter may
+ * use every colour, and who a pixel belongs to is carried by
+ * `pixels.war_token_id`, which is a different question with a different
+ * answer. See migration 007 and `canvas/state.ts`, where the two questions
+ * became two layers.
+ *
+ * A token still HAS a slot in this list (`war_tokens.colour_slot`). It is its
+ * flag: the colour that stands for it on the scoreboard and in the territory
+ * view. It is no longer the colour of any particular pixel it owns, and a
+ * board painted entirely in one colour is now an ordinary thing to see.
+ *
+ * Slot 0 means unpainted and belongs to nobody, which is the one part of the
+ * old model that survives intact — and it is load-bearing in a new way now
+ * that painters choose colours: it is the value `paintPixel` refuses, so
+ * nobody can blank a pixel by painting the ground.
  *
  * These are the r/place 2022 values, which the whole lineage of clones settled
  * on because they stay distinguishable at one-pixel size. Saying so plainly is
