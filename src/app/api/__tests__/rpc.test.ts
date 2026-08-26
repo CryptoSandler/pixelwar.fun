@@ -176,6 +176,105 @@ describe("POST /api/rpc", () => {
     expect(text).not.toContain("api-key");
   });
 
+  it("never returns the upstream URL or key from a non-2xx error body", async () => {
+    // A paid provider's error body routinely echoes request context back —
+    // including the very URL this endpoint exists to keep server-side. The
+    // route must never even look at that content: a non-2xx status alone
+    // is enough to answer generically, regardless of what the body says.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({
+          error: "internal error contacting https://real-upstream.example/?api-key=REALKEY at line 5",
+        }),
+      })),
+    );
+
+    const response = await rpcRoute(post(whitelistedCall(), "8.8.8.1"));
+    const text = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(text).not.toContain("real-upstream.example");
+    expect(text).not.toContain("REALKEY");
+    expect(text).not.toContain("api-key");
+  });
+
+  it("never returns the upstream URL or key from a 2xx JSON-RPC error member", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32602,
+            message: "Invalid params, see https://fake-provider.example/docs?api-key=FAKEKEY123",
+          },
+        }),
+      })),
+    );
+
+    const response = await rpcRoute(post(whitelistedCall(), "8.8.8.2"));
+    const text = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(text).not.toContain("fake-provider.example");
+    expect(text).not.toContain("FAKEKEY123");
+    expect(text).not.toContain("api-key");
+    // The caller still gets a JSON-RPC error entry — just a generic one.
+    expect(await new Response(text).json()).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32000, message: expect.any(String) },
+    });
+  });
+
+  it("never returns the upstream URL or key from a 200 that is not a JSON-RPC response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          // Valid JSON, 2xx status, but neither `result` nor `error`: not a
+          // shape this proxy recognises as a JSON-RPC response.
+          message: "see https://another-fake.example/?api-key=ANOTHERFAKEKEY for details",
+        }),
+      })),
+    );
+
+    const response = await rpcRoute(post(whitelistedCall(), "8.8.8.3"));
+    const text = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(text).not.toContain("another-fake.example");
+    expect(text).not.toContain("ANOTHERFAKEKEY");
+    expect(text).not.toContain("api-key");
+  });
+
+  it("round-trips a legitimate success's result and id untouched", async () => {
+    // The upstream's own id (999) is deliberately wrong, to prove the
+    // response carries OUR caller's request id, not whatever upstream sent.
+    stubFetch(() => ({
+      jsonrpc: "2.0",
+      id: 999,
+      result: { context: { slot: 123 }, value: "fake-blockhash-xyz" },
+    }));
+
+    const response = await rpcRoute(post(whitelistedCall({ id: 42 }), "8.8.8.4"));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      jsonrpc: "2.0",
+      id: 42,
+      result: { context: { slot: 123 }, value: "fake-blockhash-xyz" },
+    });
+  });
+
   it("does not forward client headers upstream", async () => {
     let sentHeaders: Headers | undefined;
     vi.stubGlobal(

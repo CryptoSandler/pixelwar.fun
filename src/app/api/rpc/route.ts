@@ -171,23 +171,99 @@ function tooManyRpcCalls(ipHash: string): boolean {
   return bucket.count > max;
 }
 
+type JsonRpcId = string | number | null;
+
+/**
+ * A recognised JSON-RPC 2.0 response body: exactly one of `result` or
+ * `error`, per spec — never both, never neither. Anything else (a bare
+ * value, an object with neither key, an object with both) is not a shape
+ * this proxy will pass an opinion on; it is treated as an upstream failure.
+ */
+function isJsonRpcResponse(value: unknown): value is { result?: unknown; error?: unknown } {
+  if (typeof value !== "object" || value === null) return false;
+  const hasResult = "result" in value;
+  const hasError = "error" in value;
+  return hasResult !== hasError;
+}
+
+/**
+ * A single upstream failure, in whatever form (a thrown fetch, a non-2xx
+ * status, an unparseable body, a shape this proxy does not recognise),
+ * rebuilt as our own generic JSON-RPC error entry. The code is fixed and
+ * arbitrary (outside the range Solana's own node reserves) precisely
+ * because it carries no information about what actually went wrong upstream
+ * — that is the point.
+ */
+const GENERIC_UPSTREAM_ERROR = {
+  code: -32000,
+  message: "The Solana network could not complete this request. Try again in a moment.",
+} as const;
+
+/** Every id in `ids`, answered with the same generic failure. */
+function failureBody(ids: JsonRpcId[], isBatch: boolean): unknown {
+  const entries = ids.map((id) => ({ jsonrpc: "2.0", id, error: GENERIC_UPSTREAM_ERROR }));
+  return isBatch ? entries : entries[0];
+}
+
+/**
+ * Pulls each call's own `id`, in request order.
+ *
+ * Read from OUR validated request, never from whatever the upstream
+ * echoes back: an id is how the caller matches an answer to its call, and
+ * trusting an id supplied by the very party this function's caller
+ * (`forward`) is defending against would let a malformed or adversarial
+ * upstream response scramble that matching instead of just failing it.
+ */
+function requestIds(payload: unknown): JsonRpcId[] {
+  const calls = Array.isArray(payload) ? payload : [payload];
+  return calls.map((call) => {
+    const id = (call as { id?: unknown }).id;
+    return typeof id === "string" || typeof id === "number" || id === null ? id : null;
+  });
+}
+
+/** One request id's answer, once its upstream entry is already known-recognised. */
+function safeEntry(id: JsonRpcId, entry: { result?: unknown; error?: unknown }): unknown {
+  if ("result" in entry) return { jsonrpc: "2.0", id, result: entry.result };
+  return { jsonrpc: "2.0", id, error: GENERIC_UPSTREAM_ERROR };
+}
+
 /**
  * Forwards an already-whitelisted payload to the configured Solana endpoint
- * and relays its answer back verbatim.
+ * and answers with a response THIS proxy constructs — never one relayed
+ * from upstream as it arrived.
+ *
+ * No upstream response reaches the caller verbatim, whatever its status.
+ * Only `result` (on success) or a fixed generic message (on any failure) is
+ * ever read out of it and placed into a fresh JSON-RPC envelope carrying
+ * our caller's own request id. That is deliberate, not incidental: a paid
+ * provider's non-2xx error bodies routinely echo request context —
+ * including the very URL, with its embedded key, that this endpoint exists
+ * to keep server-side — back at the caller, for auth failures, rate limits
+ * and malformed requests alike. A 2xx is not exempt either: nothing stops a
+ * provider from putting the same kind of detail into an `error` member of
+ * an otherwise well-formed 200. So this treats "parse the bytes into
+ * something meaningful" and "decide whether to trust what's inside" as one
+ * step, not two — there is no code path that gets from an upstream byte to
+ * the response without going through `isJsonRpcResponse` and `safeEntry`
+ * first.
  *
  * Only `content-type` is ever sent upstream — no header from the inbound
  * request is forwarded. Forwarding, say, `cookie` or `authorization` would
  * leak them to a third party for no reason this proxy needs; the provider
  * gets exactly the JSON-RPC payload and nothing about who asked.
  *
- * Failures are reported generically. `fetch` failing (DNS, TLS, a refused
- * connection) can put the target URL into `error.message` or `error.cause`
- * depending on the runtime, and that URL is the secret this endpoint exists
- * to keep — so the caught error is never read, logged, or interpolated into
- * anything that reaches the response or a log line.
+ * `fetch` failing outright (DNS, TLS, a refused connection) can put the
+ * target URL into `error.message` or `error.cause` depending on the
+ * runtime, so the caught error there is never read, logged, or
+ * interpolated into anything that reaches the response or a log line —
+ * the same discipline the content check above applies to a response that
+ * did come back.
  */
 async function forward(payload: unknown): Promise<{ status: number; body: unknown }> {
   const endpoint = solanaRpcUrls()[0];
+  const ids = requestIds(payload);
+  const isBatch = Array.isArray(payload);
 
   let upstream: Response;
   try {
@@ -199,20 +275,50 @@ async function forward(payload: unknown): Promise<{ status: number; body: unknow
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
+    return { status: 502, body: failureBody(ids, isBatch) };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = await upstream.json();
+  } catch {
+    return { status: 502, body: failureBody(ids, isBatch) };
+  }
+
+  // A non-2xx status can itself be meaningful about the provider (which
+  // auth failure, which rate limit) beyond just "this call did not
+  // succeed" — collapsed to a fixed 502 along with everything else that
+  // did not succeed, rather than relayed.
+  if (!upstream.ok) {
+    return { status: 502, body: failureBody(ids, isBatch) };
+  }
+
+  if (isBatch) {
+    if (!Array.isArray(parsed) || parsed.length !== ids.length) {
+      // A batch answered with the wrong shape is not a batch this proxy
+      // can match back to the calls that were sent — every id fails.
+      return { status: 502, body: failureBody(ids, isBatch) };
+    }
     return {
-      status: 502,
-      body: { error: "Could not reach the Solana network. Try again in a moment." },
+      status: 200,
+      body: ids.map((id, index) => {
+        const entry = parsed[index];
+        return isJsonRpcResponse(entry)
+          ? safeEntry(id, entry)
+          : { jsonrpc: "2.0", id, error: GENERIC_UPSTREAM_ERROR };
+      }),
     };
   }
 
-  try {
-    return { status: upstream.status, body: await upstream.json() };
-  } catch {
-    return {
-      status: 502,
-      body: { error: "The Solana network returned an unexpected response. Try again in a moment." },
-    };
+  if (!isJsonRpcResponse(parsed)) {
+    // Valid JSON, 2xx status, but not a JSON-RPC response — e.g. an
+    // unexpected object shape, or the array a batch would have returned.
+    // Not something to interpret or pass along; an upstream failure like
+    // any other.
+    return { status: 502, body: failureBody(ids, isBatch) };
   }
+
+  return { status: 200, body: safeEntry(ids[0], parsed) };
 }
 
 export async function POST(request: Request): Promise<Response> {
