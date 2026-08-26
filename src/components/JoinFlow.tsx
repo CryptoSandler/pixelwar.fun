@@ -6,6 +6,12 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { ColourPicker } from "./ColourPicker";
 import { WalletConnect } from "./WalletProvider";
 import { CHAINS, getChain } from "../lib/tokens/chains";
+// Type-only, and it has to stay that way: `orders.ts` is server code (node
+// crypto, the pool). `import type` is erased at compile time, so what crosses
+// into the client bundle is the compiler's knowledge of the union and nothing
+// else — which is the whole point, since that knowledge is what makes an
+// unmapped reason a build failure instead of a machine token on screen.
+import type { CreateOrderFailureReason } from "../lib/payments/orders";
 
 /**
  * Entry, in four steps that can each be corrected before any of them costs
@@ -49,7 +55,7 @@ export type JoinWar = {
  * DEX has seen — already arrives as a written sentence and is shown as it
  * came.
  */
-const REFUSAL_COPY: Record<string, string> = {
+const REFUSAL_COPY: Record<CreateOrderFailureReason, string> = {
   // The likeliest failure in the whole flow, and the one the picker recovers
   // from by itself: the list is refreshed on this reason, so the second
   // sentence is a description of what just happened, not a suggestion.
@@ -155,7 +161,10 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
       });
       const body = await response.json();
       if (!response.ok) {
-        const written = typeof body?.reason === "string" ? REFUSAL_COPY[body.reason] : undefined;
+        const written =
+          typeof body?.reason === "string"
+            ? REFUSAL_COPY[body.reason as CreateOrderFailureReason]
+            : undefined;
         setError(
           written ??
             (typeof body?.error === "string" ? body.error : "That order could not be started."),
@@ -277,9 +286,11 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
         </p>
       </Step>
 
-      {/* Text lives on panels, never on the bare surround: quiet text needs a
-          surface with headroom under DESIGN.md §9, and the surround has none.
-          The action and its footnote share one panel for that reason. */}
+      {/* QUIET text lives on a panel: the surround has no headroom under
+          DESIGN.md §9 — full-strength ink clears its body floor at 7.20:1 and
+          nothing lighter does — so a muted footnote needs a panel to sit on,
+          and shares one with the action it describes. Full-strength ink on the
+          surround is fine, and the payment screen's status line uses it. */}
       <section className="panel bevel flex flex-col gap-3 p-4">
         {error ? (
           <p role="alert" className="bevel-in p-3 text-[13px]" style={{ background: "var(--chrome-control)" }}>

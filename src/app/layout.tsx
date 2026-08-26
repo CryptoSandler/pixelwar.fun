@@ -3,7 +3,14 @@ import type { CSSProperties } from "react";
 import { IBM_Plex_Mono, Jost } from "next/font/google";
 import "./globals.css";
 import { WalletProvider } from "../components/WalletProvider";
-import { ACCENT, CHROME_SURFACES, INK, INK_INVERSE, MUTED_INK } from "../lib/wars/chrome";
+import {
+  ACCENT,
+  CHROME_SURFACES,
+  DISABLED_INK,
+  INK,
+  INK_INVERSE,
+  MUTED_INK,
+} from "../lib/wars/chrome";
 
 /**
  * Jost for everything that is words, IBM Plex Mono for everything that is a
@@ -39,10 +46,12 @@ const plexMono = IBM_Plex_Mono({
  *
  * What actually renders, at full strength, since that is the only claim worth
  * making: `INK` reads 11.51:1 on a panel, 8.40:1 on the readout and 7.20:1 on
- * the surround; `MUTED_INK` reads 7.81:1 on a panel and is declared for no
- * other surface (`MUTED_INK_SURFACES`). DESIGN.md §9 asks for 8:1 in the
- * readout and 7:1 for body text, and I6 tests every one of these numbers
- * rather than trusting this comment.
+ * the surround; `MUTED_INK` reads 7.81:1 on the panel and control faces, the
+ * only two surfaces `MUTED_INK_SURFACES` declares it for; `DISABLED_INK`
+ * reads 3.57:1 on those same faces. DESIGN.md §9 asks for 8:1 in the readout
+ * and 7:1 for body text, and I6 tests every one of these numbers rather than
+ * trusting this comment. Which surface a class is *used* on is not something
+ * a unit test can see — see I6's own caveat.
  */
 const chrome = {
   "--chrome-surround": CHROME_SURFACES.surround,
@@ -54,6 +63,7 @@ const chrome = {
   "--chrome-accent": ACCENT,
   "--chrome-ink": INK,
   "--chrome-ink-muted": MUTED_INK,
+  "--chrome-ink-disabled": DISABLED_INK,
   "--chrome-ink-inverse": INK_INVERSE,
 } as CSSProperties;
 

@@ -96,9 +96,29 @@ export const MUTED_INK = "#3A3F4D";
  */
 export const MUTED_INK_SURFACES = ["panel", "control"] as const satisfies readonly (keyof typeof CHROME_SURFACES)[];
 
+/**
+ * A disabled control's label, on the same two faces.
+ *
+ * Its own colour for the same reason `MUTED_INK` is: the alternative was
+ * `opacity: 0.5`, which composited the label to 2.89:1 and said so nowhere.
+ * WCAG exempts disabled controls from its text floor, so the number here is
+ * not §9's — but "exempt" is a reason to choose the value deliberately, not a
+ * reason to leave it unmeasured. 3.57:1 on a control face: plainly quieter
+ * than `MUTED_INK`'s 7.81, plainly still readable.
+ */
+export const DISABLED_INK = "#6B7285";
+
 /** DESIGN.md §9's floors, as numbers something can be tested against. */
 export const READOUT_TEXT_CONTRAST = 8;
 export const BODY_TEXT_CONTRAST = 7;
+
+/**
+ * The floor for text that is deliberately out of reach. WCAG 1.4.11's
+ * threshold for a graphical object rather than 1.4.3's for text, which
+ * disabled controls are exempt from — the point of a number here is that the
+ * quiet end of the scale has a bottom at all.
+ */
+export const DISABLED_TEXT_CONTRAST = 3;
 
 /**
  * The outline every token chip carries, per surface it is drawn on.

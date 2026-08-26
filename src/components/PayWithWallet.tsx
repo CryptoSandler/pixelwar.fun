@@ -9,6 +9,7 @@ import { SOLANA_MAINNET_CHAIN } from "@solana/wallet-standard-chains";
 import { WalletConnect, useInBrowser } from "./WalletProvider";
 import { buildPaymentTransaction } from "../lib/payments/transfer";
 import { formatUsdc, usdToBaseUnits } from "../lib/payments/config";
+import { clusterLabel, isLocalHostname } from "../lib/payments/cluster";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
 import { colourForSlot } from "../lib/wars/palette";
 import { getChain } from "../lib/tokens/chains";
@@ -72,23 +73,6 @@ const CONFIRM_RETRY_MS = 5_000;
 const CONFIRM_MAX_ATTEMPTS = 5;
 
 /**
- * What each cluster is called on screen.
- *
- * Keyed by the Wallet Standard chain id rather than by anything of our own,
- * because that id is what the adapter actually signs against: it picks the
- * chain from `connection.rpcEndpoint`, so reading it back is the one way the
- * label and the signature cannot disagree. They already disagree in
- * development — a localhost origin maps to `solana:localnet` — and a
- * hard-coded "Solana mainnet" said so to nobody.
- */
-const NETWORK_LABEL: Record<string, string> = {
-  "solana:mainnet": "Solana mainnet",
-  "solana:devnet": "Solana devnet",
-  "solana:testnet": "Solana testnet",
-  "solana:localnet": "Solana localnet",
-};
-
-/**
  * A wallet's own failure, as a sentence.
  *
  * Wallet errors are developer strings — `Transaction simulation failed: Error
@@ -149,10 +133,20 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
     }
   }, [order.id]);
 
-  /** Posts the signature, retrying while the cluster has not caught up yet. */
+  /**
+   * Posts the signature, retrying while the cluster has not caught up yet.
+   *
+   * Returns the server's `reason` along with its message, because the caller
+   * has to tell two failures apart that look identical from here: one where
+   * this payer's own money is already accounted for, and one where a second
+   * payment of theirs is sitting in the unmatched queue.
+   */
   const confirmWithServer = useCallback(
-    async (signature: string): Promise<{ ok: true } | { ok: false; message: string }> => {
+    async (
+      signature: string,
+    ): Promise<{ ok: true } | { ok: false; message: string; reason?: string }> => {
       let lastMessage = "The payment could not be verified.";
+      let lastReason: string | undefined;
       for (let attempt = 0; attempt < CONFIRM_MAX_ATTEMPTS; attempt++) {
         if (attempt > 0) await sleep(CONFIRM_RETRY_MS);
         let response: Response;
@@ -169,6 +163,7 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
         const body = await response.json().catch(() => ({}));
         if (response.ok) return { ok: true };
         lastMessage = typeof body?.error === "string" ? body.error : lastMessage;
+        lastReason = typeof body?.reason === "string" ? body.reason : undefined;
         // Only the reasons that can change on their own are worth another
         // attempt. A wrong amount or a wrong payer will still be wrong in
         // five seconds, and each attempt spends the order's verification
@@ -177,9 +172,9 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
           body?.reason === "not_confirmed" ||
           body?.reason === "no_block_time" ||
           body?.reason === "rpc_unavailable";
-        if (!retryable) return { ok: false, message: lastMessage };
+        if (!retryable) return { ok: false, message: lastMessage, reason: lastReason };
       }
-      return { ok: false, message: lastMessage };
+      return { ok: false, message: lastMessage, reason: lastReason };
     },
     [order.id],
   );
@@ -293,14 +288,21 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
     const confirmed = await confirmWithServer(signature);
     if (!alive.current) return;
     if (!confirmed.ok) {
-      // Before showing a payer a failure, ask the order itself. A dropped
-      // response to a `/confirm` that actually settled makes the retry post a
-      // signature the server has already claimed, and the answer to that is
-      // `signature_reused` or `already_settled` — so the one message this
-      // flow must never produce, "your payment failed", is exactly what a
-      // successful payment would get. The order's own status is the
-      // authority, and it costs one request to ask.
-      if ((await pollOrder()) === "paid") {
+      // `signature_reused`, and only that reason. A dropped response to a
+      // `/confirm` that actually settled makes the retry post a signature the
+      // server has already claimed, and the answer is that this signature is
+      // spent — so the one message this flow must never produce, "your
+      // payment failed", is what a successful payment would get. Asking the
+      // order settles it, and it costs one request.
+      //
+      // The neighbouring reason must NOT come here, which is why this is not
+      // written as "any failure on a paid order". `already_settled` means the
+      // order was paid by a DIFFERENT payment and this one is real, unmatched
+      // and filed for support (`settle.ts` files it and returns a contact).
+      // The order does read `paid` in that case — by someone else's money —
+      // so a status check would "confirm" success for a payer who is owed a
+      // refund and bury the only message that tells them so.
+      if (confirmed.reason === "signature_reused" && (await pollOrder()) === "paid") {
         setPhase({ kind: "paid" });
         return;
       }
@@ -320,14 +322,23 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
   }
 
   const chain = getChain(order.token.chainId);
-  // The cluster the adapter will actually sign against, read from the same
-  // function it uses, so the disclosure cannot drift from the signature. Only
+  // What the wallet will be asked to sign on, read from the same function the
+  // adapter uses so the label and the signature cannot drift apart. Only
   // meaningful in a browser: during a server render `rpcEndpoint` is the
   // placeholder `WalletProvider` uses to satisfy `Connection`'s constructor,
   // which would answer for the wrong cluster and mismatch on hydration.
   const inBrowser = useInBrowser();
   const signingChain = getChainForEndpoint(connection.rpcEndpoint);
-  const offMainnet = inBrowser && signingChain !== SOLANA_MAINNET_CHAIN;
+
+  // Whether paying here is real, asked of the ORIGIN rather than inferred from
+  // that chain. The adapter's mapping answers "mainnet" for every endpoint it
+  // does not recognise, and `/api/rpc` on our own host is one of those — so a
+  // guard built on it is live only where the mapping happens to have a
+  // pattern, and silent everywhere else. `isLocalHostname` is the independent
+  // signal; the chain check stays as the second one, for an endpoint that
+  // names a cluster outright.
+  const localOrigin = inBrowser && isLocalHostname(window.location.hostname);
+  const offMainnet = inBrowser && (localOrigin || signingChain !== SOLANA_MAINNET_CHAIN);
   const amount = `$${formatUsdc(usdToBaseUnits(order.amountUsd))} USDC`;
   const wrongWallet =
     order.payerPubkey !== null && publicKey !== null && publicKey.toBase58() !== order.payerPubkey;
@@ -362,7 +373,7 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
         </Row>
         <Row label="Network">
           <span className="numeric">
-            {inBrowser ? (NETWORK_LABEL[signingChain] ?? signingChain) : "Checking…"}
+            {inBrowser ? clusterLabel(signingChain) : "Checking…"}
           </span>
         </Row>
         <Row label="Recipient">
@@ -399,10 +410,24 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
         </Row>
         {offMainnet ? (
           <p role="alert" className="text-[13px]">
-            Your wallet will be asked to sign on{" "}
-            <span className="numeric">{NETWORK_LABEL[signingChain] ?? signingChain}</span>, not
-            mainnet. That is a configuration of this deployment, not of your wallet, and no real
-            USDC would move. Do not pay from this screen.
+            {/* Two different true things, never one sentence covering both.
+                A cluster that is not mainnet cannot credit an entry priced in
+                mainnet USDC; a development origin that the adapter still tags
+                as mainnet would move real money off a laptop build. Saying
+                the first about the second would be a warning that is wrong. */}
+            {signingChain === SOLANA_MAINNET_CHAIN ? (
+              <>
+                This page is served from a development machine. A payment from here would move
+                real USDC on Solana mainnet, so paying is turned off on this screen.
+              </>
+            ) : (
+              <>
+                Your wallet would be asked to sign on{" "}
+                <span className="numeric">{clusterLabel(signingChain)}</span>. The entry price is
+                mainnet USDC, so a payment made here could never be credited. Paying is turned off
+                on this screen.
+              </>
+            )}
           </p>
         ) : null}
       </section>

@@ -128,8 +128,15 @@ button.swatch:hover:not(:disabled),
   letter-spacing: 0.05em;
 }
 
+/**
+ * Out of reach, said with a colour. `opacity: 0.5` here composited the label
+ * to 2.89:1 and recorded that nowhere — the same defect as quiet body text,
+ * one state along. WCAG exempts a disabled control from its text floor, which
+ * makes choosing the value deliberately the whole job rather than an optional
+ * extra.
+ */
 .btn-secondary:disabled {
-  opacity: 0.5;
+  color: var(--chrome-ink-disabled);
   cursor: not-allowed;
 }
 

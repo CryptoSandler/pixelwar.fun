@@ -16,6 +16,8 @@ import {
   ACCENT,
   BODY_TEXT_CONTRAST,
   CHIP_OUTLINE,
+  DISABLED_INK,
+  DISABLED_TEXT_CONTRAST,
   INK,
   MUTED_INK,
   MUTED_INK_SURFACES,
@@ -149,6 +151,10 @@ describe("a chrome colour is legible under the text it carries", () => {
   // the colour still passes every test in this file while the element on
   // screen fails. These cases exist so the quiet ink is measured too.
   it("carries body text at the floor on every surface it is allowed on", () => {
+    // Without this the loop below asserts nothing at all if the list is ever
+    // emptied, and an empty list is exactly what a careless "fix" to a failing
+    // surface case would produce.
+    expect(MUTED_INK_SURFACES.length).toBeGreaterThan(0);
     for (const surface of MUTED_INK_SURFACES) {
       expect(contrastRatio(MUTED_INK, CHROME_SURFACES[surface])).toBeGreaterThanOrEqual(
         BODY_TEXT_CONTRAST,
@@ -165,6 +171,27 @@ describe("a chrome colour is legible under the text it carries", () => {
     expect(MUTED_INK_SURFACES).not.toContain("surround");
     expect(contrastRatio(MUTED_INK, CHROME_SURFACES.readout)).toBeLessThan(READOUT_TEXT_CONTRAST);
     expect(contrastRatio(MUTED_INK, CHROME_SURFACES.surround)).toBeLessThan(BODY_TEXT_CONTRAST);
+  });
+
+  // The quiet end of the scale has three steps and they have to stay in
+  // order: full ink, muted, disabled. A disabled label is exempt from §9's
+  // floor, which is a reason to pick its value deliberately rather than a
+  // reason to leave it composited and unmeasured.
+  it("keeps the disabled ink readable, and quieter than the muted ink", () => {
+    expect(MUTED_INK_SURFACES.length).toBeGreaterThan(0);
+    for (const surface of MUTED_INK_SURFACES) {
+      const face = CHROME_SURFACES[surface];
+      expect(contrastRatio(DISABLED_INK, face)).toBeGreaterThanOrEqual(DISABLED_TEXT_CONTRAST);
+      expect(contrastRatio(DISABLED_INK, face)).toBeLessThan(contrastRatio(MUTED_INK, face));
+      expect(contrastRatio(MUTED_INK, face)).toBeLessThan(contrastRatio(INK, face));
+    }
+  });
+
+  it("rejects the opacity that the disabled ink replaced", () => {
+    // `.btn-secondary:disabled { opacity: 0.5 }` composited to this.
+    expect(
+      contrastRatio(composite(INK, CHROME_SURFACES.control, 0.5), CHROME_SURFACES.control),
+    ).toBeLessThan(DISABLED_TEXT_CONTRAST);
   });
 
   it("rejects opacity as a way to quiet text — the failure that added this rule", () => {

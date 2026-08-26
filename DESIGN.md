@@ -66,6 +66,7 @@ in [chrome.ts](src/lib/wars/chrome.ts).
 | Chip outline, light surfaces | `#21242E` | — | — |
 | Chip outline, dark surfaces | `#F2F3F7` | — | — |
 | Muted ink (panels only) | `#3A3F4D` | 0.075 | 60 away |
+| Disabled ink (panels only) | `#6B7285` | 0.102 | 85 away |
 
 **Quieter text is a colour, never opacity.** `#21242E` at 80% renders 5.37:1 on
 the readout against a floor of 8:1 — the colour still passes every test in this
@@ -73,7 +74,10 @@ file while the element on screen fails, which is the whole failure mode I6
 exists for. The muted ink is measured like any other colour, and it is declared
 only for panel and control faces: the readout and the surround have no headroom
 at all, since the full ink itself reads 8.40 and 7.20 against floors of 8 and 7.
-Text that needs to be quiet does not belong on those two surfaces.
+Text that needs to be quiet does not belong on those two surfaces. A disabled
+control's label is the one step quieter than muted — 3.57:1, its own named
+colour, because "WCAG exempts disabled controls" is a reason to choose a value
+deliberately rather than a reason to leave it composited.
 
 **Brass is the only saturated thing in the chrome, and it means "you can act".**
 The Paint button, the selected swatch, the wordmark. Nothing else. One accent
@@ -273,7 +277,9 @@ tests, and a colour must pass both.
 > every surface in `MUTED_INK_SURFACES`, plus two controls: that the readout
 > and the surround are absent from that list and would indeed fail it, and
 > that ink composited at 80% — the way the first checkout expressed quiet
-> text — falls under the floor it claimed to meet.
+> text — falls under the floor it claimed to meet. `DISABLED_INK` is measured
+> the same way, against `DISABLED_TEXT_CONTRAST` and against `MUTED_INK`, so
+> the quiet end of the scale keeps its order.
 
 **Why this exists.** The first brass chosen for this design, `#B87A1E`, cleared
 the token palette by 90 and then failed WCAG AA on the primary button at
@@ -287,6 +293,17 @@ written as `opacity` on text, which turns a measured contrast into an
 unmeasured one and does it invisibly at review time. Hence `MUTED_INK` — a
 named colour with a declared list of surfaces it is allowed on — and hence the
 rule that no text in this application is ever quieted with opacity.
+
+**Partially enforced, in the same way and for the same reason as I5.** The
+tests measure the *colours*: `MUTED_INK` against every surface in
+`MUTED_INK_SURFACES`, and controls proving the readout and the surround would
+fail if anyone added them. They cannot see where a class is *used* — a
+`.muted` dropped inside a `.readout` renders 5.70:1 against a floor of 8 with
+the whole suite green, because a CSS class is not attached to a surface by
+anything a unit test can reach. **The surface list is a rule reviewers
+enforce.** Binding the two together — a component that takes its surface as a
+prop, or a lint rule over the markup — is the way to close it, and it is not
+closed today.
 
 ### I5 — The accent means action, and only action
 
