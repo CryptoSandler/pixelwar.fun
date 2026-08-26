@@ -62,7 +62,7 @@ in [chrome.ts](src/lib/wars/chrome.ts).
 | Panel / control face | `#DEDEDE` | 0.000 | neutral |
 | Readout | `#AEC0DE` | 0.188 | 104 away |
 | Header | `#21242E` | 0.051 | neutral |
-| **Accent (brass)** | `#B87A1E` | 0.604 | 90 away |
+| **Accent (brass)** | `#B1923B` | 0.463 | 100 away |
 | Chip outline, light surfaces | `#21242E` | — | — |
 | Chip outline, dark surfaces | `#F2F3F7` | — | — |
 
@@ -252,6 +252,22 @@ This invariant is what set the surround. The original periwinkle sat at 0.25
 chroma across the largest area on screen; the replacement is 0.118 **and its
 distance from the nearest token improved from 83 to 94.** The readout failed
 the same rule at 0.282 and was replaced at 0.188.
+
+### I6 — Every chrome colour is legible under the text it carries
+
+Distance from the palette and contrast with your own label are unrelated
+tests, and a colour must pass both.
+
+> *Test:* `contrastRatio(ACCENT, header)` >= `AA_NORMAL_TEXT` (4.5), plus a
+> control asserting the guard fires on the accent that failed, plus the
+> readout and body floors from §9.
+
+**Why this exists.** The first brass chosen for this design, `#B87A1E`, cleared
+the token palette by 90 and then failed WCAG AA on the primary button at
+**4.31:1** — the accent was unmistakable from every token, and its own label
+was hard to read. No amount of colour-distance work would have found that; it
+took building the button. The replacement reads 5.19:1 and is *further* from
+the palette, at 100.
 
 ### I5 — The accent means action, and only action
 

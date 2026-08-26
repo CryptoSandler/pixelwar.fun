@@ -12,8 +12,10 @@
 import { describe, expect, it } from "vitest";
 import { PALETTE, CANVAS_GROUND, rgbDistance } from "../palette";
 import {
+  AA_NORMAL_TEXT,
   ACCENT,
   CHIP_OUTLINE,
+  contrastRatio,
   CHROME_SURFACES,
   CHROME_TOKEN_DISTANCE,
   OUTLINE_SURFACE_DISTANCE,
@@ -114,5 +116,24 @@ describe("the chrome never out-shouts the canvas", () => {
 
   it("allows the accent more chroma than a surface, because it is small", () => {
     expect(chroma(ACCENT)).toBeGreaterThan(chroma(CHROME_SURFACES.surround));
+  });
+});
+
+describe("a chrome colour is legible under the text it carries", () => {
+  // Distance from the palette and contrast with your own label are unrelated
+  // tests, and the design's first accent passed one while failing the other:
+  // #B87A1E cleared the tokens by 90 and read 4.31:1 against the ink on the
+  // primary button. Colour-distance work would never have caught it.
+  it("carries the primary button's label at AA", () => {
+    expect(contrastRatio(ACCENT, CHROME_SURFACES.header)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+  });
+
+  it("rejects the accent that failed — the guard actually fires", () => {
+    expect(contrastRatio("#B87A1E", CHROME_SURFACES.header)).toBeLessThan(AA_NORMAL_TEXT);
+  });
+
+  it("holds readout and body text well above the floor, per DESIGN.md §9", () => {
+    expect(contrastRatio("#21242E", CHROME_SURFACES.readout)).toBeGreaterThanOrEqual(8);
+    expect(contrastRatio("#21242E", CHROME_SURFACES.panel)).toBeGreaterThanOrEqual(7);
   });
 });

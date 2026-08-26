@@ -47,12 +47,19 @@ export const CHROME_SURFACES = {
  * The signature accent. Everything the application asks you to do is this
  * colour, and nothing else is.
  *
- * Brass clears the token palette by 90 — its nearest neighbour is #FFA800,
+ * Brass clears the token palette by 100 — its nearest neighbour is #FFA800,
  * which is a much brighter orange. It is also the loudest thing in the chrome
  * on purpose: one accent, used only for the primary action, cannot be confused
  * with a token because no token ever appears as a large filled control.
+ *
+ * The first brass here was #B87A1E, and it was wrong for a reason no colour
+ * measurement catches: at 4.31:1 against the ink it sits on, the primary
+ * button's own label failed WCAG AA. Distance from the palette and contrast
+ * with your own text are separate tests and a colour has to pass both. This
+ * one is lighter, reads 5.19:1, and is further from the palette than its
+ * predecessor rather than closer.
  */
-export const ACCENT = "#B87A1E";
+export const ACCENT = "#B1923B";
 
 /**
  * The outline every token chip carries, per surface it is drawn on.
@@ -137,3 +144,27 @@ export function nearestToken(hex: string): { colour: string; distance: number } 
   }
   return { colour, distance };
 }
+
+/** WCAG relative luminance of `hex`. */
+function luminance(hex: string): number {
+  const channels = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+  const linear = channels.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+/**
+ * WCAG contrast ratio between two colours, 1..21.
+ *
+ * Here because a chrome colour has to pass two unrelated tests: far enough
+ * from the palette that it cannot be read as a token, and legible under the
+ * text it carries. The first accent chosen for this design passed the first
+ * and failed the second, and nothing in the colour-distance work would ever
+ * have noticed.
+ */
+export function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Smallest contrast WCAG AA accepts for normal-size text. */
+export const AA_NORMAL_TEXT = 4.5;

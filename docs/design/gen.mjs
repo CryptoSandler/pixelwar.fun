@@ -116,7 +116,7 @@ const C = page({ id: "c", name: "C — Cabinet",
   css: `
 body{background:#A8B1C6;color:#21242e;font-family:"Jost",sans-serif}
 header{height:46px;display:flex;align-items:center;gap:14px;padding:0 18px;background:#21242e;color:#fff}
-header b{font-size:16px;font-weight:500;letter-spacing:.14em;color:#B87A1E}
+header b{font-size:16px;font-weight:500;letter-spacing:.14em;color:#B1923B}
 .war{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;color:#9fbee7}
 main{flex:1;display:flex;padding:20px;gap:20px}
 .rail{width:280px;background:#dedede;border:2px solid #fff;border-right-color:#3d4f97;border-bottom-color:#3d4f97;padding:14px;gap:12px}
@@ -134,8 +134,8 @@ h2{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;col
 .sws{display:flex;gap:4px;flex:1}
 .sw{background:#dedede;border:2px solid #fff;border-right-color:#8b8b8b;border-bottom-color:#8b8b8b;padding:5px 8px;display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;cursor:pointer}
 .sw span{width:10px;height:10px;display:block;outline:1px solid #21242e}
-.sw.on{border-color:#B87A1E;background:#fff}
-.paint{border:2px solid #fff;border-right-color:#7a4f10;border-bottom-color:#7a4f10;background:#B87A1E;color:#fff;padding:9px 24px;font-size:13px;font-weight:800;letter-spacing:.05em;cursor:pointer}
+.sw.on{border-color:#B1923B;background:#fff}
+.paint{border:2px solid #fff;border-right-color:#7A6420;border-bottom-color:#7A6420;background:#B1923B;color:#fff;padding:9px 24px;font-size:13px;font-weight:800;letter-spacing:.05em;cursor:pointer}
 ` });
 
 writeFileSync(`${import.meta.dirname}/a-instrument.html`, A);
