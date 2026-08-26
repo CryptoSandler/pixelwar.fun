@@ -65,7 +65,8 @@ Two habits follow:
 
 # Migrations
 
-**Never edit a migration that has already been applied. Add the next number.**
+**Never change the SQL of a migration that has already been applied. Add the
+next number.**
 
 `scripts/migrate.mts` records applied versions and skips them, so editing an
 applied file fixes the file and nothing else. Every database that already ran
@@ -79,9 +80,19 @@ re-applied by hand to two databases. Both are correct now and no other database
 existed — which is the only reason it cost nothing. A third database would have
 been wrong with nothing to show for it, because no test asserts an index exists.
 
-If you have already edited an applied migration, say so plainly, then either
-add the corrective migration or state exactly which databases you repaired and
-how you verified them.
+If you have already changed an applied migration's SQL, say so plainly, then
+either add the corrective migration or state exactly which databases you
+repaired and how you verified them.
+
+**Comments are the exception, and only because they cannot diverge.** No
+database contains a comment, so correcting one cannot make the file disagree
+with anything. But reach for that rarely, and notice what it usually means: a
+migration comment that has gone stale is normally a comment that described
+behaviour living in another file. Migration `004` said an over-age payment was
+"never recovered and never filed", which was true of `recover.ts` when it was
+written and false a batch later. **A migration comment should describe the
+schema, not the policy some module applies to it** — the schema is frozen by
+definition and the policy is not.
 
 # Showing the network before a signature
 
