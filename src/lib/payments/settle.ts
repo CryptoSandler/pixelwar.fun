@@ -87,8 +87,19 @@ type Runner = (text: string, params: unknown[]) => Promise<unknown>;
  * Idempotent by design: `unmatched_payments.signature` is UNIQUE, and a
  * caller can legitimately submit the same losing signature more than once
  * (a `wrong_payer` or `insufficient_amount` verdict does not change on
- * retry). A duplicate insert is caught and treated as already-filed, not an
- * error.
+ * retry). The duplicate case is handled with `ON CONFLICT ... DO NOTHING`,
+ * never a caught exception: on the paths that call this through `client`
+ * mid-transaction (`unmatchedNoSeat`, the `already_settled` and
+ * `token_state_mismatch` branches above), a caught `23505` still leaves the
+ * enclosing Postgres transaction aborted — catching the exception in
+ * JavaScript does not undo that. Every statement run afterwards on the same
+ * client would fail with `25P02` ("current transaction is aborted"), and if
+ * nothing ran afterwards, the transaction's own `COMMIT` would silently
+ * degrade to a `ROLLBACK` — the call returns a normal-looking result while
+ * everything that transaction wrote, including an unrelated
+ * `consumed_signatures` claim made earlier in it, quietly vanishes, with no
+ * way for the caller to tell. `ON CONFLICT` avoids the error entirely, so
+ * there is nothing here for a caller to need a `SAVEPOINT` to survive.
  */
 async function fileUnmatched(
   run: Runner,
@@ -101,27 +112,23 @@ async function fileUnmatched(
     sender: SenderInfo | null;
   },
 ): Promise<void> {
-  try {
-    await run(
-      `INSERT INTO unmatched_payments
-         (id, signature, order_id, received_base_units, expected_base_units, reason, created_at,
-          sender_fee_payer, sender_debited)
-       VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8::jsonb)`,
-      [
-        randomUUID(),
-        params.signature,
-        params.orderId,
-        params.receivedBaseUnits.toString(),
-        params.expectedBaseUnits.toString(),
-        params.reason,
-        params.sender?.feePayer ?? null,
-        JSON.stringify(params.sender?.debited ?? []),
-      ],
-    );
-  } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
-    // Already filed by an earlier identical attempt with this signature.
-  }
+  await run(
+    `INSERT INTO unmatched_payments
+       (id, signature, order_id, received_base_units, expected_base_units, reason, created_at,
+        sender_fee_payer, sender_debited)
+     VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8::jsonb)
+     ON CONFLICT (signature) DO NOTHING`,
+    [
+      randomUUID(),
+      params.signature,
+      params.orderId,
+      params.receivedBaseUnits.toString(),
+      params.expectedBaseUnits.toString(),
+      params.reason,
+      params.sender?.feePayer ?? null,
+      JSON.stringify(params.sender?.debited ?? []),
+    ],
+  );
 }
 
 /**
@@ -615,6 +622,23 @@ async function finishSettlement(
     throw new Error(`entry_orders ${params.order.id} changed status during settlement`);
   }
 
+  // This exact signature can already have an 'open' unmatched_payments row:
+  // an earlier attempt against a DIFFERENT order (an honest mismatch, or an
+  // attacker posting someone else's in-flight signature against an order
+  // they control) files one without ever claiming the signature — that is
+  // the whole point of leaving wrong_payer/insufficient_amount spendable.
+  // Now that this signature has genuinely settled something, that row is
+  // answered: closing it here, in the same transaction, is what keeps an
+  // operator's queue from being handed a trap that names the wrong order
+  // for money that already went where it belonged.
+  await client.query(
+    `UPDATE unmatched_payments
+        SET status = 'applied', resolved_at = now(), applied_order_id = $2,
+            resolution_note = 'Automatically resolved: this signature settled a different order on a later attempt.'
+      WHERE signature = $1 AND status = 'open'`,
+    [params.signature, params.order.id],
+  );
+
   return { ok: true, amountBaseUnits: params.amountBaseUnits };
 }
 
@@ -689,5 +713,23 @@ export async function recordVerificationAttempt(orderId: string, ipHash: string 
   await query(
     `INSERT INTO verification_attempts (id, order_id, ip_hash, attempted_at) VALUES ($1, $2, $3, now())`,
     [randomUUID(), orderId, ipHash],
+  );
+  await pruneVerificationAttempts();
+}
+
+/**
+ * Sweeps rows the rate limiter can no longer see: migration 002's own
+ * comment on this table says "Rows outside the window are swept", but
+ * nothing did — this table grew forever, silently, behind a comment that
+ * claimed otherwise. Run from the limiter's own write path rather than a
+ * separate cron: every confirm attempt already pays for one row insert, and
+ * this table is inherently low-volume (VERIFY_LIMITS bounds how many rows
+ * any one order or caller can even produce), so sweeping on the same trip
+ * costs nothing extra worth a second scheduled job for.
+ */
+async function pruneVerificationAttempts(): Promise<void> {
+  await execute(
+    `DELETE FROM verification_attempts WHERE attempted_at <= now() - ($1 || ' minutes')::interval`,
+    [String(VERIFY_LIMITS.windowMinutes)],
   );
 }

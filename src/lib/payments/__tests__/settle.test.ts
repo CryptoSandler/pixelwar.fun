@@ -593,6 +593,195 @@ describe("settlePayment: a second confirm of the same order", () => {
   );
 });
 
+describe("settlePayment: a duplicate unmatched_payments row must not abort the transaction that wrote it", () => {
+  /**
+   * Fix round 2, Finding 1: `fileUnmatched`'s own try/catch on the
+   * unmatched_payments unique violation was, for every call site that runs
+   * it through `client.query` mid-transaction, the exact hazard already
+   * guarded against for the colour flip in `settleLateConfirmation` —
+   * catching the JS exception does not undo Postgres putting the whole
+   * transaction into an aborted state. On the `already_settled` branch,
+   * nothing runs after the swallowed catch, so the transaction's own
+   * `COMMIT` silently degrades to a `ROLLBACK` — the call still returns a
+   * normal-looking `already_settled` result, but everything that
+   * transaction wrote, including the `consumed_signatures` claim made
+   * moments earlier in the SAME call, vanishes. Asserting only the return
+   * value is exactly what let this hide; every test below also checks what
+   * is actually in the database afterwards.
+   */
+  it(
+    "settles for real — claim included — even when the signature already has an unmatched_payments row (already_settled branch)",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
+      // The order is already paid by an unrelated signature — any second
+      // attempt on it reaches the already_settled branch.
+      await execute(`UPDATE entry_orders SET status = 'paid', paid_at = now() WHERE id = $1`, [order.id]);
+
+      const signature = randomUUID();
+      // A row for THIS signature already exists — the exact collision
+      // `fileUnmatched` will hit when the already_settled branch tries to
+      // file it again.
+      await execute(
+        `INSERT INTO unmatched_payments
+           (id, signature, order_id, received_base_units, expected_base_units, reason, created_at)
+         VALUES ($1, $2, $3, '1', '1', 'pre-existing', now())`,
+        [randomUUID(), signature, order.id],
+      );
+
+      const result = await settlePayment({ order, signature, verified: okVerified(25_000_000n) });
+
+      // The call itself still reports the right thing...
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("already_settled");
+
+      // ...but the return value alone is exactly what hid the bug. What
+      // matters is whether this transaction's OTHER writes actually landed:
+      // consumed_signatures is the first statement of the same transaction
+      // as the fileUnmatched call that collided, and a silently-degraded
+      // COMMIT would erase it along with everything else.
+      const [consumedRow] = await query<{ outcome: string }>(
+        `SELECT outcome FROM consumed_signatures WHERE signature = $1`,
+        [signature],
+      );
+      expect(consumedRow).toBeTruthy();
+      expect(consumedRow?.outcome).toBe("verified");
+
+      // The pre-existing row is untouched (still exactly one row for this
+      // signature — the conflicting insert did nothing, not something).
+      const unmatchedRows = await query(`SELECT 1 FROM unmatched_payments WHERE signature = $1`, [
+        signature,
+      ]);
+      expect(unmatchedRows).toHaveLength(1);
+    },
+  );
+
+  it(
+    "reclaims the colour for real even when the signature already has an unmatched_payments row (unmatchedNoSeat)",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war({ maxTokens: 3 });
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 2, status: "released" });
+      const order = await insertOrder({
+        warId: w.id,
+        warTokenId: tokenId,
+        expiresAt: new Date(Date.now() - 2 * 60_000),
+      });
+      await execute(`UPDATE entry_orders SET status = 'expired' WHERE id = $1`, [order.id]);
+      // Colour 2 was retaken in the meantime, so this late confirm will
+      // land in unmatchedNoSeat — the second call site that runs
+      // fileUnmatched through client.query mid-transaction.
+      await insertToken({ warId: w.id, colourSlot: 2, status: "active" });
+
+      const signature = randomUUID();
+      await execute(
+        `INSERT INTO unmatched_payments
+           (id, signature, order_id, received_base_units, expected_base_units, reason, created_at)
+         VALUES ($1, $2, $3, '1', '1', 'pre-existing', now())`,
+        [randomUUID(), signature, order.id],
+      );
+
+      const result = await settlePayment({
+        order: (await orderById(order.id))!,
+        signature,
+        verified: okVerified(25_000_000n),
+      });
+
+      // Before the fix, freeColoursOnClient — the very next statement after
+      // fileUnmatched inside unmatchedNoSeat — threw 25P02 on the aborted
+      // transaction, and settlePayment rejected instead of returning.
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("unmatched");
+      expect(result.freeColours).toBeDefined();
+
+      const [consumedRow] = await query<{ outcome: string }>(
+        `SELECT outcome FROM consumed_signatures WHERE signature = $1`,
+        [signature],
+      );
+      expect(consumedRow?.outcome).toBe("verified");
+    },
+  );
+});
+
+describe("settlePayment: a settled signature closes its own open unmatched_payments row", () => {
+  /**
+   * Fix round 2, Finding 2. After the attack sequence proven in the
+   * "verification failure" block above (an attacker posts a victim's
+   * in-flight signature against their own order, collects wrong_payer, and
+   * an honest but claimant-controlled unmatched_payments row gets filed),
+   * the victim's own order settles the SAME signature later. Without this
+   * fix the earlier row survives forever, `open`, naming the attacker's
+   * order — a trap for whatever admin queue reads it next, even though the
+   * money is now provably accounted for.
+   */
+  it(
+    "marks the earlier open row applied, pointing at the order that actually settled",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const attackerTokenId = await insertToken({ warId: w.id, colourSlot: 1, status: "reserved" });
+      const attackerOrder = await insertOrder({ warId: w.id, warTokenId: attackerTokenId });
+      const victimTokenId = await insertToken({ warId: w.id, colourSlot: 2, status: "reserved" });
+      const victimOrder = await insertOrder({ warId: w.id, warTokenId: victimTokenId });
+      const signature = randomUUID();
+
+      // The attacker's losing attempt files the row.
+      await settlePayment({
+        order: attackerOrder,
+        signature,
+        verified: failVerified("wrong_payer", "wrong wallet", {
+          receivedBaseUnits: 25_000_000n,
+          sender: { feePayer: "SomeRealSender11111111111111111111111111111", debited: [] },
+        }),
+      });
+      const [beforeSettle] = await query<{ status: string; order_id: string }>(
+        `SELECT status, order_id FROM unmatched_payments WHERE signature = $1`,
+        [signature],
+      );
+      expect(beforeSettle).toMatchObject({ status: "open", order_id: attackerOrder.id });
+
+      // The victim's own order settles it for real.
+      const settled = await settlePayment({ order: victimOrder, signature, verified: okVerified(25_000_000n) });
+      expect(settled.ok).toBe(true);
+
+      const [afterSettle] = await query<{
+        status: string;
+        applied_order_id: string | null;
+        resolved_at: Date | null;
+      }>(
+        `SELECT status, applied_order_id, resolved_at FROM unmatched_payments WHERE signature = $1`,
+        [signature],
+      );
+      expect(afterSettle.status).toBe("applied");
+      expect(afterSettle.applied_order_id).toBe(victimOrder.id);
+      expect(afterSettle.resolved_at).toBeTruthy();
+    },
+  );
+
+  it(
+    "leaves no open unmatched row behind for a signature that settled cleanly on its first try",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
+      const signature = randomUUID();
+
+      const result = await settlePayment({ order, signature, verified: okVerified(25_000_000n) });
+
+      expect(result.ok).toBe(true);
+      const open = await query(`SELECT 1 FROM unmatched_payments WHERE signature = $1 AND status = 'open'`, [
+        signature,
+      ]);
+      expect(open).toHaveLength(0);
+    },
+  );
+});
+
 describe("settlePayment: late confirmation", () => {
   async function expiredReservation(overrides: {
     maxTokens?: number;
@@ -911,6 +1100,45 @@ describe("verification rate limiting", () => {
       const result = await verifyRateLimited(order.id, "ip-fresh");
 
       expect(result).toEqual({ limited: false });
+    },
+  );
+
+  /**
+   * Fix round 2, Finding 3: migration 002's own comment on this table says
+   * "Rows outside the window are swept", but nothing did — the table grew
+   * forever. The limiter itself is unaffected (it is window-scoped, so an
+   * ancient row was never counted), but a table that grows forever behind a
+   * comment that claims otherwise is worth closing, not just living with.
+   */
+  it(
+    "sweeps attempts older than the rate-limit window when a new one is recorded",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
+
+      for (let i = 0; i < 50; i++) {
+        await execute(
+          `INSERT INTO verification_attempts (id, order_id, ip_hash, attempted_at)
+           VALUES ($1, $2, 'ip-ancient', now() - interval '400 days')`,
+          [randomUUID(), randomUUID()],
+        );
+      }
+      const before = await query(`SELECT 1 FROM verification_attempts`);
+      expect(before.length).toBeGreaterThanOrEqual(50);
+
+      await recordVerificationAttempt(order.id, "ip-fresh");
+
+      const stale = await query(
+        `SELECT 1 FROM verification_attempts WHERE attempted_at < now() - interval '1 day'`,
+      );
+      expect(stale).toHaveLength(0);
+
+      // The row the sweep must NOT touch: the attempt just recorded, for
+      // this order, inside the window.
+      const fresh = await query(`SELECT 1 FROM verification_attempts WHERE order_id = $1`, [order.id]);
+      expect(fresh).toHaveLength(1);
     },
   );
 });
