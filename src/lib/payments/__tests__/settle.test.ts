@@ -190,6 +190,93 @@ describe("settlePayment: the normal path", () => {
   );
 });
 
+/**
+ * The war, on the branch that holds a live reservation.
+ *
+ * A `pending` order's own window is short, so a war ending inside it is a
+ * narrow race — and for exactly that reason this branch had no war check at
+ * all until a review of the admin surface went looking for one. Narrowness is
+ * why nobody noticed, not a reason to leave it: the same branch is reached by
+ * `settleAssignedPayment`, where a human can arrive weeks late and the race
+ * has no bound whatsoever.
+ *
+ * Falsify by deleting the `warIsOpen` call from `settlePayment`'s `pending`
+ * branch: the first two go red and the third stays green.
+ */
+describe("settlePayment: a pending order whose war is over", () => {
+  it(
+    "files the payment instead of seating a token in a war that has ended",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war({ endsAt: new Date(Date.now() - 60_000) });
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId, amountUsd: 25 });
+      const signature = randomUUID();
+
+      const result = await settlePayment({ order, signature, verified: okVerified(25_000_000n) });
+
+      expect(result).toMatchObject({ ok: false, reason: "unmatched" });
+
+      // Nothing seated, nothing paid — and the money is on the record rather
+      // than refused into thin air.
+      expect((await orderById(order.id))?.status).toBe("pending");
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "reserved" },
+      ]);
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(
+        await query(`SELECT reason, received_base_units FROM unmatched_payments WHERE signature = $1`, [
+          signature,
+        ]),
+      ).toEqual([{ reason: "war_closed", received_base_units: "25000000" }]);
+    },
+  );
+
+  it(
+    "files the payment when the war was cancelled",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war({ status: "cancelled" });
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId, amountUsd: 25 });
+
+      const result = await settlePayment({
+        order,
+        signature: randomUUID(),
+        verified: okVerified(25_000_000n),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: "unmatched" });
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+    },
+  );
+
+  it(
+    "still settles when the war is exactly full, because this seat is already in the count",
+    { timeout: 20_000 },
+    async () => {
+      // The reason the check is `warIsOpen` and not `warHasRoom`. This war
+      // seats one token, and that token is this order's own reserved seat —
+      // which `status <> 'released'` already counts. Asking about capacity
+      // would refuse the war's own last legitimate payment.
+      const w = await war({ maxTokens: 1 });
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId, amountUsd: 25 });
+
+      const result = await settlePayment({
+        order,
+        signature: randomUUID(),
+        verified: okVerified(25_000_000n),
+      });
+
+      expect(result).toEqual({ ok: true, amountBaseUnits: 25_000_000n });
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "active" },
+      ]);
+    },
+  );
+});
+
 describe("settlePayment: verification failure", () => {
   /**
    * `consumed_signatures` was, in an earlier version of this code, claimed

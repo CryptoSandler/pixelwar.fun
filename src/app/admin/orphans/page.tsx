@@ -210,14 +210,20 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
         <span className="numeric text-[12px] break-all">{orphan.signature}</span>
       </Field>
 
-      <div className="flex flex-wrap gap-6">
-        <Field label="Received">
-          <span className="numeric text-[13px]">{orphan.receivedUsdc} USDC</span>
-        </Field>
-        <Field label="Order price">
-          <span className="numeric text-[13px]">{orphan.expectedUsdc} USDC</span>
-        </Field>
-      </div>
+      {/*
+        Received on its own. The filed row also carries `expected_base_units`,
+        but that is the price of the order this payment was SUBMITTED against —
+        not of the order an operator is about to pick. Shown side by side and
+        labelled "Order price" it read as the comparison that matters, and it
+        is the wrong comparison in exactly the case this screen exists for:
+        reuniting a payment with a DIFFERENT order. So it moves down beside the
+        order it actually describes, and the number to compare against lives in
+        the picker, one line under the warning that nothing compares them for
+        you.
+      */}
+      <Field label="Received">
+        <span className="numeric text-[13px]">{orphan.receivedUsdc} USDC</span>
+      </Field>
 
       <Field label="Why it was filed">
         <span className="text-[13px]">{REASONS[orphan.reason] ?? "Filed with no known reason."}</span>
@@ -260,6 +266,9 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
       {orphan.orderId ? (
         <Field label="Submitted against order">
           <span className="numeric text-[12px] break-all">{orphan.orderId}</span>
+          <span className="muted text-[13px]">
+            That order&rsquo;s price was <span className="numeric">{orphan.expectedUsdc} USDC</span>.
+          </span>
         </Field>
       ) : null}
 
@@ -283,7 +292,7 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
 
       {open ? (
         <>
-          <AssignForm orphanId={orphan.id} orders={orders} />
+          <AssignForm orphanId={orphan.id} receivedUsdc={orphan.receivedUsdc} orders={orders} />
           <DiscardForm orphanId={orphan.id} />
         </>
       ) : null}
@@ -303,7 +312,15 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
  * action" (DESIGN.md I5), and a screen whose loudest element urges you to move
  * somebody's money is the wrong screen.
  */
-function AssignForm({ orphanId, orders }: { orphanId: string; orders: AssignableOrder[] }) {
+function AssignForm({
+  orphanId,
+  receivedUsdc,
+  orders,
+}: {
+  orphanId: string;
+  receivedUsdc: string;
+  orders: AssignableOrder[];
+}) {
   if (orders.length === 0) {
     return (
       <p className="muted text-[13px]">
@@ -318,6 +335,17 @@ function AssignForm({ orphanId, orders }: { orphanId: string; orders: Assignable
       method="post"
       className="flex flex-col gap-3"
     >
+      {/*
+        Said out loud because nothing enforces it: `settleAssignedPayment`
+        deliberately does not compare the received amount to the chosen order's
+        price. An underpayment can be assigned, and sometimes should be. What
+        must not happen is an operator assuming a check ran.
+      */}
+      <p className="text-[13px]">
+        The amount is not checked against the order you pick. Compare
+        <span className="numeric"> {receivedUsdc} USDC</span> against the price in the list
+        yourself, and assign anyway only if you mean to.
+      </p>
       {/*
         `min-w-0` on the column and `w-full` on the control: a <select> sizes
         itself to its widest <option>, and these options carry a UUID, so

@@ -88,13 +88,15 @@ async function file(options: {
   reason: string;
   createdAt: Date;
   feePayer?: string | null;
+  /** The order the payment was SUBMITTED against, when the filing path had one. */
+  orderId?: string | null;
 }): Promise<string> {
   const signature = options.signature ?? randomSignature();
   await execute(
     `INSERT INTO unmatched_payments
        (id, signature, order_id, received_base_units, expected_base_units, reason, created_at,
         sender_fee_payer, sender_debited)
-     VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,'[]'::jsonb)`,
+     VALUES ($1,$2,$8,$3,$4,$5,$6,$7,'[]'::jsonb)`,
     [
       randomUUID(),
       signature,
@@ -103,13 +105,23 @@ async function file(options: {
       options.reason,
       options.createdAt,
       options.feePayer ?? null,
+      options.orderId ?? null,
     ],
   );
   return signature;
 }
 
 /** A live war, a reserved colour, and the order that would pay for it. */
-async function orderFixture(options: { tokenStatus?: "reserved" | "released"; orderStatus?: "pending" | "expired" | "paid" } = {}) {
+async function orderFixture(options: {
+  tokenStatus?: "reserved" | "released";
+  orderStatus?: "pending" | "expired" | "paid";
+  /** The war's own state, for the checks that are about the war and not the seat. */
+  warStatus?: string;
+  /** Set in the past to make the war over by its own clock rather than by status. */
+  warEndsAt?: string;
+  /** 1 makes this war exactly full once its single token is counted. */
+  maxTokens?: number;
+} = {}) {
   const warId = randomUUID();
   const tokenId = randomUUID();
   const orderId = randomUUID();
@@ -119,8 +131,9 @@ async function orderFixture(options: { tokenStatus?: "reserved" | "released"; or
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
                        entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1,$1,'Fixture war','live',8,8,24,25,30, now() - interval '1 hour', now() + interval '1 hour')`,
-    [warId],
+     VALUES ($1,$1,'Fixture war',$2,8,8,$3,25,30, now() - interval '1 hour',
+             now() + ($4 || ' minutes')::interval)`,
+    [warId, options.warStatus ?? "live", options.maxTokens ?? 24, options.warEndsAt ?? "60"],
   );
   await execute(
     `INSERT INTO war_tokens
@@ -359,7 +372,12 @@ describe("/admin/orphans", () => {
     expect(html).toContain(`/api/admin/orphans/${orphanId}/discard`);
     expect(html).toContain('name="note"');
     expect(html).toContain("12.50 USDC");
-    expect(html).toContain("25.00 USDC");
+    // The RECEIVED amount is on the card. The order price deliberately is NOT,
+    // because this row names no order — see the next test. A price shown here
+    // would be a number the operator reads as the comparison that matters,
+    // and it is the wrong comparison in exactly the reunite-with-a-different-
+    // order case this screen exists for.
+    expect(html).not.toContain("25.00 USDC");
     expect(html).toContain("2026-08-22 10:00:00 UTC");
     // The reason, in words as well as in code.
     expect(html).toContain("Less than the entry price arrived.");
@@ -373,6 +391,39 @@ describe("/admin/orphans", () => {
     expect(html).toContain("muted");
     expect(html).not.toContain("opacity");
   });
+
+  it(
+    "shows the order price beside the order it belongs to, never beside the picker",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId } = await orderFixture();
+      await file({
+        received: "12500000",
+        expected: "25000000",
+        reason: "insufficient_amount",
+        createdAt: new Date("2026-08-22T10:00:00Z"),
+        orderId,
+      });
+
+      const session = await createAdminSession("admin", "hashed");
+      cookieJar.value = session.id;
+
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const html = renderToStaticMarkup(await OrphansPage(pageProps()));
+
+      // Present, but only as a fact about the order it was submitted against.
+      expect(html).toContain("Submitted against order");
+      expect(html).toContain("That order\u2019s price was");
+      expect(html).toContain("25.00 USDC");
+      // And never as a bare labelled figure next to the received amount, which
+      // is what read as "compare these two" and was wrong whenever the
+      // operator picks a different order.
+      expect(html).not.toContain("Order price");
+      // What replaces it: the operator is told plainly that nothing checks the
+      // amount for them.
+      expect(html).toContain("The amount is not checked against the order you pick.");
+    },
+  );
 });
 
 /**
@@ -664,6 +715,176 @@ describe("POST /api/admin/orphans/[id]/assign", () => {
       expect(await query(`SELECT status, released_at FROM war_tokens WHERE id = $1`, [tokenId])).toEqual(
         [{ status: "active", released_at: null }],
       );
+    },
+  );
+
+  /**
+   * The war checks, which are what the dropped grace window rests on.
+   *
+   * "Authorisation, never an exemption from the war's own rules" was true of
+   * the `expired` branch and false of the `pending` one until a review found
+   * it: the `pending` branch took no war check at all, so an operator could
+   * seat a token into a war that ended months ago. These four cover both
+   * branches, both refusals, and — the case that makes the fix non-obvious —
+   * the full war that must still accept its own last payment.
+   */
+  it(
+    "refuses a pending order in a war that has ended",
+    { timeout: 20_000 },
+    async () => {
+      // Over by its own clock, which is the case `expireStaleOrders` cannot
+      // help with: nothing closes a war's orders when the war ends.
+      const { orderId, tokenId } = await orderFixture({ warEndsAt: "-30" });
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: "war_closed" });
+
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(await query(`SELECT status FROM entry_orders WHERE id = $1`, [orderId])).toEqual([
+        { status: "pending" },
+      ]);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "reserved" },
+      ]);
+      expect(await query(`SELECT status FROM unmatched_payments WHERE id = $1`, [orphanId])).toEqual([
+        { status: "open" },
+      ]);
+    },
+  );
+
+  it(
+    "refuses a pending order in a war that was cancelled",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId } = await orderFixture({ warStatus: "cancelled" });
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: "war_closed" });
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+    },
+  );
+
+  it(
+    "still settles a pending order in a war that is exactly full",
+    { timeout: 20_000 },
+    async () => {
+      // The reason the fix is `warIsOpen` and not `warHasRoom`. This war seats
+      // one token and that token is this order's own reserved seat, so the
+      // capacity count (`status <> 'released'`) already includes it. Asking
+      // about capacity here would refuse a perfectly legitimate payment for a
+      // seat the war is already holding.
+      const { orderId, tokenId } = await orderFixture({ maxTokens: 1 });
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(200);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "active" },
+      ]);
+    },
+  );
+
+  it(
+    "refuses an expired order in a war that has ended",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId, tokenId } = await orderFixture({
+        tokenStatus: "released",
+        orderStatus: "expired",
+        warEndsAt: "-30",
+      });
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "late_confirm_past_grace",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: "war_closed" });
+
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "released" },
+      ]);
+    },
+  );
+
+  it(
+    "refuses an expired order whose war filled while it waited",
+    { timeout: 20_000 },
+    async () => {
+      // Here the seat IS being added back, so capacity is the right question:
+      // one seat, already taken by somebody else, and this released row would
+      // be the second.
+      const { warId, orderId, tokenId } = await orderFixture({
+        tokenStatus: "released",
+        orderStatus: "expired",
+        maxTokens: 1,
+      });
+      await execute(
+        `INSERT INTO war_tokens
+           (id, war_id, chain_id, contract, contract_key, colour_slot, status,
+            name, ticker, metadata_fetched_at, reserved_at, joined_at)
+         VALUES ($1,$2,'solana',$1,$1,11,'active','Rival','RIV', now(), now(), now())`,
+        [randomUUID(), warId],
+      );
+
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "late_confirm_past_grace",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await assignRoute(
+        ...assignRequest(orphanId, orderId, { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: "war_full" });
+
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "released" },
+      ]);
     },
   );
 

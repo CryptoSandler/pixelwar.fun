@@ -235,6 +235,39 @@ export async function settlePayment(params: {
     }
 
     if (current.status === "pending") {
+      // The war itself, before the seat. A reservation being live says nothing
+      // about whether the war it belongs to still is: `expireStaleOrders`
+      // closes an order's window, but nothing closes a war's orders when the
+      // war ends, so a `pending` order can outlive its war by however long is
+      // left on its clock.
+      //
+      // **Do not remove this as redundant because the window is short.** The
+      // window is only short when the reservation is honest — and this branch
+      // is also reached by `settleAssignedPayment`'s equivalent, where an
+      // operator can arrive weeks later with no window at all. It was missing
+      // here first, and that is what made it missing there: a race measured in
+      // minutes on the payer path became unbounded the moment a human could
+      // drive the same branch. The narrowness of a hole is not a reason to
+      // leave it; it is only a reason nobody noticed.
+      //
+      // `warIsOpen`, never `warHasRoom`: this order already holds a `reserved`
+      // seat that the capacity count includes, so asking about capacity would
+      // refuse a full war's own last legitimate payment. See `warHasRoom`.
+      const open = await warIsOpen(client, current.war_id);
+      if (!open.ok) {
+        // Real money that arrived for a war that is over. Filed exactly like
+        // any other payment with no seat to land in, rather than settled into
+        // a war nobody can paint on.
+        return unmatchedNoSeat(client, {
+          order: current,
+          signature,
+          amountBaseUnits,
+          expectedBaseUnits,
+          reason: "war_closed",
+          warStillOpen: false,
+        });
+      }
+
       const flip = await client.query(
         `UPDATE war_tokens SET status = 'active', joined_at = now()
           WHERE id = $1 AND status = 'reserved' RETURNING id`,
@@ -529,18 +562,23 @@ async function settleLateConfirmation(
 }
 
 /**
- * Is this war still able to seat one more token?
+ * Is this war still open for entry at all?
  *
- * Lifted out of `settleLateConfirmation` unchanged so that
- * `settleAssignedPayment` asks the database exactly the same question in
- * exactly the same way. An operator assigning a filed payment must not be able
- * to seat a token into a war that has ended or filled — "a human decided it"
- * is authorisation, never an exemption from the war's own rules.
+ * The half of the seat question that has nothing to do with capacity: has this
+ * war ended, been cancelled, or never been published. **Every path that seats
+ * a token asks this**, including the two that hold a live reservation and so
+ * need no capacity check — see `warHasRoom` for why those two must NOT ask the
+ * capacity half.
+ *
+ * `FOR UPDATE` on the war row, on all of them. Capacity genuinely needs it (a
+ * count is only true while nothing else can insert), and taking it here too
+ * means every settlement path locks `wars` at the same point in the same
+ * order, rather than some of them locking it and some not.
  */
-async function warHasRoom(
+async function warIsOpen(
   client: PoolClient,
   warId: string,
-): Promise<{ ok: true } | { ok: false; reason: "war_closed" | "war_full" }> {
+): Promise<{ ok: true; maxTokens: number } | { ok: false; reason: "war_closed" }> {
   const warResult = await client.query<WarRow>(
     `SELECT status, (ends_at <= now()) AS ended, max_tokens FROM wars WHERE id = $1 FOR UPDATE`,
     [warId],
@@ -552,16 +590,44 @@ async function warHasRoom(
   // runs. 'scheduled' is deliberately allowed — entry opens before a war
   // starts, and a late confirm onto a scheduled war is no different from a
   // fresh one.
-  const warOpen =
+  const open =
     !!war && !war.ended && war.status !== "ended" && war.status !== "cancelled" && war.status !== "draft";
 
-  if (!war || !warOpen) return { ok: false, reason: "war_closed" };
+  if (!war || !open) return { ok: false, reason: "war_closed" };
+  return { ok: true, maxTokens: war.max_tokens };
+}
+
+/**
+ * Is this war open, AND has it room for one more token?
+ *
+ * For the paths that are taking a seat the war does not currently count: a
+ * `released` reservation being reclaimed, whether by a payer's late confirm or
+ * by an operator's assignment. Both add one to the live count, so both must
+ * ask whether there is room for it.
+ *
+ * **The paths holding a `reserved` reservation must call `warIsOpen` instead,
+ * and this is not a shortcut.** The count below is `status <> 'released'`,
+ * which already includes that order's own reserved seat — so a war that is
+ * exactly full *including* the seat being paid for would refuse a perfectly
+ * legitimate settlement as `war_full`. Capacity is a question about adding a
+ * seat, and those paths are not adding one.
+ *
+ * An operator assigning a filed payment must not be able to seat a token into
+ * a war that has ended or filled — "a human decided it" is authorisation,
+ * never an exemption from the war's own rules.
+ */
+async function warHasRoom(
+  client: PoolClient,
+  warId: string,
+): Promise<{ ok: true } | { ok: false; reason: "war_closed" | "war_full" }> {
+  const open = await warIsOpen(client, warId);
+  if (!open.ok) return open;
 
   const countResult = await client.query<{ count: string }>(
     `SELECT count(*) FROM war_tokens WHERE war_id = $1 AND status <> 'released'`,
     [warId],
   );
-  const hasRoom = Number(countResult.rows[0]?.count ?? 0) < war.max_tokens;
+  const hasRoom = Number(countResult.rows[0]?.count ?? 0) < open.maxTokens;
 
   return hasRoom ? { ok: true } : { ok: false, reason: "war_full" };
 }
@@ -731,11 +797,52 @@ function filedClause(): string {
     : "filed for manual review. This deployment has no support contact configured yet.";
 }
 
-/** The one atomic act: payment recorded, order paid — the token was already flipped by the caller. */
+/**
+ * The one atomic act: payment recorded, order paid — the token was already
+ * flipped by the caller.
+ *
+ * ## Why `unmatched_payments` is written BEFORE `payments`
+ *
+ * It reads backwards — the row is being closed because the signature settled,
+ * so closing it after the settlement is the natural order — and it was written
+ * that way first. It is deliberately the other way round now, and the reason
+ * is lock ordering across the two callers.
+ *
+ * `settleAssignedPayment` must lock its `unmatched_payments` row FIRST: that
+ * lock IS its idempotency token, the thing that makes a double-click block
+ * rather than double-settle, so it cannot be moved later without destroying
+ * the guarantee. It then reaches `payments` last, through this function. If
+ * this function took `payments` before `unmatched_payments`, the two paths
+ * would acquire the same two resources in opposite orders, and two
+ * transactions in flight on the same signature would deadlock — 40P01,
+ * uncaught on both sides, a 500 for the payer.
+ *
+ * So the order is settled here, at the shared end, where one line fixes both
+ * callers: **`unmatched_payments`, then `payments`.** Nothing else changes.
+ * Both statements are in the same transaction, so a failure in either still
+ * rolls back both, and no caller can observe the intermediate state.
+ */
 async function finishSettlement(
   client: PoolClient,
   params: { order: OrderRow; signature: string; amountBaseUnits: bigint; payerPubkey: string | null },
 ): Promise<SettleResult> {
+  // This exact signature can already have an 'open' unmatched_payments row:
+  // an earlier attempt against a DIFFERENT order (an honest mismatch, or an
+  // attacker posting someone else's in-flight signature against an order
+  // they control) files one without ever claiming the signature — that is
+  // the whole point of leaving wrong_payer/insufficient_amount spendable.
+  // This signature is about to settle something, so that row is answered:
+  // closing it here, in the same transaction, is what keeps an operator's
+  // queue from being handed a trap that names the wrong order for money that
+  // already went where it belonged.
+  await client.query(
+    `UPDATE unmatched_payments
+        SET status = 'applied', resolved_at = now(), applied_order_id = $2,
+            resolution_note = 'Automatically resolved: this signature settled a different order on a later attempt.'
+      WHERE signature = $1 AND status = 'open'`,
+    [params.signature, params.order.id],
+  );
+
   await client.query(
     `INSERT INTO payments (id, signature, order_id, amount_base_units, payer, verified_at)
      VALUES ($1, $2, $3, $4, $5, now())`,
@@ -752,23 +859,6 @@ async function finishSettlement(
     // swallowed — an invariant this function depends on would have broken.
     throw new Error(`entry_orders ${params.order.id} changed status during settlement`);
   }
-
-  // This exact signature can already have an 'open' unmatched_payments row:
-  // an earlier attempt against a DIFFERENT order (an honest mismatch, or an
-  // attacker posting someone else's in-flight signature against an order
-  // they control) files one without ever claiming the signature — that is
-  // the whole point of leaving wrong_payer/insufficient_amount spendable.
-  // Now that this signature has genuinely settled something, that row is
-  // answered: closing it here, in the same transaction, is what keeps an
-  // operator's queue from being handed a trap that names the wrong order
-  // for money that already went where it belonged.
-  await client.query(
-    `UPDATE unmatched_payments
-        SET status = 'applied', resolved_at = now(), applied_order_id = $2,
-            resolution_note = 'Automatically resolved: this signature settled a different order on a later attempt.'
-      WHERE signature = $1 AND status = 'open'`,
-    [params.signature, params.order.id],
-  );
 
   return { ok: true, amountBaseUnits: params.amountBaseUnits };
 }
@@ -846,31 +936,22 @@ type UnmatchedRow = {
  * **This is the only path in this project where money moves on a human's
  * say-so.** Every other settlement is decided by chain evidence. So it is not
  * a second settlement — it is a second, differently-authorised ENTRY into the
- * first one. The colour exclusivity is `reclaimReleasedSeat`, the capacity
- * check is `warHasRoom`, and the settlement itself is `finishSettlement`, all
- * three shared verbatim with the payer's own path. Nothing here writes its own
- * UPDATE against `entry_orders`, `war_tokens` or `payments`.
+ * first one. The war checks are `warIsOpen` and `warHasRoom`, the colour
+ * exclusivity is `reclaimReleasedSeat`, and the settlement itself is
+ * `finishSettlement`, all shared verbatim with the payer's own path. Nothing
+ * here writes its own UPDATE against `entry_orders`, `war_tokens` or
+ * `payments`.
  *
  * WHO CALLS THIS: `POST /api/admin/orphans/[id]/assign`, guarded by the admin
  * session. Nothing else, ever — `operatorLabel` is the caller asserting a
  * human authorised this, and only an authenticated route may assert it.
  *
- * ## Why this does not claim `consumed_signatures`, and why that is not a hole
+ * ## Why this does not claim `consumed_signatures`
  *
- * The two tables are not two versions of the same guard.
- *
- * `consumed_signatures` is an ATTEMPT LOG: it stops a signature being *tried*
- * twice. `payments` is the LEDGER: `payments.signature UNIQUE` stops a
- * signature being *settled* twice, and `payments_order_unique` stops an order
- * holding two payments. Migration 002 says so in as many words — "One payment
- * per signature, globally. This single constraint is what makes a signature
- * single-use across the whole system; everything else about replay protection
- * is commentary on it."
- *
- * Both paths converge on the ledger, which is the row that means money moved.
- * So the property that actually matters — one signature, one settlement — is
- * enforced identically for a payer and for an operator, by the same two
- * indexes, and neither path can talk its way past them.
+ * The two tables answer different questions. `consumed_signatures` is an
+ * ATTEMPT LOG: it stops a signature being *tried* twice. `payments` is the
+ * LEDGER: `payments.signature UNIQUE` stops a signature being *settled* twice,
+ * and `payments_order_unique` stops an order holding two payments.
  *
  * This path skips the attempt log because the attempt already happened and is
  * already recorded. That is precisely why there is an `unmatched_payments` row
@@ -879,6 +960,49 @@ type UnmatchedRow = {
  * Re-claiming a signature that is by definition already claimed would be the
  * incoherent act here, not the safe one — it would refuse every one of those
  * eight rows forever, which is the defect this function exists to fix.
+ *
+ * ## What actually stops a payer re-settling a signature this path already spent
+ *
+ * **Read this before widening anything.** An earlier version of this comment
+ * said the two paths "converge on the ledger", so the property is enforced
+ * identically for both. That is true of the OUTCOME and false of the
+ * ENFORCEMENT, and the difference matters to whoever changes this next.
+ *
+ * `settlePayment` has no handler for `payments_signature_key` or
+ * `payments_order_unique`. Its only signature guard is the
+ * `consumed_signatures` insert-and-catch at the top of its transaction, and
+ * `POST /api/orders/[id]/confirm` does not try/catch it either. So on the
+ * payer path the ledger does not REFUSE, it THROWS: a 23505 out to a 500,
+ * not a `signature_reused`. This function is the only one that translates
+ * those two constraints into typed answers.
+ *
+ * What keeps the payer path off a signature this one already spent is
+ * therefore not the ledger. It is two other things, and this path is exempt
+ * from both:
+ *
+ * 1. **The `consumed_signatures` claim**, for the eight in-settlement filing
+ *    reasons. Those signatures are already claimed, so `settlePayment` returns
+ *    `signature_reused` long before `finishSettlement`.
+ * 2. **`verifyPayment`'s `createdAtMs` bound**, for the other three
+ *    (`wrong_payer`, `insufficient_amount`, `outside_bid_window`), which are
+ *    deliberately left unclaimed. A signature can never verify against an
+ *    order created after it, so it cannot be re-presented inside a fresher
+ *    order's window. The recovery pass widens `expiresAtMs` to `now()` and
+ *    does defeat that for `outside_bid_window` — and is caught instead by
+ *    `LATE_CONFIRM_GRACE_MINUTES`, because recovery only ever examines expired
+ *    orders and `settleLateConfirmation` refuses past the grace window. Past
+ *    `RECOVERY_MAX_AGE_DAYS` the widening is withdrawn entirely and the order's
+ *    own `expiresAt` comes back, so that half is bounded twice over.
+ *
+ * Nothing is broken today: no sequence exists where the ledger and the seat
+ * disagree, because every refusal reachable after a durable write in either
+ * transaction is a throw, and `transaction()` rolls back on throw. But the
+ * day someone widens a verification window, adds a reason to the filing set,
+ * or drops the grace bound, the failure mode on the payer side is a 500 and
+ * not a refusal. The three-line fix is the one this function already has —
+ * see the `isUniqueViolation` branch below. It is not applied to
+ * `settlePayment` here because that is a change to the payer's own money path
+ * and belongs to whoever owns that decision, not to a comment.
  *
  * ## Idempotent under a double-click
  *
@@ -890,9 +1014,15 @@ type UnmatchedRow = {
  * nothing. That is a lock, not a check-then-act, so there is no window between
  * the read and the write for a second caller to slip through.
  *
- * Underneath it, the two ledger indexes are the backstop that holds even if
- * that reasoning is ever wrong: the same signature cannot settle twice and the
- * same order cannot be paid twice, whatever any application code believes.
+ * That lock is also why `finishSettlement` writes `unmatched_payments` before
+ * `payments` rather than after: this path cannot take those two resources in
+ * the other order without giving up the idempotency token, so the shared code
+ * takes them in this one. See `finishSettlement`.
+ *
+ * Underneath the lock, `payments.signature UNIQUE` and `payments_order_unique`
+ * are the backstop for THIS path — the same signature cannot settle twice and
+ * the same order cannot be paid twice, whatever the application believes — and
+ * they are translated into typed refusals below rather than left to throw.
  */
 export async function settleAssignedPayment(params: {
   /** `unmatched_payments.id` — the filed payment being applied. */
@@ -933,6 +1063,20 @@ export async function settleAssignedPayment(params: {
       }
 
       if (order.status === "pending") {
+        // The war first, exactly as the payer's own `pending` branch now does.
+        // A live reservation says nothing about whether its war is still open,
+        // and on this path there is no window at all bounding how stale the
+        // pairing can be: an operator can arrive weeks after the war ended.
+        // Without this, "authorisation, never an exemption" was true of the
+        // `expired` branch and false of this one.
+        //
+        // `warIsOpen`, never `warHasRoom`: this order's own `reserved` seat is
+        // already inside the capacity count, so asking about capacity would
+        // refuse the last legitimate assignment in a full war. See
+        // `warHasRoom`.
+        const open = await warIsOpen(client, order.war_id);
+        if (!open.ok) return refuseAssignment(open.reason);
+
         // Its reservation is still live and holding the colour, so there is no
         // race to lose: the same flip `settlePayment` does.
         const flip = await client.query(
@@ -942,9 +1086,12 @@ export async function settleAssignedPayment(params: {
         );
         if (flip.rowCount === 0) return refuseAssignment("token_state_mismatch");
       } else if (order.status === "expired") {
-        // The reservation lapsed and released its colour. An operator does not
-        // get to skip the war's own rules to take it back — same capacity
-        // check, same two unique indexes, same code as a payer's late confirm.
+        // The reservation lapsed and released its colour, so this is ADDING a
+        // seat back rather than paying for one the war already counts — hence
+        // `warHasRoom` here and `warIsOpen` above, which is the whole
+        // difference between the two branches. An operator does not get to
+        // skip the war's own rules to take it back: same capacity check, same
+        // two unique indexes, same code as a payer's late confirm.
         // Deliberately NOT gated on LATE_CONFIRM_GRACE_MINUTES: that window
         // bounds what happens automatically, and a human looking at a filed
         // payment weeks later is the case this screen exists for. What it may
