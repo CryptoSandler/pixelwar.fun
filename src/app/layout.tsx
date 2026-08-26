@@ -85,6 +85,24 @@ export const metadata: Metadata = {
   title: "pixelwar.fun",
   description:
     "A timed war on a shared 200x200 canvas. Up to 24 memecoin tokens each hold one colour — paint for free, no account, no wallet.",
+  /**
+   * Layer 2 of the pre-launch noindex. See `src/app/robots.ts` for why there
+   * are three of these and what each one covers; the short version is that
+   * this is the only layer that reaches a crawler which fetched the page
+   * anyway, and it reaches HTML documents only.
+   *
+   * `nofollow` alongside `noindex` because the join and admin paths are
+   * reachable from here, and there is no reason to hand a crawler the map
+   * while asking it not to read the destination.
+   *
+   * Remove this block, `robots.ts`, and the `X-Robots-Tag` header in
+   * `next.config.ts` together at launch.
+   */
+  robots: {
+    index: false,
+    follow: false,
+    nocache: true,
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
