@@ -1,26 +1,171 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/**
+ * The cabinet's structure. Every COLOUR it uses arrives as a custom property
+ * set on <body> by app/layout.tsx, read straight out of src/lib/wars/chrome.ts
+ * — so the invariants in DESIGN.md §7, which are tested against that file,
+ * govern what actually renders. No hex is written here or in any component.
+ */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-jost);
+  --font-mono: var(--font-plex-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  /**
+   * The two-tone bevel. Not colours in their own right — translucent light
+   * and shade over whatever surface they sit on, which is why they can be
+   * literal here without claiming anything: they take the colour of the
+   * surface beneath them and cannot impersonate a token.
+   */
+  --bevel-light: rgb(255 255 255 / 0.55);
+  --bevel-dark: rgb(0 0 0 / 0.32);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--chrome-surround);
+  color: var(--chrome-ink);
+  font-family: var(--font-sans);
+}
+
+/* DESIGN.md §4: the cabinet has no soft edges. */
+button,
+input,
+select,
+textarea {
+  border-radius: 0;
+}
+
+/* DESIGN.md §9: focus is a 2px brass outline offset 2px, never removed. */
+:focus-visible {
+  outline: 2px solid var(--chrome-accent);
+  outline-offset: 2px;
+}
+
+/* Console, not web: light top/left, dark bottom/right, and no shadow. */
+.bevel {
+  border: 2px solid;
+  border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+}
+
+.bevel-in {
+  border: 2px solid;
+  border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+}
+
+/* DESIGN.md §6: hover lightens the bevel. No scale, no lift. */
+.bevel:hover:not(:disabled) {
+  border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+  filter: brightness(1.04);
+}
+
+.panel {
+  background: var(--chrome-panel);
+}
+
+.readout {
+  background: var(--chrome-readout);
+  color: var(--chrome-ink);
+}
+
+.header-bar {
+  background: var(--chrome-header);
+  color: var(--chrome-ink-inverse);
+}
+
+/**
+ * The primary action, and the only large brass thing on any screen
+ * (DESIGN.md I5). Nothing that represents a token may use this class.
+ */
+.btn-primary {
+  background: var(--chrome-accent);
+  color: var(--chrome-ink);
+  border: 2px solid;
+  border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.btn-primary:disabled {
+  filter: grayscale(0.7) brightness(0.9);
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: var(--chrome-control);
+  color: var(--chrome-ink);
+  border: 2px solid;
+  border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/**
+ * A colour swatch in the picker. Selected turns the CONTROL's border brass
+ * and inverts its bevel (DESIGN.md §6); the chip inside always keeps the
+ * outline `CHIP_OUTLINE` gives it, whatever the selection state.
+ */
+.swatch {
+  background: var(--chrome-control);
+  border: 2px solid;
+  border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+}
+
+.swatch[aria-checked="true"] {
+  border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+  outline: 2px solid var(--chrome-accent);
+  outline-offset: 0;
+}
+
+.swatch:disabled {
+  border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+}
+
+.field {
+  background: var(--chrome-panel);
+  color: var(--chrome-ink);
+  border: 2px solid;
+  border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* DESIGN.md §3: every number is monospaced, and tabular so it cannot jitter. */
+.numeric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/**
+ * DESIGN.md §6, one guarded block for the whole application rather than a
+ * check per component. Cheap here because the design is already step-based:
+ * nothing translates, scales or rotates, so there is nothing to take away
+ * but duration. Colour and content still change — reduced motion must never
+ * mean reduced information.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
