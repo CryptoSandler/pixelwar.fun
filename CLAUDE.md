@@ -84,9 +84,11 @@ If you have already changed an applied migration's SQL, say so plainly, then
 either add the corrective migration or state exactly which databases you
 repaired and how you verified them.
 
-**Comments are the exception, and only because they cannot diverge.** No
-database contains a comment, so correcting one cannot make the file disagree
-with anything. But reach for that rarely, and notice what it usually means: a
+**`--` comments are the exception, and only because they cannot diverge.** No
+database stores one, so correcting one cannot make the file disagree with
+anything. `COMMENT ON` is not a comment for this purpose — its text lives in
+the catalog, so changing it is changing the schema and takes the next number
+like any other DDL. But reach for that rarely, and notice what it usually means: a
 migration comment that has gone stale is normally a comment that described
 behaviour living in another file. Migration `004` said an over-age payment was
 "never recovered and never filed", which was true of `recover.ts` when it was
