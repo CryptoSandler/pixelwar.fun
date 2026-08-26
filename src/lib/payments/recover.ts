@@ -274,65 +274,124 @@ export async function recoverUnclaimedOrders(
     return { recovered, filed };
   }
 
-  const fetchSignaturePage = fetcher.signatures ?? defaultFetchSignaturesPage;
   const orders = await unclaimedOrders(MAX_ORDERS_PER_PASS);
 
   for (const order of orders) {
-    let orderFiled = false;
-    // The age bound, and the only thing it does: past it the verification
-    // window narrows back to the order's own, so a payment found here can be
-    // recorded but can never be seated. See RECOVERY_MAX_AGE_DAYS.
-    const withinRecoveryWindow = Date.now() - order.expiresAt.getTime() <= RECOVERY_MAX_AGE_MS;
-
-    try {
-      const candidates = await collectOldestCandidates(
-        fetchSignaturePage,
-        order.id,
-        order.referencePubkey,
-        order.createdAt.getTime(),
-      );
-
-      for (const signature of candidates) {
-        const verified = await verifyPayment({
-          signature,
-          expectedBaseUnits: usdToBaseUnits(order.amountUsd),
-          wallet: wallet.address,
-          expectedPayer: order.payerPubkey ?? undefined,
-          // See the widened-window paragraph on this function.
-          createdAtMs: order.createdAt.getTime(),
-          expiresAtMs: withinRecoveryWindow ? Date.now() : order.expiresAt.getTime(),
-          fetchTransaction: fetcher.transaction,
-        });
-
-        const result = await settlePayment({ order, signature, verified });
-
-        if (result.ok) {
-          recovered.push(order.id);
-          break;
-        }
-
-        if (FILED_REASONS.has(result.reason) && !orderFiled) {
-          filed.push(order.id);
-          orderFiled = true;
-        }
-
-        // Not a break: signature_reused, a filed verdict, or a verdict
-        // settlePayment leaves entirely unclaimed all mean only that THIS
-        // candidate is not (or is no longer usable as) this order's payment.
-        // The next one might still be — see the function's own doc comment.
-      }
-    } finally {
-      // Examined either way — settled, filed, exhausted its candidates
-      // without a verdict, or the search itself threw: this is what lets
-      // the next pass move on to different candidates instead of re-reading
-      // this row forever. See `unclaimedOrders` and this function's own doc
-      // comment on why the stamp must survive a throw, not just the happy
-      // path.
-      await execute(`UPDATE entry_orders SET recovery_attempted_at = now() WHERE id = $1`, [order.id]);
-    }
+    const outcome = await examineOrder(order, wallet.address, fetcher);
+    if (outcome.recovered) recovered.push(order.id);
+    if (outcome.filed) filed.push(order.id);
   }
 
   return { recovered, filed };
+}
+
+/**
+ * One order, examined once. The body of the pass above, and the whole of what
+ * the lazy single-order path runs — see `recoverOrder`.
+ *
+ * Extracted rather than duplicated, and that is the point rather than tidiness:
+ * everything subtle in this file lives in these forty lines — the widened
+ * verification window, `FILED_REASONS` not ending the search, the stamp that
+ * has to survive a throw. A second copy for the lazy path would be a second
+ * place for each of those to drift, and the drift would show up as a payment
+ * recovered on one trigger and filed on the other.
+ */
+async function examineOrder(
+  order: Order,
+  wallet: string,
+  fetcher: RecoveryFetcher,
+): Promise<{ recovered: boolean; filed: boolean }> {
+  const fetchSignaturePage = fetcher.signatures ?? defaultFetchSignaturesPage;
+  let orderFiled = false;
+  let orderRecovered = false;
+
+  // The age bound, and the only thing it does: past it the verification
+  // window narrows back to the order's own, so a payment found here can be
+  // recorded but can never be seated. See RECOVERY_MAX_AGE_DAYS.
+  const withinRecoveryWindow = Date.now() - order.expiresAt.getTime() <= RECOVERY_MAX_AGE_MS;
+
+  try {
+    const candidates = await collectOldestCandidates(
+      fetchSignaturePage,
+      order.id,
+      order.referencePubkey,
+      order.createdAt.getTime(),
+    );
+
+    for (const signature of candidates) {
+      const verified = await verifyPayment({
+        signature,
+        expectedBaseUnits: usdToBaseUnits(order.amountUsd),
+        wallet,
+        expectedPayer: order.payerPubkey ?? undefined,
+        // See the widened-window paragraph on `recoverUnclaimedOrders`.
+        createdAtMs: order.createdAt.getTime(),
+        expiresAtMs: withinRecoveryWindow ? Date.now() : order.expiresAt.getTime(),
+        fetchTransaction: fetcher.transaction,
+      });
+
+      const result = await settlePayment({ order, signature, verified });
+
+      if (result.ok) {
+        orderRecovered = true;
+        break;
+      }
+
+      if (FILED_REASONS.has(result.reason) && !orderFiled) {
+        orderFiled = true;
+      }
+
+      // Not a break: signature_reused, a filed verdict, or a verdict
+      // settlePayment leaves entirely unclaimed all mean only that THIS
+      // candidate is not (or is no longer usable as) this order's payment.
+      // The next one might still be — see `recoverUnclaimedOrders`'s comment.
+    }
+  } finally {
+    // Examined either way — settled, filed, exhausted its candidates
+    // without a verdict, or the search itself threw: this is what lets
+    // the next pass move on to different candidates instead of re-reading
+    // this row forever. See `unclaimedOrders` and `recoverUnclaimedOrders`
+    // on why the stamp must survive a throw, not just the happy path.
+    //
+    // The lazy path stamps this column a second time, up front, to claim the
+    // order against a concurrent request — see `claimForRecovery` in
+    // `lazy-recovery.ts`. Stamping again here is not a conflict: both writes
+    // mean the same thing ("a pass has been at this row"), and moving it
+    // forward is what stops the next pass re-reading it.
+    await execute(`UPDATE entry_orders SET recovery_attempted_at = now() WHERE id = $1`, [order.id]);
+  }
+
+  return { recovered: orderRecovered, filed: orderFiled };
+}
+
+/**
+ * Recovery for ONE named order, which is what the lazy request-path trigger
+ * runs. `lazy-recovery.ts` is the only caller — see `reconcileOnRead` there,
+ * and `src/app/api/orders/[id]/route.ts` for where that is invoked.
+ *
+ * Deliberately NOT a filter on `unclaimedOrders`: the pass's candidate query
+ * exists to spread a bounded RPC budget fairly across a backlog, and this has
+ * no backlog to be fair to. It has one order, named by the person waiting on
+ * it, and the caller has already decided that order is worth a look.
+ *
+ * The `status = 'expired'` precondition still holds, and is checked by the
+ * claim rather than here: a `pending` order has a live payer and `/confirm`
+ * is its path; a `paid` or `failed` order has nothing left to recover.
+ */
+export async function recoverOrder(
+  orderId: string,
+  fetcher: RecoveryFetcher = {},
+): Promise<{ recovered: boolean; filed: boolean }> {
+  const wallet = paymentWallet();
+  if (!wallet.ok) {
+    console.error(`recoverOrder: ${wallet.reason}`);
+    return { recovered: false, filed: false };
+  }
+
+  const order = await orderById(orderId);
+  if (!order || order.status !== "expired") return { recovered: false, filed: false };
+
+  return examineOrder(order, wallet.address, fetcher);
 }
 
 /**

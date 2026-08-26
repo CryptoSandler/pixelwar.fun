@@ -22,8 +22,31 @@ export const dynamic = "force-dynamic";
  * something expiry produces and lazy expiry only produces it when the site
  * has visitors. The call site below has the full argument.
  *
- * POST, not GET: this mutates. `entry_orders` rows change status, colours are
- * reclaimed, `unmatched_payments` rows are filed.
+ * WHAT THIS IS NOW FOR. It is no longer the primary trigger. Reconciliation
+ * for a payer who is present happens on the request path — see
+ * `lazy-recovery.ts`, hooked into `GET /api/orders/[id]` and
+ * `/join/[orderId]` — because measurement showed no external scheduler could
+ * be relied on to arrive inside `LATE_CONFIRM_GRACE_MINUTES`. This endpoint
+ * is the SWEEP: the floor under the payer who signed, closed the tab, and
+ * never came back, whose order no request will ever name.
+ *
+ * TWO METHODS, TWO CALLERS, ONE BODY.
+ *
+ *   POST + `x-cron-secret`  — `.github/workflows/reconcile.yml`, the hourly
+ *                             backstop. A header it chooses, on a method that
+ *                             says what it does.
+ *   GET  + `Authorization`  — Vercel Cron (`crons` in `vercel.json`), the
+ *                             daily sweep. Neither half of that is our
+ *                             choice: Vercel invokes cron paths with GET, and
+ *                             the only credential it sends is the value of
+ *                             `CRON_SECRET` as `Authorization: Bearer <...>`,
+ *                             provisioned by the platform rather than by us.
+ *
+ * GET mutating is a real wart and worth naming rather than hiding. What makes
+ * it safe here is not the method but the guard: no unauthenticated caller can
+ * reach the work, the route is `force-dynamic` and answers `no-store`, and
+ * Vercel Cron does not follow redirects or replay from cache. It is still a
+ * GET that changes rows, and if Vercel ever sends POST this half should go.
  */
 
 /**
@@ -43,7 +66,44 @@ function presentedSecret(provided: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+/**
+ * The credential this caller presented, from whichever header carries it.
+ *
+ * Both are checked on both methods rather than pairing one header to one
+ * method: the pairing would be a rule this file invents and nothing else
+ * enforces, and its only effect would be to turn a caller that used the
+ * "wrong" one into a 401 that looks exactly like a wrong secret. The secret
+ * is the credential; which header carried it says nothing about authority.
+ *
+ * An `Authorization` value that is not `Bearer <something>` yields the empty
+ * string, which then fails `presentedSecret` like any other wrong value —
+ * there is no separate "malformed" answer, because telling malformed apart
+ * from wrong is an oracle and neither one is getting in.
+ */
+function presentedCredential(request: Request): string {
+  const direct = request.headers.get("x-cron-secret");
+  if (direct) return direct;
+
+  const authorization = request.headers.get("authorization") ?? "";
+  const [scheme, ...rest] = authorization.split(" ");
+  if (scheme?.toLowerCase() !== "bearer") return "";
+  return rest.join(" ").trim();
+}
+
+/**
+ * Vercel Cron's daily sweep. See this module's doc comment on why the daily
+ * half of reconciliation arrives as a GET and why that is tolerated.
+ */
+export async function GET(request: Request): Promise<Response> {
+  return reconcile(request);
+}
+
+/** The hourly backstop from GitHub Actions. */
 export async function POST(request: Request): Promise<Response> {
+  return reconcile(request);
+}
+
+async function reconcile(request: Request): Promise<Response> {
   const expected = process.env.CRON_SECRET?.trim();
 
   // Fails closed, and deliberately so. An unset secret means this deployment
@@ -58,7 +118,7 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: "Reconciliation is not configured." }, { status: 503, headers: NO_STORE });
   }
 
-  const provided = request.headers.get("x-cron-secret") ?? "";
+  const provided = presentedCredential(request);
   if (!presentedSecret(provided, expected)) {
     return json({ error: "Unauthorized." }, { status: 401, headers: NO_STORE });
   }

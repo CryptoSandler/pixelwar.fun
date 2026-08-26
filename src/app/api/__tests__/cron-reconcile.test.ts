@@ -25,7 +25,7 @@ const recover = vi.hoisted(() =>
 
 vi.mock("../../../lib/payments/recover", () => ({ recoverUnclaimedOrders: recover }));
 
-const { POST: reconcileRoute } = await import("../cron/reconcile/route");
+const { POST: reconcileRoute, GET: reconcileGet } = await import("../cron/reconcile/route");
 
 const SECRET = "test-cron-secret-3f9c1a";
 
@@ -187,4 +187,70 @@ describe("POST /api/cron/reconcile", () => {
       expect(tokenRow.released_reason).toBe("order_expired");
     },
   );
+});
+
+/**
+ * Vercel Cron's half of the door.
+ *
+ * Neither the method nor the header is this project's choice: Vercel invokes
+ * a cron path with GET, and the only credential it sends is `CRON_SECRET` as
+ * `Authorization: Bearer <...>`, provisioned by the platform. These tests
+ * pin that contract down, because getting it wrong fails in the quietest
+ * possible way — a daily sweep that 401s forever while the dashboard happily
+ * reports the cron job as executed.
+ */
+describe("GET /api/cron/reconcile (Vercel Cron)", () => {
+  const original = process.env.CRON_SECRET;
+
+  function get(headers: Record<string, string> = {}): Request {
+    return new Request("https://pixelwar.fun/api/cron/reconcile", { method: "GET", headers });
+  }
+
+  beforeEach(() => {
+    recover.mockClear();
+    recover.mockResolvedValue({ recovered: [], filed: [] });
+    process.env.CRON_SECRET = SECRET;
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = original;
+  });
+
+  it("accepts the bearer token Vercel sends", async () => {
+    const response = await reconcileGet(get({ authorization: `Bearer ${SECRET}` }));
+
+    expect(response.status).toBe(200);
+    expect(recover).toHaveBeenCalled();
+  });
+
+  it("refuses a bearer token that is not the secret", async () => {
+    const response = await reconcileGet(get({ authorization: "Bearer not-the-secret" }));
+
+    expect(response.status).toBe(401);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("refuses an Authorization header that is not a bearer token", async () => {
+    const response = await reconcileGet(get({ authorization: SECRET }));
+
+    expect(response.status).toBe(401);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request with no credential at all", async () => {
+    const response = await reconcileGet(get());
+
+    expect(response.status).toBe(401);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the deployment has no secret", async () => {
+    delete process.env.CRON_SECRET;
+
+    const response = await reconcileGet(get({ authorization: "Bearer anything" }));
+
+    expect(response.status).toBe(503);
+    expect(recover).not.toHaveBeenCalled();
+  });
 });
