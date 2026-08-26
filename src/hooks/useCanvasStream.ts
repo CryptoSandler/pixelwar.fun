@@ -11,15 +11,27 @@ const POLL_MS = 1500;
  * Polling stops while the tab is hidden and resumes with a single catch-up
  * call: a backgrounded tab polling twice a second for an hour is somebody
  * else's bandwidth bill and nobody's benefit.
+ *
+ * `layer` picks which board this is watching — the painted colours, or who
+ * owns what. Both are 40,000 bytes and only one is ever in flight, which is
+ * the whole reason attribution is a second layer rather than a second byte
+ * on every pixel (see `canvas/state.ts`). Switching layers refetches from
+ * scratch: `loadBoard` and `poll` both depend on it, so the effects below
+ * tear down and re-run, and `seq` is re-read from the new board's own header
+ * rather than carried across. Carrying it across is the bug this avoids — a
+ * client that kept its sequence would apply the new layer's diffs on top of
+ * the old layer's pixels and show a board that never existed.
  */
-export function useCanvasStream(warSlug: string) {
+export function useCanvasStream(warSlug: string, layer: "colour" | "token" = "colour") {
   const [image, setImage] = useState<BoardImage | null>(null);
   const [version, setVersion] = useState(0);
   const seq = useRef(0);
   const busy = useRef(false);
 
   const loadBoard = useCallback(async () => {
-    const response = await fetch(`/api/canvas?war=${encodeURIComponent(warSlug)}`);
+    const response = await fetch(
+      `/api/canvas?war=${encodeURIComponent(warSlug)}&layer=${layer}`,
+    );
     if (!response.ok) return;
 
     const width = Number(response.headers.get("x-canvas-width"));
@@ -30,14 +42,14 @@ export function useCanvasStream(warSlug: string) {
     next.setBase(new Uint8Array(await response.arrayBuffer()));
     setImage(next);
     setVersion((v) => v + 1);
-  }, [warSlug]);
+  }, [warSlug, layer]);
 
   const poll = useCallback(async () => {
     if (busy.current || !image) return;
     busy.current = true;
     try {
       const response = await fetch(
-        `/api/diff?war=${encodeURIComponent(warSlug)}&since=${seq.current}`,
+        `/api/diff?war=${encodeURIComponent(warSlug)}&since=${seq.current}&layer=${layer}`,
       );
       if (!response.ok) return;
       const body = await response.json();
@@ -56,7 +68,7 @@ export function useCanvasStream(warSlug: string) {
     } finally {
       busy.current = false;
     }
-  }, [image, loadBoard, warSlug]);
+  }, [image, loadBoard, warSlug, layer]);
 
   useEffect(() => {
     // The rule can't see that loadBoard's setState calls sit behind an

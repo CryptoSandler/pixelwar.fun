@@ -6,6 +6,7 @@ import { PaintButton } from "./PaintButton";
 import { TokenRail, type RailToken } from "./TokenRail";
 import { WarHud } from "./WarHud";
 import { useCanvasStream } from "../hooks/useCanvasStream";
+import { PaintPalette } from "./PaintPalette";
 
 export type WarSummary = {
   slug: string;
@@ -34,9 +35,24 @@ const LEADERBOARD_POLL_MS = 2000;
  * does only that one thing.
  */
 export function WarView({ war, tokens: initialTokens }: { war: WarSummary; tokens: RailToken[] }) {
-  const { image, version, applyLocal } = useCanvasStream(war.slug);
+  /**
+   * Which board is on screen: what was painted, or who owns it.
+   *
+   * The painted board is the default because it is the game; the territory
+   * view answers a question the painted board deliberately stopped answering
+   * once colours stopped belonging to tokens.
+   */
+  const [layer, setLayer] = useState<"colour" | "token">("colour");
+  const { image, version, applyLocal } = useCanvasStream(war.slug, layer);
   const [tokens, setTokens] = useState<RailToken[]>(initialTokens);
   const [selectedId, setSelectedId] = useState<string | null>(initialTokens[0]?.id ?? null);
+  /**
+   * The colour this painter paints in — their choice, unrelated to which
+   * token they are playing for. Seeded from the selected token's flag so the
+   * first paint of a session still looks like the thing you joined, which is
+   * a default rather than a rule.
+   */
+  const [colourSlot, setColourSlot] = useState<number>(initialTokens[0]?.colourSlot ?? 1);
   const [cooldownUntil, setCooldownUntil] = useState<string | null>(null);
   const [hovered, setHovered] = useState<{ x: number; y: number } | null>(null);
   // The last pixel the pointer was actually over — distinct from `hovered`,
@@ -125,13 +141,19 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         const response = await fetch("/api/paint", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ warSlug: war.slug, x, y, tokenId: selectedId }),
+          body: JSON.stringify({ warSlug: war.slug, x, y, tokenId: selectedId, colourSlot }),
         });
 
         if (response.status === 200) {
           const body: { seq: number; idx: number; colourSlot: number; cooldownUntil: string } =
             await response.json();
-          applyLocal(body.idx, body.colourSlot);
+          // The optimistic pixel has to match the board that is showing. On
+          // the territory layer the byte is the OWNER's slot, not the colour
+          // just painted — applying the colour there would draw a pixel that
+          // the next diff would silently correct, which is a flicker the
+          // painter would read as their paint being rejected.
+          const ownerSlot = tokens.find((t) => t.id === selectedId)?.colourSlot;
+          applyLocal(body.idx, layer === "token" ? (ownerSlot ?? body.colourSlot) : body.colourSlot);
           setCooldownUntil(body.cooldownUntil);
           return;
         }
@@ -173,7 +195,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
         setInFlight(false);
       }
     },
-    [selectedId, warEnded, warNotStarted, inFlight, war.slug, applyLocal],
+    [selectedId, colourSlot, layer, tokens, warEnded, warNotStarted, inFlight, war.slug, applyLocal],
   );
 
   const handleHover = useCallback((point: { x: number; y: number } | null, nextScale: number) => {
@@ -185,7 +207,41 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   return (
     <main className="relative flex h-screen flex-col bg-zinc-950 text-zinc-50 md:flex-row">
       <aside className="flex shrink-0 gap-3 overflow-x-auto border-b border-zinc-800 p-3 md:h-full md:w-56 md:flex-col md:overflow-x-visible md:overflow-y-auto md:border-b-0 md:border-r">
-        <TokenRail tokens={tokens} selectedId={selectedId} onSelect={setSelectedId} />
+        <div className="flex w-full flex-col gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-[var(--chrome-ink-muted-inverse)]">
+              Painting for
+            </p>
+            <TokenRail tokens={tokens} selectedId={selectedId} onSelect={setSelectedId} />
+          </div>
+
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-[var(--chrome-ink-muted-inverse)]">
+              Colour
+            </p>
+            <PaintPalette
+              selected={colourSlot}
+              onSelect={setColourSlot}
+              disabled={warEnded || warNotStarted}
+            />
+          </div>
+
+          <button
+            type="button"
+            aria-pressed={layer === "token"}
+            onClick={() => setLayer((l) => (l === "token" ? "colour" : "token"))}
+            className="px-2 py-1 text-left text-[12px]"
+            style={{
+              background: "var(--chrome-control)",
+              border:
+                layer === "token"
+                  ? "2px solid var(--chrome-accent)"
+                  : "2px solid transparent",
+            }}
+          >
+            {layer === "token" ? "Showing territory" : "Show territory"}
+          </button>
+        </div>
       </aside>
 
       <div className="relative flex flex-1 flex-col gap-3 p-3">
