@@ -1,0 +1,115 @@
+name: Reconcile payments
+
+# Finds payments that landed on chain but that nobody ever confirmed — the
+# payer who signed the transfer and closed the tab before /confirm ran — and
+# settles or files each one.
+#
+# This lives here rather than in Vercel Cron for one reason: the endpoint is
+# authenticated with a header, and Vercel Cron cannot send one.
+
+on:
+  schedule:
+    # Every five minutes, GitHub's finest granularity, and still best-effort:
+    # its scheduler runs late under load, so treat this as "roughly every five
+    # minutes".
+    #
+    # The interval is set by a cliff, not by a preference. A recovered payment
+    # can still reclaim the colour the payer paid for while it is within
+    # LATE_CONFIRM_GRACE_MINUTES (10) of the order's expiry; past that the
+    # settlement can only file an unmatched_payments row for a human to work
+    # through. So an interval near or above ten minutes does not merely make
+    # the payer wait longer — it converts nearly every recovery from automatic
+    # into a support ticket. Five minutes means a pass, even one arriving a
+    # few minutes late, usually still lands inside that window.
+    #
+    # The cost on the other side is smaller than the frequency suggests. A
+    # pass with no expired unpaid orders makes zero RPC calls: it is one
+    # indexed SELECT that comes back empty and returns. RPC spend is
+    # proportional to how many payments actually need recovering, not to how
+    # often this runs, so a short interval does not by itself take quota from
+    # the live checkouts sharing that endpoint. What it does spend is Actions
+    # minutes — 288 runs a day, billable per started minute on a private
+    # repository — which is the real argument for a longer interval if that
+    # bill ever matters more than the ten-minute window does.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+# A run still going when the next one is due should finish, not be raced. The
+# endpoint is safe to run twice, but two concurrent passes would examine the
+# same orders and spend the RPC calls twice to reach the same answer.
+concurrency:
+  group: reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Call the reconcile endpoint
+        env:
+          # Repository secret. Must equal CRON_SECRET in the Vercel environment.
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          # Repository variable, so the target can be changed without editing
+          # this file. Falls back to the production domain.
+          RECONCILE_URL: ${{ vars.RECONCILE_URL || 'https://pixelwar.fun/api/cron/reconcile' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "::error::CRON_SECRET is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+          echo "POST ${RECONCILE_URL}"
+
+          # Body and status are captured separately so a failure can show what
+          # the server actually said instead of just a number. The secret goes
+          # in a header, never in the URL: a URL is logged by every hop.
+          status=$(curl --silent --show-error \
+                        --request POST \
+                        --header "x-cron-secret: ${CRON_SECRET}" \
+                        --header "content-type: application/json" \
+                        --max-time 120 \
+                        --retry 2 --retry-connrefused --retry-delay 5 \
+                        --output response.json \
+                        --write-out '%{http_code}' \
+                        "${RECONCILE_URL}") || {
+            echo "::error::Could not reach ${RECONCILE_URL} at all — check DNS and that the deployment is live."
+            exit 1
+          }
+
+          echo "HTTP ${status}"
+          echo "--- response ---"
+          cat response.json || true
+          echo
+
+          # Anything outside 2xx is a failure, loudly. A 401 means the secret
+          # and the deployment's have drifted apart; a 503 means the deployment
+          # has no CRON_SECRET at all and is refusing every request.
+          case "${status}" in
+            2*) ;;
+            401) echo "::error::${status} — the secret was rejected. CRON_SECRET here and in the deployment do not match."; exit 1 ;;
+            503) echo "::error::${status} — the deployment says reconciliation is not configured (CRON_SECRET unset there)."; exit 1 ;;
+            *)   echo "::error::${status} from ${RECONCILE_URL}"; exit 1 ;;
+          esac
+
+          # Surface what it did. The response carries counts only — no order
+          # ids — because this log is retained for ninety days and is public on
+          # a public repository.
+          recovered=$(jq -r '.recovered // 0' response.json)
+          filed=$(jq -r '.filed // 0' response.json)
+
+          {
+            echo "### Reconcile"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Payments recovered | ${recovered} |"
+            echo "| Filed for a human | ${filed} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${filed}" != "0" ]; then
+            echo "::warning::${filed} payment(s) could not be settled automatically and are filed as unmatched. They need a human."
+          fi

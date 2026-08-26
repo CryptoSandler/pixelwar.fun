@@ -131,6 +131,24 @@ export async function orderById(id: string): Promise<Order | null> {
  * from anything this function decided in advance.
  */
 export async function createOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
+  // Expiry runs here, not in the route, for the same reason `currentWar()`
+  // advances a war's state itself rather than trusting its callers to: a
+  // payer must never be refused a colour that only a dead reservation is
+  // holding, and that is not a promise a route can be relied on to remember
+  // to keep. A reservation whose window has closed has no claim on anything;
+  // if it is still sitting in the table when the INSERT below runs, the
+  // partial unique index does its job perfectly and produces the wrong
+  // answer — `colour_taken` for a colour nobody holds.
+  //
+  // Deliberately BEFORE `transaction(`, never inside the callback.
+  // `expireStaleOrders` opens a transaction of its own, and `db.ts`'s
+  // `transaction()` takes a fresh pooled client per call — so calling it from
+  // inside this one would have that second connection wait on row locks this
+  // transaction holds and will not release until the call it is waiting on
+  // returns. Out here there is no lock held yet and nothing to deadlock
+  // against.
+  await expireStaleOrders();
+
   return transaction(async (client) => {
     // FOR UPDATE: the colour and contract races are safe without this —
     // each is decided by a partial unique index, so two concurrent inserts
@@ -294,6 +312,20 @@ export async function expireStaleOrders(): Promise<number> {
  * remaining free colours").
  */
 export async function freeColours(warId: string): Promise<number[]> {
+  // A colour still held by a reservation that timed out is a colour this
+  // function would report as taken, to a payer who is being shown this list
+  // precisely because they are looking for one that is not. Expiring first
+  // makes the answer true at the moment it is given. Same argument as
+  // `currentWar()`'s: it happens here rather than in the caller so that no
+  // route can forget to do it.
+  //
+  // Safe to call from here: this function is pool-backed and holds no
+  // transaction of its own, so `expireStaleOrders`'s transaction has nothing
+  // to contend with. The in-transaction case is a different function —
+  // `settle.ts`'s `freeColoursOnClient`, which deliberately reads through
+  // the caller's own client and must NOT gain an expiry call.
+  await expireStaleOrders();
+
   const war = await queryOne<{ max_tokens: number }>(
     `SELECT max_tokens FROM wars WHERE id = $1`,
     [warId],

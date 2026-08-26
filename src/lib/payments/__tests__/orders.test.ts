@@ -109,6 +109,27 @@ function orderInput(overrides: {
   };
 }
 
+/**
+ * Opens a real order and then winds its payment window into the past, so the
+ * reservation it holds is dead but nothing has yet noticed. This is the state
+ * the whole batch was silently stuck in: `expireStaleOrders` existed, worked,
+ * was tested — and nothing ever called it.
+ *
+ * Deliberately does NOT call the expirer. Every test below that uses this is
+ * asserting the WIRING, not the expirer: that the function under test runs it
+ * itself. A test that expires by hand first passes just as happily with no
+ * caller anywhere, which is exactly how this defect survived review.
+ */
+async function deadReservation(warId: string, colourSlot: number): Promise<string> {
+  const opened = await createOrder(orderInput({ warId, colourSlot }));
+  if (!opened.ok) throw new Error(`expected an order, got ${opened.reason}`);
+  await execute(
+    `UPDATE entry_orders SET expires_at = now() - interval '1 minute' WHERE id = $1`,
+    [opened.order.id],
+  );
+  return opened.order.id;
+}
+
 describe("createOrder", () => {
   it(
     "reserves a colour and opens an order for it",
@@ -409,6 +430,25 @@ describe("createOrder", () => {
       expect(result.ok).toBe(true);
     },
   );
+
+  it(
+    "expires a dead reservation itself, so a payer is never refused its colour",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const abandoned = await deadReservation(w.id, 5);
+
+      // Nobody calls expireStaleOrders here. If createOrder does not run it,
+      // the partial unique index does its job on a reservation that has no
+      // claim left and this comes back `colour_taken`.
+      const result = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
+
+      expect(result.ok).toBe(true);
+
+      const stale = await orderById(abandoned);
+      expect(stale?.status).toBe("expired");
+    },
+  );
 });
 
 describe("freeColours", () => {
@@ -424,6 +464,33 @@ describe("freeColours", () => {
       const free = await freeColours(w.id);
 
       expect(free).toEqual([3]);
+    },
+  );
+
+  it(
+    "releases a colour whose reservation expired, with no help from the caller",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war({ maxTokens: 3 });
+      await insertToken({ warId: w.id, colourSlot: 1, status: "active" });
+      const abandoned = await deadReservation(w.id, 2);
+
+      // Again: no hand-rolled expiry. Slot 2 comes back only if freeColours
+      // expired the dead reservation on its own.
+      const free = await freeColours(w.id);
+
+      expect(free).toEqual([2, 3]);
+
+      const stale = await orderById(abandoned);
+      expect(stale?.status).toBe("expired");
+      const [tokenRow] = await query<{ status: string; released_reason: string | null }>(
+        `SELECT status, released_reason FROM war_tokens WHERE id = (
+           SELECT war_token_id FROM entry_orders WHERE id = $1
+         )`,
+        [abandoned],
+      );
+      expect(tokenRow.status).toBe("released");
+      expect(tokenRow.released_reason).toBe("order_expired");
     },
   );
 });
