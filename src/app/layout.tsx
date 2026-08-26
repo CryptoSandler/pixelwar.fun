@@ -6,6 +6,7 @@ import { WalletProvider } from "../components/WalletProvider";
 import {
   ACCENT,
   CHROME_SURFACES,
+  DISABLED_FACE,
   DISABLED_INK,
   INK,
   INK_INVERSE,
@@ -48,9 +49,9 @@ const plexMono = IBM_Plex_Mono({
  * making: `INK` reads 11.51:1 on a panel, 8.40:1 on the readout and 7.20:1 on
  * the surround; `MUTED_INK` reads 7.81:1 on the panel and control faces, the
  * only two surfaces `MUTED_INK_SURFACES` declares it for; `DISABLED_INK`
- * reads 3.57:1 on those same faces. DESIGN.md §9 asks for 8:1 in the readout
- * and 7:1 for body text, and I6 tests every one of these numbers rather than
- * trusting this comment. Which surface a class is *used* on is not something
+ * reads 3.57:1 on those same faces; `DISABLED_FACE` carries `INK` at 4.85:1.
+ * DESIGN.md §9 asks for 8:1 in the readout and 7:1 for body text, and I6 tests
+ * every one of these numbers rather than trusting this comment. Which surface a class is *used* on is not something
  * a unit test can see — see I6's own caveat.
  */
 const chrome = {
@@ -64,6 +65,7 @@ const chrome = {
   "--chrome-ink": INK,
   "--chrome-ink-muted": MUTED_INK,
   "--chrome-ink-disabled": DISABLED_INK,
+  "--chrome-disabled-face": DISABLED_FACE,
   "--chrome-ink-inverse": INK_INVERSE,
 } as CSSProperties;
 

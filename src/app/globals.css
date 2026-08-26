@@ -113,8 +113,16 @@ button.swatch:hover:not(:disabled),
   text-transform: uppercase;
 }
 
+/**
+ * A dead key, said with two named colours. This was
+ * `filter: grayscale(0.7) brightness(0.9)`, which rendered `#8C846C`
+ * carrying `#202023` at 4.33:1 — a filter hides a number exactly as well as
+ * an opacity does, and neither is a design decision. `DISABLED_FACE` carries
+ * `INK` at 4.85:1, and is achromatic so the largest filled control on screen
+ * cannot read as a token.
+ */
 .btn-primary:disabled {
-  filter: grayscale(0.7) brightness(0.9);
+  background: var(--chrome-disabled-face);
   cursor: not-allowed;
 }
 

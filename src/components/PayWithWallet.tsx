@@ -5,11 +5,11 @@ import Link from "next/link";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { getChainForEndpoint } from "@solana/wallet-standard-util";
-import { SOLANA_MAINNET_CHAIN } from "@solana/wallet-standard-chains";
 import { WalletConnect, useInBrowser } from "./WalletProvider";
 import { buildPaymentTransaction } from "../lib/payments/transfer";
 import { formatUsdc, usdToBaseUnits } from "../lib/payments/config";
-import { clusterLabel, isLocalHostname } from "../lib/payments/cluster";
+import { clusterLabel, isLocalHostname, paymentSafety } from "../lib/payments/cluster";
+import type { ProxyCluster } from "../lib/payments/cluster";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
 import { colourForSlot } from "../lib/wars/palette";
 import { getChain } from "../lib/tokens/chains";
@@ -94,7 +94,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function PayWithWallet({ order }: { order: PaymentOrder }) {
+export function PayWithWallet({
+  order,
+  proxyCluster,
+}: {
+  order: PaymentOrder;
+  /**
+   * Which cluster this deployment's own RPC proxy talks to, classified on the
+   * server. A deployment fact rather than an order fact, which is why it is a
+   * sibling prop — and only the classification crosses, never the URL.
+   */
+  proxyCluster: ProxyCluster;
+}) {
   const { connection } = useConnection();
   const { publicKey, sendTransaction, connected } = useWallet();
   const [phase, setPhase] = useState<Phase>(
@@ -330,19 +341,29 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
   const inBrowser = useInBrowser();
   const signingChain = getChainForEndpoint(connection.rpcEndpoint);
 
-  // Whether paying here is real, asked of the ORIGIN rather than inferred from
-  // that chain. The adapter's mapping answers "mainnet" for every endpoint it
-  // does not recognise, and `/api/rpc` on our own host is one of those — so a
-  // guard built on it is live only where the mapping happens to have a
-  // pattern, and silent everywhere else. `isLocalHostname` is the independent
-  // signal; the chain check stays as the second one, for an endpoint that
-  // names a cluster outright.
-  const localOrigin = inBrowser && isLocalHostname(window.location.hostname);
-  const offMainnet = inBrowser && (localOrigin || signingChain !== SOLANA_MAINNET_CHAIN);
+  // Whether paying here is real at all, decided in one place from three facts
+  // that no single one of them can stand in for: where the page is served
+  // from, what the wallet will be told, and what this deployment's own proxy
+  // actually talks to. The browser cannot see the last of those — every
+  // browser sees `/api/rpc` — so it arrives classified from the server.
+  //
+  // Null until the client is running, because two of the three inputs are
+  // browser facts and a server render would answer them wrongly and mismatch
+  // on hydration. Null blocks, like every other unsure state here.
+  const safety = inBrowser
+    ? paymentSafety({
+        localOrigin: isLocalHostname(window.location.hostname),
+        signingChain,
+        proxyCluster,
+      })
+    : null;
+  const blocked = safety === null || !safety.ok;
   const amount = `$${formatUsdc(usdToBaseUnits(order.amountUsd))} USDC`;
   const wrongWallet =
     order.payerPubkey !== null && publicKey !== null && publicKey.toBase58() !== order.payerPubkey;
-  const expired = remaining === 0 && phase.kind !== "paid";
+  // Browser-only, like every other clock-dependent fact here: on the server
+  // `remaining` is computed from a clock the client does not share.
+  const expired = inBrowser && remaining === 0 && phase.kind !== "paid";
   const busy =
     phase.kind === "building" ||
     phase.kind === "signing" ||
@@ -406,28 +427,19 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
           </span>
         </Row>
         <Row label="Order closes in">
-          <span className="numeric">{formatRemaining(remaining)}</span>
+          {/* A countdown cannot be server-rendered: whatever second the server
+              picked has passed by the time the client hydrates, and React
+              reports the difference as a text mismatch. Caught in a browser
+              (React #418), on a page that had rendered correctly a hundred
+              times before landing on the wrong side of a second. */}
+          <span className="numeric">{inBrowser ? formatRemaining(remaining) : "--:--"}</span>
         </Row>
-        {offMainnet ? (
+        {safety && !safety.ok ? (
+          // One verdict, one sentence, one disabled button. The hazards are
+          // different facts and each has its own wording, but a screen that
+          // refuses for two reasons at once still refuses once.
           <p role="alert" className="text-[13px]">
-            {/* Two different true things, never one sentence covering both.
-                A cluster that is not mainnet cannot credit an entry priced in
-                mainnet USDC; a development origin that the adapter still tags
-                as mainnet would move real money off a laptop build. Saying
-                the first about the second would be a warning that is wrong. */}
-            {signingChain === SOLANA_MAINNET_CHAIN ? (
-              <>
-                This page is served from a development machine. A payment from here would move
-                real USDC on Solana mainnet, so paying is turned off on this screen.
-              </>
-            ) : (
-              <>
-                Your wallet would be asked to sign on{" "}
-                <span className="numeric">{clusterLabel(signingChain)}</span>. The entry price is
-                mainnet USDC, so a payment made here could never be credited. Paying is turned off
-                on this screen.
-              </>
-            )}
+            {safety.message}
           </p>
         ) : null}
       </section>
@@ -480,9 +492,7 @@ export function PayWithWallet({ order }: { order: PaymentOrder }) {
       <button
         type="button"
         className="btn-primary px-6 py-3"
-        disabled={
-          !inBrowser || !connected || !publicKey || busy || wrongWallet || expired || offMainnet
-        }
+        disabled={blocked || !connected || !publicKey || busy || wrongWallet || expired}
         onClick={() => void pay()}
       >
         {phaseLabel(phase, amount)}

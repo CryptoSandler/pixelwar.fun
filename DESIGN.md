@@ -67,8 +67,9 @@ in [chrome.ts](src/lib/wars/chrome.ts).
 | Chip outline, dark surfaces | `#F2F3F7` | — | — |
 | Muted ink (panels only) | `#3A3F4D` | 0.075 | 60 away |
 | Disabled ink (panels only) | `#6B7285` | 0.102 | 85 away |
+| Disabled button face | `#909090` | 0.000 | 92 away |
 
-**Quieter text is a colour, never opacity.** `#21242E` at 80% renders 5.37:1 on
+**Quieter text is a colour, never opacity or a filter.** `#21242E` at 80% renders 5.37:1 on
 the readout against a floor of 8:1 — the colour still passes every test in this
 file while the element on screen fails, which is the whole failure mode I6
 exists for. The muted ink is measured like any other colour, and it is declared
@@ -77,7 +78,10 @@ at all, since the full ink itself reads 8.40 and 7.20 against floors of 8 and 7.
 Text that needs to be quiet does not belong on those two surfaces. A disabled
 control's label is the one step quieter than muted — 3.57:1, its own named
 colour, because "WCAG exempts disabled controls" is a reason to choose a value
-deliberately rather than a reason to leave it composited.
+deliberately rather than a reason to leave it composited. The disabled primary
+button is the same decision on the other side of the control: a named face
+carrying the full ink at 4.85:1, rather than the accent run through a filter
+that rendered 4.33:1 and said so nowhere.
 
 **Brass is the only saturated thing in the chrome, and it means "you can act".**
 The Paint button, the selected swatch, the wordmark. Nothing else. One accent
@@ -279,7 +283,11 @@ tests, and a colour must pass both.
 > that ink composited at 80% — the way the first checkout expressed quiet
 > text — falls under the floor it claimed to meet. `DISABLED_INK` is measured
 > the same way, against `DISABLED_TEXT_CONTRAST` and against `MUTED_INK`, so
-> the quiet end of the scale keeps its order.
+> the quiet end of the scale keeps its order; `DISABLED_FACE` against
+> `AA_NORMAL_TEXT` and against `ACCENT`, so a dead key is legible and never
+> louder than a live one; plus controls on the composited values both named
+> colours replaced — 50% ink for the disabled label, and the accent through
+> `grayscale(0.7) brightness(0.9)` for the disabled button.
 
 **Why this exists.** The first brass chosen for this design, `#B87A1E`, cleared
 the token palette by 90 and then failed WCAG AA on the primary button at
@@ -347,6 +355,14 @@ otherwise.
   present beside the chip, in the leaderboard and the paint bar both. A
   colour-blind visitor loses nothing but the board's aesthetics.
 - Readout text holds ≥ 8:1 against its surface; body text ≥ 7:1.
+- **Neither `opacity` nor `filter` may alter the colour of text, or of a
+  control that carries text.** Disabled, muted and hover states use named
+  colours from [chrome.ts](src/lib/wars/chrome.ts), measured. The point is not
+  that either mechanism is bad — it is that a rendered colour nobody measured
+  is not a design decision, and both hide the number equally well. The rule
+  was first written as "never opacity on text" and had to be widened the day a
+  `filter` on the primary button turned 5.19:1 into 4.33:1 with nothing
+  anywhere recording it.
 - `prefers-reduced-motion` as specified in §6.
 - The board itself is an image of a shared artwork. It carries a live text
   summary — leader, pixel count, time left — so a screen reader gets the state

@@ -2,7 +2,8 @@ import { notFound } from "next/navigation";
 import { Cabinet } from "../../../components/Cabinet";
 import { PayWithWallet } from "../../../components/PayWithWallet";
 import { queryOne } from "../../../lib/db";
-import { USDC_DECIMALS, USDC_MINT, paymentWallet } from "../../../lib/payments/config";
+import { classifyEndpoints } from "../../../lib/payments/cluster";
+import { USDC_DECIMALS, USDC_MINT, paymentWallet, solanaRpcUrls } from "../../../lib/payments/config";
 import { orderById } from "../../../lib/payments/orders";
 import { warById } from "../../../lib/wars/lifecycle";
 
@@ -74,6 +75,12 @@ export default async function OrderPage({
       </section>
 
       <PayWithWallet
+        // Classified here and passed as five words. The endpoint itself never
+        // crosses to the browser — that is the whole point of `/api/rpc`, and
+        // a network disclosure built by shipping the URL down would undo it
+        // from the other side. What the payment screen needs is which cluster
+        // this deployment settles on, and that is all it gets.
+        proxyCluster={classifyEndpoints(solanaRpcUrls())}
         order={{
           id: order.id,
           status: order.status,

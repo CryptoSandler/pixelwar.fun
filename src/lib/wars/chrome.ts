@@ -108,6 +108,26 @@ export const MUTED_INK_SURFACES = ["panel", "control"] as const satisfies readon
  */
 export const DISABLED_INK = "#6B7285";
 
+/**
+ * The primary button when it cannot be pressed.
+ *
+ * A face of its own rather than the accent run through a filter, which is
+ * what this used to be: `filter: grayscale(0.7) brightness(0.9)` rendered
+ * `#8C846C` carrying `#202023` at 4.33:1, and nothing anywhere recorded
+ * either value. `opacity` and `filter` hide a number equally well — the rule
+ * was never about one mechanism, it is that a rendered colour nobody measured
+ * is not a decision.
+ *
+ * Chosen against three constraints, not one. It carries `INK` at 4.85:1, over
+ * AA and deliberately *under* the accent's 5.19 — a dead key should not read
+ * as more legible than a live one. It is achromatic, so the largest filled
+ * control on the screen cannot be mistaken for a token, which is the same
+ * worry I5 has about the accent. And its chroma is far below the accent's, so
+ * "you can act" stays the loudest thing on screen and a disabled button never
+ * competes for it.
+ */
+export const DISABLED_FACE = "#909090";
+
 /** DESIGN.md §9's floors, as numbers something can be tested against. */
 export const READOUT_TEXT_CONTRAST = 8;
 export const BODY_TEXT_CONTRAST = 7;

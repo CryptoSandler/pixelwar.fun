@@ -16,6 +16,7 @@ import {
   ACCENT,
   BODY_TEXT_CONTRAST,
   CHIP_OUTLINE,
+  DISABLED_FACE,
   DISABLED_INK,
   DISABLED_TEXT_CONTRAST,
   INK,
@@ -185,6 +186,29 @@ describe("a chrome colour is legible under the text it carries", () => {
       expect(contrastRatio(DISABLED_INK, face)).toBeLessThan(contrastRatio(MUTED_INK, face));
       expect(contrastRatio(MUTED_INK, face)).toBeLessThan(contrastRatio(INK, face));
     }
+  });
+
+  // The other half of the same rule: the primary button's disabled state was
+  // a `filter` over the accent, which hides its rendered colour exactly as
+  // well as an `opacity` does. Both ends of that button are named now, so
+  // both can be measured.
+  it("carries the disabled button's label at AA, and no louder than the live one", () => {
+    expect(contrastRatio(DISABLED_FACE, INK)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+    expect(contrastRatio(DISABLED_FACE, INK)).toBeLessThanOrEqual(contrastRatio(ACCENT, INK));
+  });
+
+  it("keeps the disabled button from reading as the accent, or as a token", () => {
+    // I5's worry, applied to the only other large filled control there is:
+    // quieter than the accent, and achromatic, so the biggest block of colour
+    // on the screen after the board cannot be mistaken for a token's.
+    expect(chroma(DISABLED_FACE)).toBeLessThan(chroma(ACCENT));
+    expect(chroma(DISABLED_FACE)).toBeLessThan(0.1);
+  });
+
+  it("rejects the filter that the disabled face replaced", () => {
+    // `filter: grayscale(0.7) brightness(0.9)` over ACCENT and INK, computed
+    // through the CSS sRGB matrices: #8C846C carrying #202023.
+    expect(contrastRatio("#8C846C", "#202023")).toBeLessThan(AA_NORMAL_TEXT);
   });
 
   it("rejects the opacity that the disabled ink replaced", () => {
