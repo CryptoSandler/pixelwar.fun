@@ -1,7 +1,6 @@
-import { after } from "next/server";
 import { queryOne } from "../../../../lib/db";
 import { json, NO_STORE } from "../../../../lib/http";
-import { reconcileOnRead } from "../../../../lib/payments/lazy-recovery";
+import { scheduleReconcile } from "../../../../lib/payments/lazy-recovery";
 import { orderById } from "../../../../lib/payments/orders";
 
 export const dynamic = "force-dynamic";
@@ -44,17 +43,11 @@ export async function GET(
   // status a caller reads here is always the status as of the pass BEFORE
   // this one.
   //
-  // Errors are swallowed on purpose. This work is opportunistic; the daily
-  // sweep in `vercel.json` and the hourly backstop in `reconcile.yml` are
-  // what make it merely opportunistic rather than load-bearing, and a failed
-  // pass must never turn a healthy status poll into a 500 the payer sees.
-  after(async () => {
-    try {
-      await reconcileOnRead(order);
-    } catch (error) {
-      console.error(`GET /api/orders/${id}: lazy reconcile failed`, error);
-    }
-  });
+  // Nothing here can throw: `scheduleReconcile` swallows both a failing pass
+  // AND a failing `after` call, which is not the same hazard twice — see its
+  // own comment. A failed reconcile must never turn a healthy status poll
+  // into a 500 the payer sees.
+  scheduleReconcile(order, `GET /api/orders/${id}`);
 
   // The order's own row has everything except the ticker and colour a payer
   // is shown while they wait — those live on the war_tokens row it reserved.

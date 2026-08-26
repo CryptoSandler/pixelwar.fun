@@ -1,12 +1,11 @@
 import { notFound } from "next/navigation";
-import { after } from "next/server";
 import { Cabinet } from "../../../components/Cabinet";
 import { PasteSignature } from "../../../components/PasteSignature";
 import { PayWithWallet } from "../../../components/PayWithWallet";
 import { queryOne } from "../../../lib/db";
 import { classifyEndpoints } from "../../../lib/payments/cluster";
 import { USDC_DECIMALS, USDC_MINT, paymentWallet, solanaRpcUrls } from "../../../lib/payments/config";
-import { reconcileOnRead } from "../../../lib/payments/lazy-recovery";
+import { scheduleReconcile } from "../../../lib/payments/lazy-recovery";
 import { orderById } from "../../../lib/payments/orders";
 import { warById } from "../../../lib/wars/lifecycle";
 
@@ -58,13 +57,7 @@ export default async function OrderPage({
   // Same `after` discipline as the poll route, for the same reason: this page
   // is server-rendered and a recovery pass in front of it would put seconds
   // of RPC latency between the payer and their own payment screen.
-  after(async () => {
-    try {
-      await reconcileOnRead(order);
-    } catch (error) {
-      console.error(`GET /join/${orderId}: lazy reconcile failed`, error);
-    }
-  });
+  scheduleReconcile(order, `GET /join/${orderId}`);
 
   const wallet = paymentWallet();
   if (!wallet.ok) {

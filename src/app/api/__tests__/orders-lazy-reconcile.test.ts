@@ -37,9 +37,16 @@ import type { SolanaTransaction } from "../../../lib/payments/solana";
  * and it is what makes the test fail if somebody changes `after(cb)` to
  * `await cb()`.
  */
-const pending: Array<Promise<unknown>> = [];
+const afterMode = vi.hoisted(() => ({ current: "run" as "run" | "throw" }));
+const pending = vi.hoisted(() => [] as Array<Promise<unknown>>);
+
 vi.mock("next/server", () => ({
   after: (callback: () => Promise<unknown>) => {
+    // Next throws exactly this when `after` is called outside a request
+    // scope, and one of the tests below needs that to happen on purpose.
+    if (afterMode.current === "throw") {
+      throw new Error("`after` was called outside a request scope.");
+    }
     pending.push(Promise.resolve().then(callback));
   },
 }));
@@ -49,16 +56,21 @@ async function drainAfter(): Promise<void> {
   while (pending.length) await pending.shift();
 }
 
+/**
+ * The fixture chain, injected at the ONE boundary that already takes a
+ * fetcher in production: `recoverOrder`.
+ *
+ * Deliberately not mocking `scheduleReconcile` or `reconcileOnRead`. Those
+ * are the links this file is testing — the route reaching the scheduler, the
+ * scheduler expiring and claiming — and a test that replaces them proves the
+ * route calls a mock. Everything above `recoverOrder` is the real code path.
+ */
 const recoveryFetcher = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
-vi.mock("../../../lib/payments/lazy-recovery", async (importOriginal) => {
-  const real = await importOriginal<typeof import("../../../lib/payments/lazy-recovery")>();
+vi.mock("../../../lib/payments/recover", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../../lib/payments/recover")>();
   return {
     ...real,
-    // The route calls `reconcileOnRead(order)` with no fetcher, because in
-    // production there is a real chain behind it. The fetcher is injected
-    // here and nowhere else, so the route keeps its production call shape.
-    reconcileOnRead: (order: Parameters<typeof real.reconcileOnRead>[0]) =>
-      real.reconcileOnRead(order, recoveryFetcher.current),
+    recoverOrder: (orderId: string) => real.recoverOrder(orderId, recoveryFetcher.current),
   };
 });
 
@@ -123,6 +135,7 @@ async function abandonedPayment(): Promise<{ orderId: string; reference: string 
 describe("GET /api/orders/[id] reconciles without a scheduler", () => {
   beforeEach(() => {
     pending.length = 0;
+    afterMode.current = "run";
     process.env.PAYMENT_WALLET = PAYMENT_WALLET;
     recoveryFetcher.current = {};
   });
@@ -192,6 +205,27 @@ describe("GET /api/orders/[id] reconciles without a scheduler", () => {
       expect(withPass).toBeLessThan(PASS_DELAY_MS / 2);
 
       await drainAfter();
+    },
+  );
+
+  it(
+    "still answers 200 when after() itself throws",
+    { timeout: 30_000 },
+    async () => {
+      // THE REGRESSION THE FULL SUITE FOUND. `after` throws when it is called
+      // outside a request scope, and an uncaught throw would come from the
+      // handler body — before any response exists — turning an ordinary
+      // status poll into a 500. The promise this mechanism makes is that a
+      // failing reconcile costs a payer one poll cycle and nothing else; a
+      // throw from the SCHEDULING call breaks that promise just as
+      // effectively as a throw from the work.
+      const { orderId } = await abandonedPayment();
+      afterMode.current = "throw";
+
+      const response = await poll(orderId);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ status: "expired" });
     },
   );
 });

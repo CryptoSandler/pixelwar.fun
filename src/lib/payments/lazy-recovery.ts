@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { execute } from "../db";
 import { expireStaleOrders, type Order } from "./orders";
 import { recoverOrder, type RecoveryFetcher } from "./recover";
@@ -143,4 +144,47 @@ export async function reconcileOnRead(
 
   const { recovered, filed } = await recoverOrder(order.id, fetcher);
   return { ran: true, recovered, filed };
+}
+
+/**
+ * Schedules `reconcileOnRead` to run once the response has been sent.
+ *
+ * THE ONLY THING A ROUTE SHOULD CALL. Two call sites need identical
+ * defensive wrapping, and a second copy of it is a second place for the
+ * "this must never break the response" rule to be forgotten.
+ *
+ * There are TWO try/catch layers here and they catch different things:
+ *
+ *   - around `after` ITSELF, because `after` throws when it is called
+ *     outside a request scope ("`after` was called outside a request scope").
+ *     In production it never is. But an uncaught throw here would come from
+ *     the handler body, before the response exists, and would turn an
+ *     ordinary status poll into a 500 — the exact failure this whole
+ *     mechanism promises it cannot cause, arriving through the scheduling
+ *     call rather than through the work. `orders.test.ts` drives the handler
+ *     directly and found this; it is not hypothetical.
+ *
+ *   - around the callback, because a recovery pass touches the chain and the
+ *     database and either can fail. That work is opportunistic — the daily
+ *     sweep in `vercel.json` and the hourly backstop in `reconcile.yml` are
+ *     what make it merely opportunistic rather than load-bearing.
+ *
+ * Both swallow rather than rethrow, and log instead. A dropped pass costs a
+ * payer one poll cycle. A thrown one costs them their screen.
+ */
+export function scheduleReconcile(
+  order: Pick<Order, "id" | "status" | "expiresAt">,
+  where: string,
+): void {
+  try {
+    after(async () => {
+      try {
+        await reconcileOnRead(order);
+      } catch (error) {
+        console.error(`${where}: lazy reconcile failed`, error);
+      }
+    });
+  } catch (error) {
+    console.error(`${where}: could not schedule lazy reconcile`, error);
+  }
 }
