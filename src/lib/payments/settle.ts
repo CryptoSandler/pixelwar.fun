@@ -1022,6 +1022,116 @@ function refuseAssignment(reason: AssignFailureReason): AssignResult {
   return { ok: false, reason, message: ASSIGN_MESSAGES[reason] };
 }
 
+// --- Discarding, from /admin/orphans -------------------------------------
+
+export type DiscardFailureReason =
+  /** No `unmatched_payments` row with this id. */
+  | "not_found"
+  /** The row is no longer `open` — applied, or already discarded. */
+  | "already_resolved"
+  /** An empty note. A discarded payment with no reason is an audit trail that says nothing. */
+  | "note_required"
+  | "note_too_long";
+
+export type DiscardResult =
+  | { ok: true; unmatchedId: string }
+  | { ok: false; reason: DiscardFailureReason; message: string };
+
+/**
+ * How much prose one resolution note may carry.
+ *
+ * The column is TEXT and would take any length; this is the trust boundary,
+ * not the storage limit. Long enough for "refunded 25 USDC to the fee payer,
+ * tx 5Kd…, confirmed with the payer by email", short enough that a form
+ * field cannot be used to write a novel into the operator's own queue.
+ */
+const DISCARD_NOTE_MAX = 500;
+
+const DISCARD_MESSAGES: Record<DiscardFailureReason, string> = {
+  not_found: "That filed payment no longer exists.",
+  already_resolved: "That payment has already been resolved. Nothing was changed.",
+  note_required: "Say what happened to the money before discarding it.",
+  note_too_long: `That note is longer than ${DISCARD_NOTE_MAX} characters.`,
+};
+
+/**
+ * Marks a filed payment handled, without moving anything.
+ *
+ * The counterpart to `settleAssignedPayment`, and deliberately its opposite in
+ * every respect but one. Assignment is the rarer outcome: most stray payments
+ * are somebody's mistake — a duplicate transfer, a payment for an order the
+ * payer abandoned, money refunded off-chain — and the queue has no way to
+ * shrink without this. Without it `/admin/orphans` could only ever grow, which
+ * makes it a list nobody can work rather than a queue.
+ *
+ * **This settles nothing.** There is no INSERT or UPDATE against `payments`,
+ * `entry_orders` or `war_tokens` anywhere in this function, and there must
+ * never be one: "handled" is a statement about the operator's own workflow,
+ * not about the chain, and a screen where the quiet button can also move money
+ * is a screen where a mis-click moves money. The signature is likewise left
+ * alone in `consumed_signatures` — discarding is not a verdict about the
+ * transaction, and a payer whose refund fell through must still be able to
+ * spend that signature against a live order.
+ *
+ * The one respect it copies exactly is the idempotency: the same
+ * `FOR UPDATE` on the same `unmatched_payments` row that assignment takes as
+ * its first act. A double-click, a retried POST, or an operator discarding
+ * while another assigns all serialise on that lock and the loser reads the
+ * true post-commit `status`, so a second request returns `already_resolved`
+ * having changed nothing. And because assignment refuses any row that is not
+ * `open`, a discarded row can never be assigned afterwards — the two actions
+ * are mutually exclusive through one lock and one status, not through two
+ * separate checks that could drift apart.
+ *
+ * The note is required, and required HERE rather than only in the form: an
+ * operator asserting a payment was handled without saying what happened to
+ * the money leaves a row that looks resolved and answers nothing. `applied_by`
+ * records which operator, exactly as assignment does.
+ *
+ * WHO CALLS THIS: `POST /api/admin/orphans/[id]/discard`, guarded by the admin
+ * session. Nothing else — `operatorLabel` is the caller asserting a human
+ * authorised this, and only an authenticated route may assert it.
+ */
+export async function discardFiledPayment(params: {
+  /** `unmatched_payments.id` — the filed payment being marked handled. */
+  unmatchedId: string;
+  /** What happened to the money. Required, trimmed, and capped. */
+  note: string;
+  /** `admin_sessions.token_label`. Never a token, never a session id. */
+  operatorLabel: string;
+}): Promise<DiscardResult> {
+  const note = params.note.trim();
+  if (!note) return refuseDiscard("note_required");
+  if (note.length > DISCARD_NOTE_MAX) return refuseDiscard("note_too_long");
+
+  return transaction(async (client): Promise<DiscardResult> => {
+    // The idempotency token, locked before anything is read — the same lock,
+    // on the same row, that `settleAssignedPayment` takes. See the doc above.
+    const filedResult = await client.query<{ id: string; status: string }>(
+      `SELECT id, status FROM unmatched_payments WHERE id = $1 FOR UPDATE`,
+      [params.unmatchedId],
+    );
+    const filed = filedResult.rows[0];
+    if (!filed) return refuseDiscard("not_found");
+    if (filed.status !== "open") return refuseDiscard("already_resolved");
+
+    // `applied_order_id` is deliberately left NULL: no order took this money.
+    // 'discarded' has been in the CHECK constraint since migration 002.
+    await client.query(
+      `UPDATE unmatched_payments
+          SET status = 'discarded', resolved_at = now(), applied_by = $2, resolution_note = $3
+        WHERE id = $1`,
+      [filed.id, params.operatorLabel, note],
+    );
+
+    return { ok: true, unmatchedId: filed.id };
+  });
+}
+
+function refuseDiscard(reason: DiscardFailureReason): DiscardResult {
+  return { ok: false, reason, message: DISCARD_MESSAGES[reason] };
+}
+
 // --- Verification rate limiting ------------------------------------------
 //
 // Every /confirm call that reaches verifyPayment spends a real RPC request,

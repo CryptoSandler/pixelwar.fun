@@ -9,6 +9,7 @@ import { base58Encode } from "../../../lib/base58";
 import { execute, query } from "../../../lib/db";
 import { GET as orphansRoute } from "../admin/orphans/route";
 import { POST as assignRoute } from "../admin/orphans/[id]/assign/route";
+import { POST as discardRoute } from "../admin/orphans/[id]/discard/route";
 
 /**
  * The unmatched-payment surface: `GET /api/admin/orphans` and the
@@ -160,6 +161,21 @@ function assignRequest(
       method: "POST",
       headers: { "x-forwarded-for": IP, ...headers },
       body: new URLSearchParams({ orderId }),
+    }),
+    { params: Promise.resolve({ id: orphanId }) },
+  ];
+}
+
+function discardRequest(
+  orphanId: string,
+  note: string,
+  headers: Record<string, string> = {},
+): [Request, { params: Promise<{ id: string }> }] {
+  return [
+    new Request(`https://pixelwar.fun/api/admin/orphans/${orphanId}/discard`, {
+      method: "POST",
+      headers: { "x-forwarded-for": IP, ...headers },
+      body: new URLSearchParams({ note }),
     }),
     { params: Promise.resolve({ id: orphanId }) },
   ];
@@ -318,6 +334,10 @@ describe("/admin/orphans", () => {
   );
 
   it("renders the filed payments for a signed-in operator", { timeout: 20_000 }, async () => {
+    // An assignable order exists, so the assign form renders rather than the
+    // "nothing can take a payment" line. The discard form does not depend on
+    // one — discarding never needs an order.
+    await orderFixture();
     const signature = await file({
       received: "12500000",
       expected: "25000000",
@@ -332,6 +352,12 @@ describe("/admin/orphans", () => {
     const html = renderToStaticMarkup(await OrphansPage(pageProps()));
 
     expect(html).toContain(signature);
+    // Both actions are on the row, and this is the assertion that catches a
+    // route nothing calls (AGENTS.md): the form's own action attribute.
+    const orphanId = await orphanIdFor(signature);
+    expect(html).toContain(`/api/admin/orphans/${orphanId}/assign`);
+    expect(html).toContain(`/api/admin/orphans/${orphanId}/discard`);
+    expect(html).toContain('name="note"');
     expect(html).toContain("12.50 USDC");
     expect(html).toContain("25.00 USDC");
     expect(html).toContain("2026-08-22 10:00:00 UTC");
@@ -661,5 +687,234 @@ describe("POST /api/admin/orphans/[id]/assign", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/admin/orphans?applied=1");
+  });
+});
+
+/**
+ * The other half of the screen, and the more common outcome.
+ *
+ * Most stray payments are somebody's mistake and end in a refund, so without
+ * a way to mark one handled the queue could only ever grow. What these prove:
+ * that it is guarded exactly like the assign route; that it settles NOTHING —
+ * no payment row, no order status, no colour; that a note is required, because
+ * a discarded payment with no reason is an audit trail that says nothing; that
+ * a double-click cannot discard twice; and that a discarded row can never be
+ * assigned afterwards by any path.
+ */
+describe("POST /api/admin/orphans/[id]/discard", () => {
+  it(
+    "answers an unauthenticated request exactly as it answers a wrong token, and changes nothing",
+    { timeout: 20_000 },
+    async () => {
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const note = "Refunded on chain.";
+
+      const anonymous = await shape(await discardRoute(...discardRequest(orphanId, note)));
+      const wrongToken = await shape(
+        await discardRoute(...discardRequest(orphanId, note, { "x-admin-token": "not-the-token" })),
+      );
+      const junkCookie = await shape(
+        await discardRoute(...discardRequest(orphanId, note, { cookie: `${ADMIN_COOKIE}=nonsense` })),
+      );
+
+      expect(anonymous.status).toBe(401);
+      expect(wrongToken).toEqual(anonymous);
+      expect(junkCookie).toEqual(anonymous);
+
+      expect(await query(`SELECT status FROM unmatched_payments WHERE id = $1`, [orphanId])).toEqual([
+        { status: "open" },
+      ]);
+    },
+  );
+
+  it(
+    "marks the payment handled with the operator and the note, and settles nothing",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId, tokenId } = await orderFixture();
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+
+      const response = await discardRoute(
+        ...discardRequest(orphanId, "  Refunded 25 USDC to the fee payer.  ", {
+          cookie: `${ADMIN_COOKIE}=${session.id}`,
+        }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, discarded: orphanId });
+
+      const [row] = await query<{
+        status: string;
+        applied_by: string;
+        applied_order_id: string | null;
+        resolution_note: string;
+        resolved_at: Date | null;
+      }>(
+        `SELECT status, applied_by, applied_order_id, resolution_note, resolved_at
+           FROM unmatched_payments WHERE id = $1`,
+        [orphanId],
+      );
+      expect(row.status).toBe("discarded");
+      // The same audit answer assignment records, in the same column.
+      expect(row.applied_by).toBe("admin");
+      expect(row.resolution_note).toBe("Refunded 25 USDC to the fee payer.");
+      expect(row.resolved_at).toBeTruthy();
+      // Nothing was applied to anything.
+      expect(row.applied_order_id).toBeNull();
+
+      // The three tables a discard must never touch.
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(await query(`SELECT status FROM entry_orders WHERE id = $1`, [orderId])).toEqual([
+        { status: "pending" },
+      ]);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "reserved" },
+      ]);
+    },
+  );
+
+  it("refuses a discard with no note, and changes nothing", { timeout: 20_000 }, async () => {
+    const signature = await file({
+      received: "25000000",
+      expected: "25000000",
+      reason: "war_full",
+      createdAt: new Date(),
+    });
+    const orphanId = await orphanIdFor(signature);
+    const session = await createAdminSession("admin", "hashed");
+
+    // Whitespace only: the check is on the trimmed value, not on the field
+    // being present, or a space would buy an empty audit trail.
+    const response = await discardRoute(
+      ...discardRequest(orphanId, "   ", { cookie: `${ADMIN_COOKIE}=${session.id}` }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ reason: "note_required" });
+    expect(await query(`SELECT status FROM unmatched_payments WHERE id = $1`, [orphanId])).toEqual([
+      { status: "open" },
+    ]);
+  });
+
+  it(
+    "is idempotent under a double-click, including two that land at once",
+    { timeout: 20_000 },
+    async () => {
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+      const cookie = { cookie: `${ADMIN_COOKIE}=${session.id}` };
+
+      // Genuinely concurrent: both in flight before either commits, which is
+      // the case a status check would lose to and the FOR UPDATE lock on the
+      // unmatched_payments row is there for.
+      const [a, b] = await Promise.all([
+        discardRoute(...discardRequest(orphanId, "Refunded.", cookie)),
+        discardRoute(...discardRequest(orphanId, "Refunded again.", cookie)),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+
+      const third = await discardRoute(...discardRequest(orphanId, "And again.", cookie));
+      expect(third.status).toBe(409);
+      expect(await third.json()).toMatchObject({ reason: "already_resolved" });
+
+      // One note, from the one request that won. The losers wrote nothing.
+      const [row] = await query<{ status: string; resolution_note: string }>(
+        `SELECT status, resolution_note FROM unmatched_payments WHERE id = $1`,
+        [orphanId],
+      );
+      expect(row.status).toBe("discarded");
+      expect(["Refunded.", "Refunded again."]).toContain(row.resolution_note);
+    },
+  );
+
+  it(
+    "leaves a discarded payment unassignable by any path",
+    { timeout: 20_000 },
+    async () => {
+      const { orderId, tokenId } = await orderFixture();
+      const signature = await file({
+        received: "25000000",
+        expected: "25000000",
+        reason: "war_full",
+        createdAt: new Date(),
+      });
+      const orphanId = await orphanIdFor(signature);
+      const session = await createAdminSession("admin", "hashed");
+      const cookie = { cookie: `${ADMIN_COOKIE}=${session.id}` };
+
+      expect((await discardRoute(...discardRequest(orphanId, "Refunded.", cookie))).status).toBe(200);
+
+      // Assignment reads the same row under the same lock and acts only on an
+      // 'open' one, so a discarded payment cannot be settled afterwards — the
+      // two actions are exclusive through one status, not two checks that
+      // could drift apart.
+      const assigned = await assignRoute(...assignRequest(orphanId, orderId, cookie));
+      expect(assigned.status).toBe(409);
+      expect(await assigned.json()).toMatchObject({ reason: "already_resolved" });
+
+      expect(await query(`SELECT id FROM payments`)).toHaveLength(0);
+      expect(await query(`SELECT status FROM entry_orders WHERE id = $1`, [orderId])).toEqual([
+        { status: "pending" },
+      ]);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "reserved" },
+      ]);
+    },
+  );
+
+  it("answers a browser with a redirect, not JSON", { timeout: 20_000 }, async () => {
+    const signature = await file({
+      received: "25000000",
+      expected: "25000000",
+      reason: "war_full",
+      createdAt: new Date(),
+    });
+    const orphanId = await orphanIdFor(signature);
+    const session = await createAdminSession("admin", "hashed");
+
+    const response = await discardRoute(
+      ...discardRequest(orphanId, "Refunded.", {
+        cookie: `${ADMIN_COOKIE}=${session.id}`,
+        accept: "text/html,application/xhtml+xml",
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/admin/orphans?discarded=1");
+
+    // A browser that submitted an empty note comes back to the list with the
+    // reason in the query string, not to a JSON body it cannot render.
+    const other = await file({
+      received: "25000000",
+      expected: "25000000",
+      reason: "war_closed",
+      createdAt: new Date(),
+    });
+    const emptyNote = await discardRoute(
+      ...discardRequest(await orphanIdFor(other), "", {
+        cookie: `${ADMIN_COOKIE}=${session.id}`,
+        accept: "text/html",
+      }),
+    );
+    expect(emptyNote.status).toBe(303);
+    expect(emptyNote.headers.get("location")).toBe("/admin/orphans?error=note_required");
   });
 });

@@ -266,3 +266,53 @@ describe("authenticating a request", () => {
     expect(await query(`SELECT id FROM admin_login_attempts`)).toHaveLength(0);
   });
 });
+
+/**
+ * Both admin tables grow a row per sign-in attempt and had no sweep at all,
+ * so they grew forever — slowly, which is exactly why nothing would notice.
+ *
+ * This drives `recordLoginAttempt`, the caller, rather than the sweep itself:
+ * a sweep nothing runs is the shape this repo has already shipped twice
+ * (AGENTS.md). Falsify it by deleting the `pruneAdminRecords()` call from
+ * `recordLoginAttempt`.
+ */
+describe("pruning the admin tables", () => {
+  it(
+    "sweeps long-dead sessions and stale attempts on the next sign-in attempt",
+    { timeout: 20_000 },
+    async () => {
+      const live = await createAdminSession("admin", IP);
+      const dead = await createAdminSession("admin", IP);
+      await query(`UPDATE admin_sessions SET expires_at = now() - interval '60 days' WHERE id = $1`, [
+        dead.id,
+      ]);
+
+      await recordLoginAttempt(IP, "admin", true);
+      await query(`UPDATE admin_login_attempts SET attempted_at = now() - interval '60 days'`);
+      await recordLoginAttempt(OTHER_IP, null, false);
+
+      expect(await query<{ id: string }>(`SELECT id FROM admin_sessions`)).toEqual([{ id: live.id }]);
+
+      // The old attempt is gone; the one that just triggered the sweep is not.
+      const attempts = await query<{ ip_hash: string }>(`SELECT ip_hash FROM admin_login_attempts`);
+      expect(attempts).toEqual([{ ip_hash: OTHER_IP }]);
+    },
+  );
+
+  it(
+    "keeps history the lockout no longer reads, so an operator can still see it",
+    { timeout: 20_000 },
+    async () => {
+      // A month is deliberately far wider than ADMIN_LOGIN_LIMITS.windowMinutes:
+      // "when did this token last work" is asked long after the gate has
+      // stopped counting, and a sweep tight enough for the gate would answer it
+      // with nothing.
+      await recordLoginAttempt(IP, "admin", true);
+      await query(`UPDATE admin_login_attempts SET attempted_at = now() - interval '5 days'`);
+
+      await recordLoginAttempt(OTHER_IP, null, false);
+
+      expect(await query(`SELECT id FROM admin_login_attempts`)).toHaveLength(2);
+    },
+  );
+});

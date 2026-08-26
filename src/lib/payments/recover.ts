@@ -135,25 +135,47 @@ const SIGNATURE_PAGE_CEILING = 4;
 const MAX_SIGNATURES_PER_REFERENCE = 5;
 
 /**
- * How long an expired order stays a recovery candidate at all, regardless of
- * `recovery_attempted_at`. A real payment that is ever going to show up on
- * the chain does so within minutes to hours of the order expiring — Solana
- * confirms in seconds, and even a payer whose wallet held a signed transfer
- * unbroadcast for a while has no plausible reason to broadcast it a week
- * later. Seven days is generous slack past that for a slow retry while still
- * being short enough that abandoned reservations — the overwhelming majority
- * of expired orders — eventually age out of the candidate set entirely,
- * rather than sitting in it, unresolvable, forever.
+ * How long after its own expiry an order can still have a payment applied to
+ * it AUTOMATICALLY — and nothing else.
  *
- * The cost of that bound, stated plainly rather than only in its own favour:
- * a real payment against an order older than this is never recovered *and
- * never filed to `unmatched_payments`* — it is invisible to the only people
- * who could return it, with no log line anywhere marking the moment it
- * stopped being looked for. If that ever needs to be undone by hand, the
- * order row and its `reference_pubkey` are still sitting in `entry_orders`;
- * nothing about this bound deletes either.
+ * A real payment that is ever going to show up on the chain does so within
+ * minutes to hours of the order expiring — Solana confirms in seconds, and
+ * even a payer whose wallet held a signed transfer unbroadcast for a while
+ * has no plausible reason to broadcast it a week later. Seven days is
+ * generous slack past that for a slow retry, and past it this pass stops
+ * trying to give an order's colour away on chain evidence alone.
+ *
+ * This used to be the candidate query's own WHERE clause, which made it two
+ * bounds wearing one name: past it a payment was never recovered *and never
+ * filed to `unmatched_payments`* — real money in our wallet, invisible to
+ * the only people who could return it, with nothing anywhere marking the
+ * moment it stopped being looked for. The two are now separate, because they
+ * were never the same question. Age bounds the COLOUR; nothing bounds the
+ * RECORD.
+ *
+ * Past the bound, the pass verifies the candidate against the order's OWN
+ * payment window instead of the widened one (see `recoverUnclaimedOrders`),
+ * so the verdict can only be `outside_bid_window` — filed when the money
+ * genuinely reached our wallet, and never settled. A transfer that did land
+ * inside that window reaches `settlePayment`, which is past
+ * `LATE_CONFIRM_GRACE_MINUTES` by more than seven days and so can only file
+ * `late_confirm_past_grace` too. Both paths file; neither can take a seat.
+ *
+ * What it costs, stated plainly rather than only in its own favour: an
+ * expired order is now a candidate forever, so a deployment with a long tail
+ * of abandoned reservations keeps spending one `getSignaturesForAddress` per
+ * candidate per pass on orders that will never resolve, where before they
+ * aged out. The per-pass ceiling is unchanged (`MAX_ORDERS_PER_PASS` bounds
+ * it, and `recovery_attempted_at ASC NULLS FIRST` still gives every
+ * freshly-expired order first look), but an idle deployment no longer makes
+ * an idle pass. ponytail: if that spend ever matters, the fix is a second,
+ * much wider horizon past which an order stops being looked at at all —
+ * measured in months, and chosen as a cost decision rather than smuggled
+ * back in under this one.
  */
 const RECOVERY_MAX_AGE_DAYS = 7;
+
+const RECOVERY_MAX_AGE_MS = RECOVERY_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
 
 /**
  * `settlePayment` failure reasons that CAN mean a real payment was written
@@ -220,6 +242,16 @@ const FILED_REASONS = new Set<SettleFailureReason>([
  * whose reference it names, so widening backward would only ever admit more
  * candidates a hostile sender could throw at this loop, never a real one.
  *
+ * That widening is exactly what `RECOVERY_MAX_AGE_DAYS` withdraws. An order
+ * more than that old is still examined, still verified and still filed — it
+ * simply gets the order's own `expiresAt` back as the window, which is the
+ * whole of what the age bound now does. Every candidate for such an order
+ * therefore ends in `outside_bid_window` (filed when the money reached our
+ * wallet, with the chain's own sender on the row, and the signature left
+ * unclaimed so the payer can still spend it) or, if it did land inside that
+ * window, in `settlePayment`'s own past-grace filing. Nothing on either path
+ * can seat a token.
+ *
  * Every order is examined and stamped exactly once per pass, whatever
  * happens while examining it — `collectOldestCandidates` or `settlePayment`
  * throwing included. Without that, an order with a persistently failing
@@ -247,6 +279,10 @@ export async function recoverUnclaimedOrders(
 
   for (const order of orders) {
     let orderFiled = false;
+    // The age bound, and the only thing it does: past it the verification
+    // window narrows back to the order's own, so a payment found here can be
+    // recorded but can never be seated. See RECOVERY_MAX_AGE_DAYS.
+    const withinRecoveryWindow = Date.now() - order.expiresAt.getTime() <= RECOVERY_MAX_AGE_MS;
 
     try {
       const candidates = await collectOldestCandidates(
@@ -264,7 +300,7 @@ export async function recoverUnclaimedOrders(
           expectedPayer: order.payerPubkey ?? undefined,
           // See the widened-window paragraph on this function.
           createdAtMs: order.createdAt.getTime(),
-          expiresAtMs: Date.now(),
+          expiresAtMs: withinRecoveryWindow ? Date.now() : order.expiresAt.getTime(),
           fetchTransaction: fetcher.transaction,
         });
 
@@ -316,12 +352,21 @@ export async function recoverUnclaimedOrders(
  * only ones a settlement can still reclaim a colour for rather than merely
  * file, so among equally-unexamined candidates those get first look.
  *
- * `RECOVERY_MAX_AGE_DAYS` keeps a genuinely dead order — the ordinary,
- * abandoned reservation nobody ever paid for — from being a candidate
- * forever: without it, a large enough backlog of those still limits how much
- * of the truly live set fits in one `MAX_ORDERS_PER_PASS`-sized pass, even
- * with the progress marker rotating through them. See that constant's own
- * comment for what this costs, not just what it buys.
+ * There is deliberately NO age bound here any more. It used to sit in this
+ * WHERE clause, where it stopped an old payment being recovered and, in the
+ * same stroke, stopped it being FILED — money in our wallet with no row in
+ * any table and nobody able to see it. `RECOVERY_MAX_AGE_DAYS` now bounds
+ * only what a pass may seat (see its own comment and the caller above); what
+ * a pass may record is bounded by nothing, because a payment nobody can see
+ * is a payment nobody can return.
+ *
+ * What that costs is the pass never running out of candidates once a war has
+ * left a tail of abandoned reservations behind it. The ordering is what
+ * keeps it survivable: `NULLS FIRST` means a freshly expired order — the
+ * only kind that can still be seated — is always examined before any order
+ * a pass has already looked at, so an old backlog delays nothing that
+ * matters, it only keeps spending one cheap signature fetch per leftover
+ * slot. `MAX_ORDERS_PER_PASS` is what bounds that spend, and it is unchanged.
  *
  * Reads through `orderById` rather than mapping `entry_orders` rows a second
  * time, so this file carries no second copy of that mapping to drift from
@@ -330,10 +375,10 @@ export async function recoverUnclaimedOrders(
 async function unclaimedOrders(limit: number): Promise<Order[]> {
   const rows = await query<{ id: string }>(
     `SELECT id FROM entry_orders
-      WHERE status = 'expired' AND expires_at > now() - ($1 || ' days')::interval
+      WHERE status = 'expired'
       ORDER BY recovery_attempted_at ASC NULLS FIRST, expires_at DESC
-      LIMIT $2`,
-    [String(RECOVERY_MAX_AGE_DAYS), limit],
+      LIMIT $1`,
+    [limit],
   );
 
   const orders: Order[] = [];

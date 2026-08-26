@@ -33,14 +33,32 @@ const TOKENS = [
   { ticker: "GIGA", name: "Gigachad", slot: 24 },
 ];
 
+/**
+ * The two numbers `wars` deliberately has no column default for.
+ *
+ * `migrations/001_initial.sql` gives `entry_price_usd` and `cooldown_seconds`
+ * no DEFAULT on purpose — "an entry price a deploy can forget to set is an
+ * entry price somebody charges by accident" — so every insert has to name
+ * them, and this seed is where the numbers a developer sees every day come
+ * from. Both below are settled decisions, not placeholders waiting for a real
+ * value: seeding a demo war with numbers nobody chose is how a placeholder
+ * ends up on a screen somebody pays against.
+ */
+
+/** The entry price. A decision: $25 per token, per war. Not a placeholder. */
+const ENTRY_PRICE_USD = 25;
+
+/** The paint cooldown. A decision: 60 seconds between pixels. Not a placeholder. */
+const COOLDOWN_SECONDS = 60;
+
 const pool = new Pool({ connectionString: url });
 const warId = randomUUID();
 
 await pool.query(
   `INSERT INTO wars (id, slug, title, status, entry_price_usd, cooldown_seconds, starts_at, ends_at)
-   VALUES ($1, 'demo', 'Demo war', 'live', 25, 5, now() - interval '1 hour', now() + interval '48 hours')
+   VALUES ($1, 'demo', 'Demo war', 'live', $2, $3, now() - interval '1 hour', now() + interval '48 hours')
    ON CONFLICT (slug) DO NOTHING`,
-  [warId],
+  [warId, ENTRY_PRICE_USD, COOLDOWN_SECONDS],
 );
 
 const { rows } = await pool.query<{ id: string }>(`SELECT id FROM wars WHERE slug = 'demo'`);
@@ -63,5 +81,7 @@ for (const token of TOKENS) {
   );
 }
 
-console.log(`Seeded war 'demo' with ${TOKENS.length} tokens. Cooldown is 5 seconds.`);
+console.log(
+  `Seeded war 'demo' with ${TOKENS.length} tokens. Entry ${ENTRY_PRICE_USD} USD, cooldown ${COOLDOWN_SECONDS} seconds.`,
+);
 await pool.end();

@@ -105,13 +105,19 @@ async function expiredOrder(overrides: {
   payerPubkey?: string | null;
   referencePubkey?: string;
   expiredMinutesAgo?: number;
+  /**
+   * Defaults to an hour ago, which is before every default expiry below. An
+   * order whose expiry is days old needs its creation moved back with it, or
+   * the fixture describes an order that expired before it existed.
+   */
+  createdMinutesAgo?: number;
 }) {
   const id = randomUUID();
   await execute(
     `INSERT INTO entry_orders
        (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
         created_at, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'expired', now() - interval '1 hour', $7)`,
+     VALUES ($1, $2, $3, $4, $5, $6, 'expired', $7, $8)`,
     [
       id,
       overrides.warId,
@@ -119,6 +125,7 @@ async function expiredOrder(overrides: {
       overrides.amountUsd ?? 25,
       overrides.payerPubkey ?? null,
       overrides.referencePubkey ?? randomUUID(),
+      new Date(Date.now() - (overrides.createdMinutesAgo ?? 60) * 60_000),
       new Date(Date.now() - (overrides.expiredMinutesAgo ?? 2) * 60_000),
     ],
   );
@@ -795,20 +802,24 @@ describe("recoverUnclaimedOrders", () => {
   );
 
   it(
-    "excludes an order from candidacy once it is older than RECOVERY_MAX_AGE_DAYS, even with a real payment waiting",
+    "files a payment against an order older than RECOVERY_MAX_AGE_DAYS, and seats nothing",
     { timeout: 20_000 },
     async () => {
-      // The age bound is enforced in the candidate query's own WHERE clause
-      // (see unclaimedOrders), so an order past it is never even examined:
-      // no fetch, no verify, no stamp, and — the cost of the bound, not just
-      // its benefit — no unmatched_payments row either. The real payment,
-      // if one exists, is simply never found again.
+      // The age bound bounds the COLOUR and nothing else. This test asserted
+      // the opposite until this task: it required that an over-age order was
+      // never examined, never stamped and never filed, which meant real money
+      // in our wallet with no row in any table and no way for anybody to see
+      // it. Past the bound the pass now verifies against the order's OWN
+      // window, so the verdict is `outside_bid_window` — filed, with the
+      // chain's own sender on the row for /admin/orphans to show, and no seat
+      // taken.
       const w = await war();
       const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
       const order = await expiredOrder({
         warId: w.id,
         warTokenId: tokenId,
         expiredMinutesAgo: 8 * 24 * 60, // 8 days — past the 7-day age bound
+        createdMinutesAgo: 8 * 24 * 60 + 40,
       });
       const signature = randomSignature();
 
@@ -818,23 +829,92 @@ describe("recoverUnclaimedOrders", () => {
           {
             [signature]: fixtureTransaction({
               amount: "25000000",
-              blockTimeMs: order.expiresAt.getTime() + 60_000,
+              payer: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+              // Ten minutes after the order's own window closed — past
+              // BLOCKTIME_SKEW_SECONDS, so genuinely outside it. The ordinary
+              // late transfer, and the whole case this bound used to lose.
+              blockTimeMs: order.expiresAt.getTime() + 10 * 60_000,
             }),
           },
         ),
       );
 
       expect(result.recovered).toEqual([]);
-      expect(result.filed).toEqual([]);
+      expect(result.filed).toEqual([order.id]);
 
       const [row] = await query<{ recovery_attempted_at: Date | null; status: string }>(
         `SELECT recovery_attempted_at, status FROM entry_orders WHERE id = $1`,
         [order.id],
       );
+      // Examined, stamped, and still expired: the order did not take a seat.
       expect(row.status).toBe("expired");
-      expect(row.recovery_attempted_at).toBeNull();
-      const unmatched = await query(`SELECT 1 FROM unmatched_payments WHERE order_id = $1`, [order.id]);
-      expect(unmatched).toHaveLength(0);
+      expect(row.recovery_attempted_at).toBeTruthy();
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "released" },
+      ]);
+      expect(await query(`SELECT id FROM payments WHERE order_id = $1`, [order.id])).toHaveLength(0);
+
+      // The record a human can act on, which is the point of the change.
+      expect(
+        await query<{ reason: string; received_base_units: string; sender_fee_payer: string | null }>(
+          `SELECT reason, received_base_units, sender_fee_payer, status
+             FROM unmatched_payments WHERE order_id = $1`,
+          [order.id],
+        ),
+      ).toEqual([
+        {
+          reason: "outside_bid_window",
+          received_base_units: "25000000",
+          sender_fee_payer: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+          status: "open",
+        },
+      ]);
+    },
+  );
+
+  it(
+    "files, and still seats nothing, when an over-age order's payment landed inside its own window",
+    { timeout: 20_000 },
+    async () => {
+      // The other half of the bound. A transfer that DID land inside the
+      // order's window verifies, so it reaches settlePayment — which is more
+      // than seven days past LATE_CONFIRM_GRACE_MINUTES and can only file.
+      // Both paths out of an over-age order end in a row a human can see, and
+      // neither can flip a colour.
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 6, status: "released" });
+      const order = await expiredOrder({
+        warId: w.id,
+        warTokenId: tokenId,
+        expiredMinutesAgo: 9 * 24 * 60,
+        createdMinutesAgo: 9 * 24 * 60 + 40,
+      });
+      const signature = randomSignature();
+
+      const result = await recoverUnclaimedOrders(
+        mapFetcher(
+          { [order.referencePubkey]: [signature] },
+          {
+            [signature]: fixtureTransaction({
+              amount: "25000000",
+              blockTimeMs: order.expiresAt.getTime() - 10 * 60_000,
+            }),
+          },
+        ),
+      );
+
+      expect(result.recovered).toEqual([]);
+      expect(result.filed).toEqual([order.id]);
+      expect(await query(`SELECT status FROM war_tokens WHERE id = $1`, [tokenId])).toEqual([
+        { status: "released" },
+      ]);
+      expect(await query(`SELECT id FROM payments WHERE order_id = $1`, [order.id])).toHaveLength(0);
+      expect(
+        await query<{ reason: string }>(
+          `SELECT reason FROM unmatched_payments WHERE order_id = $1`,
+          [order.id],
+        ),
+      ).toEqual([{ reason: "late_confirm_past_grace" }]);
     },
   );
 

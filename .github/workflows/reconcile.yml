@@ -22,12 +22,15 @@ on:
     # into a support ticket. Five minutes means a pass, even one arriving a
     # few minutes late, usually still lands inside that window.
     #
-    # The cost on the other side is smaller than the frequency suggests. A
-    # pass with no expired unpaid orders makes zero RPC calls: it is one
-    # indexed SELECT that comes back empty and returns. RPC spend is
-    # proportional to how many payments actually need recovering, not to how
-    # often this runs, so a short interval does not by itself take quota from
-    # the live checkouts sharing that endpoint. What it does spend is Actions
+    # The cost on the other side is bounded, though no longer zero when the
+    # site is quiet. A pass examines at most MAX_ORDERS_PER_PASS (20) expired
+    # orders and spends one cheap getSignaturesForAddress on each; the
+    # expensive getTransaction calls happen only for orders something actually
+    # named on chain. Since an expired order is now a recovery candidate
+    # forever — the age bound stops a payment taking a colour, not the pass
+    # from finding it (see RECOVERY_MAX_AGE_DAYS in src/lib/payments/recover.ts)
+    # — a deployment with a tail of abandoned reservations keeps paying that
+    # small fixed cost per pass. What it also spends is Actions
     # minutes — 288 runs a day, billable per started minute on a private
     # repository — which is the real argument for a longer interval if that
     # bill ever matters more than the ten-minute window does.
@@ -95,11 +98,24 @@ jobs:
             *)   echo "::error::${status} from ${RECONCILE_URL}"; exit 1 ;;
           esac
 
+          # A 2xx is not enough, and this is the owner's explicit instruction.
+          # A deployment can answer 200 with a cached page, an HTML error, a
+          # framework's own body, or a JSON object that simply has no counts in
+          # it — none of which means a reconcile pass ran, and every one of
+          # which passed silently while `// 0` quietly turned a missing count
+          # into a plausible-looking zero. The body must PARSE and must carry
+          # BOTH counts as numbers before this step is allowed to succeed.
+          if ! jq -e '(.recovered | type) == "number" and (.filed | type) == "number"' \
+                  response.json > /dev/null 2>&1; then
+            echo "::error::${status}, but the body is not the counts JSON this endpoint returns. Nothing here proves a reconcile pass ran — check the deployment above."
+            exit 1
+          fi
+
           # Surface what it did. The response carries counts only — no order
           # ids — because this log is retained for ninety days and is public on
           # a public repository.
-          recovered=$(jq -r '.recovered // 0' response.json)
-          filed=$(jq -r '.filed // 0' response.json)
+          recovered=$(jq -r '.recovered' response.json)
+          filed=$(jq -r '.filed' response.json)
 
           {
             echo "### Reconcile"

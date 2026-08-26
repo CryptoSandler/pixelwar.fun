@@ -26,10 +26,11 @@ export const dynamic = "force-dynamic";
  * to reach an endpoint that would then read the same table. The JSON endpoint
  * exists for the operator who has no browser.
  *
- * WHO CALLS `POST /api/admin/orphans/[id]/assign`: the form on each open row
- * below. A plain HTML form — no JavaScript, like the sign-in form, and for the
- * same reason. The form only ever carries two ids; every decision about
- * whether the assignment is allowed is made inside the settlement
+ * WHO CALLS `POST /api/admin/orphans/[id]/assign` AND
+ * `POST /api/admin/orphans/[id]/discard`: the two forms on each open row
+ * below. Plain HTML forms — no JavaScript, like the sign-in form, and for the
+ * same reason. Neither form carries anything but ids and, for a discard, the
+ * note; every decision about whether the action is allowed is made inside the
  * transaction, where it cannot be raced.
  *
  * **Assigning is the only act in this project that moves money on a human's
@@ -37,6 +38,13 @@ export const dynamic = "force-dynamic";
  * secondary key, not the brass one — because the accent means "this is the
  * thing to do" (DESIGN.md I5) and moving somebody's money is not something
  * this page should be urging.
+ *
+ * Discarding moves nothing: it records that a human dealt with the payment —
+ * refunded it, usually — and takes the row out of the queue. It is the more
+ * common outcome of the two and is deliberately no louder, because "get this
+ * off my list" is exactly the impulse that should not be encouraged by the
+ * loudest control on the screen either. The note it requires is what makes a
+ * closed row answerable months later.
  */
 
 /**
@@ -61,14 +69,18 @@ const REASONS: Record<string, string> = {
 };
 
 /**
- * What the assign route sends back in `?error=`, said plainly.
+ * What the assign and discard routes send back in `?error=`, said plainly.
  *
- * These mirror `AssignFailureReason` in `settle.ts`. Kept in the page rather
- * than passed through the redirect as prose, because a message in a URL is a
- * message anybody can put there.
+ * These mirror `AssignFailureReason` and `DiscardFailureReason` in
+ * `settle.ts`. One map for both, because the two share `not_found` and
+ * `already_resolved` and they mean the same thing on either path. Kept in the
+ * page rather than passed through the redirect as prose, because a message in
+ * a URL is a message anybody can put there.
  */
-const ASSIGN_ERRORS: Record<string, string> = {
+const ACTION_ERRORS: Record<string, string> = {
   no_order: "Pick an order before assigning.",
+  note_required: "Say what happened to the money before discarding it.",
+  note_too_long: "That note is too long. Keep it to a few lines.",
   not_found: "That filed payment no longer exists.",
   already_resolved: "That payment had already been resolved. Nothing was changed.",
   order_not_found: "That order does not exist.",
@@ -108,6 +120,7 @@ export default async function OrphansPage({
 
   const params = await searchParams;
   const applied = params.applied === "1";
+  const discarded = params.discarded === "1";
   const errorCode = typeof params.error === "string" ? params.error : null;
 
   const [orphans, orders] = await Promise.all([listOrphans(), assignableOrders()]);
@@ -125,13 +138,24 @@ export default async function OrphansPage({
           would be settled — same colour rules, same one transaction. Check the fee payer on chain
           against whoever is asking before you do it.
         </p>
+        <p className="text-[13px]">
+          Discarding settles nothing and moves nothing: it records that you dealt with the payment,
+          usually by refunding it, and takes the row out of the queue. The note is required, because
+          it is the only thing that will answer &ldquo;what happened to this money&rdquo; later.
+        </p>
 
         {applied ? (
           <p className="text-[13px]">The payment was applied. Its order is paid and its colour is live.</p>
         ) : null}
+        {discarded ? (
+          <p className="text-[13px]">
+            The payment was marked handled. Nothing was settled and no colour changed — the row is
+            out of the queue with your note on it.
+          </p>
+        ) : null}
         {errorCode ? (
           <p className="text-[13px]">
-            {ASSIGN_ERRORS[errorCode] ?? "That assignment was refused. Nothing was changed."}
+            {ACTION_ERRORS[errorCode] ?? "That action was refused. Nothing was changed."}
           </p>
         ) : null}
       </section>
@@ -257,7 +281,12 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
         </Field>
       ) : null}
 
-      {open ? <AssignForm orphanId={orphan.id} orders={orders} /> : null}
+      {open ? (
+        <>
+          <AssignForm orphanId={orphan.id} orders={orders} />
+          <DiscardForm orphanId={orphan.id} />
+        </>
+      ) : null}
     </article>
   );
 }
@@ -310,6 +339,45 @@ function AssignForm({ orphanId, orders }: { orphanId: string; orders: Assignable
       </label>
       <button type="submit" className="btn-secondary w-fit px-4 py-2">
         Assign
+      </button>
+    </form>
+  );
+}
+
+/**
+ * Mark this payment handled, and say what happened to it.
+ *
+ * The note is `required` on the field and required again in
+ * `discardFiledPayment` — the attribute is the courtesy that stops a wasted
+ * round trip, the server-side check is the one that holds, because a form
+ * attribute is a suggestion to whatever is submitting the form.
+ *
+ * Also `.btn-secondary`. Neither control on this card is brass: the accent
+ * means "this is the action to take" (DESIGN.md I5), and a screen that urges
+ * an operator to clear rows off a money queue is urging the wrong thing.
+ */
+function DiscardForm({ orphanId }: { orphanId: string }) {
+  return (
+    <form
+      action={`/api/admin/orphans/${orphanId}/discard`}
+      method="post"
+      className="flex flex-col gap-3"
+    >
+      <label className="flex min-w-0 flex-col gap-1">
+        <span className="section-label muted">Discard with a note</span>
+        {/*
+          A hint line rather than a placeholder: a placeholder disappears the
+          moment it is needed, and several browsers render one by quieting the
+          field's own ink, which is the contrast rule DESIGN.md §9 exists to
+          stop being decided by somebody else's stylesheet.
+        */}
+        <span className="muted text-[13px]">
+          What happened to the money — the refund signature, or why nothing is owed.
+        </span>
+        <textarea name="note" required rows={2} maxLength={500} className="field w-full px-3 py-2" />
+      </label>
+      <button type="submit" className="btn-secondary w-fit px-4 py-2">
+        Discard
       </button>
     </form>
   );

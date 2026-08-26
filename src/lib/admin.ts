@@ -122,6 +122,17 @@ export type AdminCaller = { ok: true; ipHash: string } | { ok: false; reason: st
  * `http.ts`), and the reason it gives names the environment variable that
  * switches address trust off, so it goes to the server log and never to the
  * caller.
+ *
+ * The exception, named here because the paragraph above otherwise reads as a
+ * guarantee it is not: with `ALLOW_UNTRUSTED_CLIENT_IP=true`, `clientIp` does
+ * not refuse — it returns the literal `untrusted-local` for every caller
+ * (`paint/client-ip.ts`), so this function succeeds and hands back the one
+ * hash they all share. That is exactly the shared bucket described above,
+ * reinstated: under that flag anybody can spend the operator's five guesses,
+ * and the lockout becomes a denial of service rather than a defence against
+ * one. The flag is development-only and `.env.example` says it must stay
+ * unset in production; this note is here so nobody reads "fails closed" as
+ * "cannot share a bucket".
  */
 export function adminCaller(request: Request): AdminCaller {
   const identity = clientIp(request);
@@ -186,6 +197,54 @@ export async function recordLoginAttempt(
     `INSERT INTO admin_login_attempts (id, ip_hash, token_label, succeeded, attempted_at)
      VALUES ($1,$2,$3,$4,$5)`,
     [randomUUID(), ipHash, label, succeeded, new Date()],
+  );
+  await pruneAdminRecords();
+}
+
+/**
+ * How long a dead session row or a login attempt is kept.
+ *
+ * Far wider than anything that reads either table needs — the lockout counts
+ * back `ADMIN_LOGIN_LIMITS.windowMinutes` (15) and a session lives
+ * `ADMIN_SESSION_HOURS` (12) — because the retention is not for the code, it
+ * is for the operator. "When did this token last work", "was anybody trying
+ * this while I was away": both are asked after the fact, and a sweep tight
+ * enough to serve only the queries above would answer neither. A month of
+ * history on two tables that take a row per sign-in attempt is nothing to
+ * store, and it is bounded, which is the whole point.
+ */
+const ADMIN_SWEEP_DAYS = 30;
+
+/**
+ * Sweeps both admin tables, the way `pruneVerificationAttempts` sweeps
+ * `verification_attempts` (`settle.ts`): from the write path that produces the
+ * rows, not from a job of its own. Neither table has any sweep today, so both
+ * grow forever — slowly, which is exactly why nothing would ever notice.
+ *
+ * WHO CALLS THIS: `recordLoginAttempt`, above, and that is enough to cover
+ * both tables. Every `admin_sessions` row is written by `createAdminSession`,
+ * which only ever runs immediately after a successful attempt has been
+ * recorded (`POST /api/admin/session`), and the header path in
+ * `authenticateAdmin` records an attempt too. So the sweep runs at least once
+ * per row either table gains. It deliberately does NOT hang off
+ * `resolveAdminSession`: that is the hot path every admin request takes, and a
+ * DELETE on it would spend a write on every page load to reap a handful of
+ * rows a month.
+ *
+ * The `admin_sessions_live (expires_at, revoked_at)` index from migration 005
+ * is already declared to be "for the sweep that reaps dead rows rather than
+ * for the hot path" — this is that sweep. Expiry rather than revocation is the
+ * predicate: a revoked session still expires on schedule, so one bound covers
+ * both, and a row cannot authenticate anything once `expires_at` has passed.
+ */
+async function pruneAdminRecords(): Promise<void> {
+  await execute(
+    `DELETE FROM admin_sessions WHERE expires_at <= now() - ($1 || ' days')::interval`,
+    [String(ADMIN_SWEEP_DAYS)],
+  );
+  await execute(
+    `DELETE FROM admin_login_attempts WHERE attempted_at <= now() - ($1 || ' days')::interval`,
+    [String(ADMIN_SWEEP_DAYS)],
   );
 }
 
