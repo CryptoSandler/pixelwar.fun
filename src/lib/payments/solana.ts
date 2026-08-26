@@ -51,6 +51,21 @@ export type VerifyResult =
        * into paying an attacker's rank with a stranger's money.
        */
       sender?: SenderInfo;
+      /**
+       * Only ever set on `wrong_destination`, and the difference between a
+       * verdict a caller may spend a signature on and one it may not.
+       *
+       * `wrong_destination` is reached by our wallet appearing in neither
+       * balance array — an absence, not an observation. A transaction that
+       * genuinely paid somebody else produces that absence, and so does a
+       * response that is merely thin: a 200 carrying a result whose
+       * `preTokenBalances`/`postTokenBalances` are empty (or whose entries
+       * carry no `owner`, as very old transactions do) parses perfectly and
+       * says nothing at all about where the money went. `true` means the
+       * response positively reported attributed USDC movement and our wallet
+       * was not in it; anything else means we could not tell.
+       */
+      provenNotOurs?: boolean;
     };
 
 export type SenderInfo = {
@@ -103,6 +118,33 @@ function sumFor(balances: TokenBalance[] | undefined, wallet: string, mint: stri
 
 function touchedWallet(balances: TokenBalance[] | undefined, wallet: string): boolean {
   return (balances ?? []).some((balance) => balance.owner === wallet);
+}
+
+/**
+ * Positive evidence that this response actually reported where the USDC in
+ * this transaction went: at least one USDC token balance entry naming an
+ * owner.
+ *
+ * The signal is deliberately about what the response CONTAINS, not about
+ * what it lacks. `preTokenBalances`/`postTokenBalances` are written into a
+ * transaction's meta as one set, covering every token account the
+ * transaction touched — a node cannot report our counterparty's USDC account
+ * and silently drop ours from the same array. So a single USDC entry with an
+ * `owner` proves the arrays were populated and attributed, which is exactly
+ * the thing an incomplete response cannot manufacture: a truncating,
+ * partially-indexing or defaulting node returns empty arrays (or entries with
+ * no `owner`, the shape very old transactions have), and empty is the one
+ * thing this function refuses to read as an answer.
+ */
+function reportsAttributedUsdc(
+  pre: TokenBalance[] | undefined,
+  post: TokenBalance[] | undefined,
+): boolean {
+  const balances = [...(pre ?? []), ...(post ?? [])];
+  return balances.some(
+    (balance) =>
+      balance.mint === USDC_MINT && typeof balance.owner === "string" && balance.owner !== "",
+  );
 }
 
 /**
@@ -229,6 +271,18 @@ export async function verifyPayment(params: {
     };
   }
 
+  const { preTokenBalances, postTokenBalances } = transaction.meta;
+
+  // Computed before the window check rather than after it, so an
+  // out-of-window transfer that nonetheless put real USDC in our wallet
+  // arrives at the caller carrying the amount and the sender. Without them
+  // the caller has nothing to file, and a payment made from an exchange
+  // forty minutes late — real money, in our wallet, correctly addressed —
+  // is refused with no record anywhere that it arrived.
+  const received =
+    sumFor(postTokenBalances, params.wallet, USDC_MINT) -
+    sumFor(preTokenBalances, params.wallet, USDC_MINT);
+
   const skewMs = BLOCKTIME_SKEW_SECONDS * 1000;
   const blockTimeMs = blockTime * 1000;
   if (blockTimeMs < params.createdAtMs - skewMs || blockTimeMs > params.expiresAtMs + skewMs) {
@@ -237,14 +291,15 @@ export async function verifyPayment(params: {
       reason: "outside_bid_window",
       message:
         "That transaction was not made during this order. Pay for an order after starting it. A transfer from before the order existed cannot be used to claim it.",
+      // Only when money genuinely reached us. A transfer that never touched
+      // our wallet has nothing to file and no sender worth recording; saying
+      // otherwise would put rows in the operator's queue for money nobody
+      // ever sent us.
+      ...(received > 0n
+        ? { receivedBaseUnits: received, sender: senderOf(transaction, params.wallet) }
+        : {}),
     };
   }
-
-  const { preTokenBalances, postTokenBalances } = transaction.meta;
-
-  const received =
-    sumFor(postTokenBalances, params.wallet, USDC_MINT) -
-    sumFor(preTokenBalances, params.wallet, USDC_MINT);
 
   if (received <= 0n) {
     // Distinguish "paid the wrong token" from "paid someone else" so the person
@@ -253,18 +308,30 @@ export async function verifyPayment(params: {
       touchedWallet(postTokenBalances, params.wallet) ||
       touchedWallet(preTokenBalances, params.wallet);
 
-    return walletGotSomething
-      ? {
-          ok: false,
-          reason: "wrong_token",
-          message:
-            "That transaction moved a different token. Orders are paid in USDC on Solana. Check you sent the real USDC mint.",
-        }
-      : {
-          ok: false,
-          reason: "wrong_destination",
-          message: "That transaction did not send USDC to our payment wallet.",
-        };
+    if (walletGotSomething) {
+      return {
+        ok: false,
+        reason: "wrong_token",
+        message:
+          "That transaction moved a different token. Orders are paid in USDC on Solana. Check you sent the real USDC mint.",
+      };
+    }
+
+    // Our wallet is in neither array. That is the shape of a transfer to
+    // somebody else AND the shape of a response that did not report the
+    // transaction's token movement at all, so the verdict says which of the
+    // two we are actually looking at — see `provenNotOurs`. The caller may
+    // permanently spend a signature on the first and must never spend one on
+    // the second.
+    const provenNotOurs = reportsAttributedUsdc(preTokenBalances, postTokenBalances);
+    return {
+      ok: false,
+      reason: "wrong_destination",
+      message: provenNotOurs
+        ? "That transaction did not send USDC to our payment wallet."
+        : "That transaction could not be read in full — the Solana node reported no USDC balances for it, so we cannot tell where the money went. Nothing has been recorded against this order. Wait a moment and try again.",
+      provenNotOurs,
+    };
   }
 
   /**

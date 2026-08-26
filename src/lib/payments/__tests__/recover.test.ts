@@ -467,10 +467,13 @@ describe("recoverUnclaimedOrders", () => {
     { timeout: 20_000 },
     async () => {
       // A payment cannot predate the order whose reference it names, so
-      // recovery does not widen the window backward — only `outside_bid_window`
-      // is the possible verdict here, and that reason is not in
-      // FILED_REASONS, so this candidate is silently skipped rather than
-      // filed or settled.
+      // recovery does not widen the window backward: `outside_bid_window` is
+      // the only possible verdict here and this candidate can never settle
+      // this order. It is still put on the record, because the transfer did
+      // credit our wallet with real USDC and money in our wallet with no
+      // order to pay for is exactly what `unmatched_payments` is for — the
+      // order itself stays expired, its colour stays released, and the
+      // signature stays spendable for whatever it was really meant for.
       const w = await war();
       const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
       const order = await expiredOrder({ warId: w.id, warTokenId: tokenId });
@@ -489,12 +492,25 @@ describe("recoverUnclaimedOrders", () => {
       );
 
       expect(result.recovered).toEqual([]);
-      expect(result.filed).toEqual([]);
+      expect(result.filed).toEqual([order.id]);
 
       const refreshed = await orderById(order.id);
       expect(refreshed?.status).toBe("expired");
-      const noRow = await query(`SELECT 1 FROM unmatched_payments WHERE order_id = $1`, [order.id]);
-      expect(noRow).toHaveLength(0);
+      const [tokenRow] = await query<{ status: string }>(`SELECT status FROM war_tokens WHERE id = $1`, [
+        tokenId,
+      ]);
+      expect(tokenRow.status).toBe("released");
+
+      const [unmatchedRow] = await query<{ reason: string; received_base_units: string }>(
+        `SELECT reason, received_base_units FROM unmatched_payments WHERE order_id = $1`,
+        [order.id],
+      );
+      expect(unmatchedRow).toMatchObject({
+        reason: "outside_bid_window",
+        received_base_units: "25000000",
+      });
+      const claimed = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+      expect(claimed).toHaveLength(0);
     },
   );
 

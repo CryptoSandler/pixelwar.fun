@@ -39,7 +39,14 @@ export type SettleResult =
       message: string;
       /** Set only for "unmatched", and only when the war is still open. */
       freeColours?: number[];
-      /** Set only for "unmatched" — where a payer with no seat is pointed. */
+      /**
+       * Where a payer whose money is on the record but not applied to a seat
+       * is pointed. Set on "unmatched", and on the verification verdicts
+       * that file a real transfer to `unmatched_payments` — `wrong_payer`,
+       * `insufficient_amount`, `outside_bid_window`. `null` means this
+       * deployment has configured no contact; absent means nothing was
+       * filed, so there is nothing to contact anyone about.
+       */
       supportContact?: string | null;
     };
 
@@ -80,9 +87,10 @@ type Runner = (text: string, params: unknown[]) => Promise<unknown>;
  * made. On the paths where verification succeeded but there was simply no
  * seat left (late confirmations, a second payment on an already-paid order),
  * `verifyPayment` reports no sender at all — see the module doc on
- * `handleVerificationFailure` for why only `wrong_payer` and
- * `insufficient_amount` ever have one — so those paths pass `null` and an
- * operator working the queue looks the signature up on-chain directly.
+ * `handleVerificationFailure` for why only `wrong_payer`,
+ * `insufficient_amount` and `outside_bid_window` ever have one — so those
+ * paths pass `null`, and an operator working the queue looks the signature
+ * up on-chain directly.
  *
  * Idempotent by design: `unmatched_payments.signature` is UNIQUE, and a
  * caller can legitimately submit the same losing signature more than once
@@ -314,8 +322,22 @@ export async function settlePayment(params: {
  * - `failed_tx` — the transaction failed on-chain. Nothing transferred, ever.
  * - `wrong_token` — real balance moved, but not USDC. USDC is the only asset
  *   this system accepts from any order, so this can never become a payment.
- * - `wrong_destination` — real USDC moved, but not to our (single, fixed)
- *   wallet. Same reasoning: no order in this deployment could ever accept it.
+ * - `wrong_destination`, and ONLY when `verified.provenNotOurs` is true —
+ *   real USDC moved, and the response said so, but not to our (single,
+ *   fixed) wallet. Same reasoning: no order in this deployment could ever
+ *   accept it.
+ *
+ * That third condition is not decoration. `failed_tx` and `wrong_token` rest
+ * on positive evidence — a recorded error, a recorded balance movement —
+ * while `wrong_destination` is a fall-through reached by our wallet being
+ * ABSENT from both balance arrays, and absence has a second cause: an RPC
+ * response that parses, returns a transaction, and carries no token balances
+ * at all. `defaultFetchTransaction` retries only on a thrown error, so one
+ * such 200 is accepted as truth — and claiming on it would burn a real
+ * payment's signature globally and forever, after which recovery skips it as
+ * `signature_reused` without filing anything. `provenNotOurs` is
+ * `verifyPayment`'s answer to "did the response actually establish this";
+ * when it did not, the signature is left alone. See `VerifyResult`.
  *
  * Every other failure describes something that is, or might be, still true
  * of a DIFFERENT order: `not_confirmed` / `rpc_unavailable` / `no_block_time`
@@ -324,15 +346,18 @@ export async function settlePayment(params: {
  * may be exactly right for some other order's price, wallet or window. None
  * of those get anywhere near `consumed_signatures` — the signature is left
  * spendable, and `verification_attempts` (already recorded by the route,
- * unconditionally, before `verifyPayment` even runs) carries the audit trail
- * and keeps the rate limiter working without needing a permanent claim.
+ * unconditionally, before `verifyPayment` even runs) keeps the rate limiter
+ * working without needing a permanent claim.
  *
- * `wrong_payer` and `insufficient_amount` get one more thing the others
- * don't: both mean real USDC reached our wallet, and `verifyPayment` reports
- * exactly who sent it (`VerifyResult.sender`, chain-derived, not asserted by
- * whoever is calling). That money is filed to `unmatched_payments` here —
- * this is the one place that data exists, and dropping it would mean the one
- * verdict a payer can least fix themselves is also the one nobody records.
+ * `wrong_payer`, `insufficient_amount` and `outside_bid_window` get one more
+ * thing the others don't: all three can mean real USDC reached our wallet,
+ * and `verifyPayment` reports both how much and who sent it
+ * (`VerifyResult.receivedBaseUnits` / `.sender`, chain-derived, not asserted
+ * by whoever is calling). That money is filed to `unmatched_payments` here —
+ * this is the one place that data exists, and dropping it would mean the
+ * verdicts a payer can least fix themselves are also the ones nobody
+ * records. Filing and spending are separate acts: the row goes on the
+ * record, the signature stays spendable.
  */
 async function handleVerificationFailure(params: {
   order: Order;
@@ -345,7 +370,18 @@ async function handleVerificationFailure(params: {
   const neverSpendableAnywhere =
     verified.reason === "failed_tx" ||
     verified.reason === "wrong_token" ||
-    verified.reason === "wrong_destination";
+    // Only when the response positively established it — see
+    // `VerifyResult.provenNotOurs`. `failed_tx` and `wrong_token` rest on
+    // something the RPC reported; a bare `wrong_destination` rests on our
+    // wallet being absent from the balance arrays, and a thin-but-parseable
+    // response produces exactly that absence for a payment that really did
+    // reach us. Spending the signature there burns a real payment globally
+    // and forever on one bad response, and `consumed_signatures` has no
+    // undo: a later recovery pass skips the signature as `signature_reused`
+    // without filing anything, so the money ends up in our wallet with no
+    // row in any table. A verdict we cannot substantiate is left unclaimed
+    // instead — the payer can retry, and recovery can still find it.
+    (verified.reason === "wrong_destination" && verified.provenNotOurs === true);
 
   if (neverSpendableAnywhere) {
     try {
@@ -367,7 +403,31 @@ async function handleVerificationFailure(params: {
     return { ok: false, reason: verified.reason, message: verified.message };
   }
 
-  if (verified.reason === "wrong_payer" || verified.reason === "insufficient_amount") {
+  // Money that reached our wallet is filed wherever the verdict says it
+  // arrived, whether or not it can be applied. `receivedBaseUnits` is only
+  // ever set by `verifyPayment` when our own wallet's USDC balance genuinely
+  // went up in this transaction, so this is a fact about the chain rather
+  // than a claim by whoever posted the signature.
+  //
+  // `outside_bid_window` is here for the case no race is needed to reach:
+  // someone pays from an exchange or a hardware wallet and pastes the
+  // signature forty minutes later. The transfer is real, confirmed,
+  // correctly addressed and for the right amount — it is simply too late for
+  // this order. Filing is the only reason support ever learns it happened;
+  // the reference-key recovery pass cannot help, because a payer who paid
+  // from an exchange never attached a reference for it to search on.
+  //
+  // Filing is NOT spending: the signature stays unclaimed on every branch
+  // below, because all three of these verdicts describe a transfer that may
+  // be exactly right for some other order's wallet, price or window, and
+  // burning it would destroy that possibility.
+  const reachedOurWallet = (verified.receivedBaseUnits ?? 0n) > 0n;
+  const fileable =
+    verified.reason === "wrong_payer" ||
+    verified.reason === "insufficient_amount" ||
+    verified.reason === "outside_bid_window";
+
+  if (fileable && reachedOurWallet) {
     await fileUnmatched(execute, {
       signature,
       orderId: order.id,
@@ -376,10 +436,23 @@ async function handleVerificationFailure(params: {
       reason: verified.reason,
       sender: verified.sender ?? null,
     });
+
+    // The verdict's own message explains what was wrong with the payment;
+    // on its own it reads as "your money went nowhere", which is untrue
+    // once the row exists. Telling the payer it is recorded, and who to
+    // reach, is the difference between a refusal and a lost payment.
+    return {
+      ok: false,
+      reason: verified.reason,
+      message: `${verified.message} Your payment has been ${filedClause()}`,
+      supportContact: supportContact(),
+    };
   }
 
-  // not_confirmed, rpc_unavailable, no_block_time, outside_bid_window,
-  // invalid_signature, not_found: left entirely unclaimed. The payer (or,
+  // not_confirmed, rpc_unavailable, no_block_time, invalid_signature,
+  // not_found, an unsubstantiated wrong_destination, and any of the three
+  // above that never actually credited our wallet: left entirely unclaimed
+  // and unfiled. There is nothing on record to file, and the payer (or,
   // for outside_bid_window/wrong_payer/insufficient_amount, whoever the
   // transfer actually belongs to) must be able to try the same signature
   // again, here or against a different order.
@@ -393,10 +466,13 @@ async function handleVerificationFailure(params: {
  * `active` — never by inserting a new row, so the war's capacity and this
  * colour's exclusivity are exactly the same checks a fresh order would face.
  *
- * The colour-uniqueness attempt runs inside a SAVEPOINT. A unique violation
- * aborts whatever Postgres transaction it runs in unless one was taken first
- * — without it, the unmatched_payments insert that must follow a lost race
- * would itself fail with "current transaction is aborted".
+ * The reclaim attempt runs inside a SAVEPOINT, and both of the unique
+ * indexes it can collide with are tolerated there. A unique violation aborts
+ * whatever Postgres transaction it runs in unless one was taken first —
+ * without it, the unmatched_payments insert that must follow a lost race
+ * would itself fail with "current transaction is aborted", and a violation
+ * rethrown past this function takes the whole settlement transaction, and
+ * that same row, down with it.
  */
 async function settleLateConfirmation(
   client: PoolClient,
@@ -468,6 +544,16 @@ async function settleLateConfirmation(
 
   await client.query("SAVEPOINT reclaim_colour");
   let reclaimed = false;
+  // Which live claim beat this payment to the seat, when one did. Both
+  // partial unique indexes are re-entered by this single UPDATE, because
+  // both are `WHERE status <> 'released'` and this row is moving out of
+  // 'released': `war_tokens_colour_live` (war + colour) and
+  // `war_tokens_contract_live` (war + token). Either can fire, and neither
+  // is exceptional — a released reservation's colour being retaken and its
+  // TOKEN re-entering at a different colour are the same ordinary event seen
+  // from two sides. An unrecognised violation is still rethrown: this
+  // tolerates the two races it can name, not every failure.
+  let blockedBy: "colour_taken" | "contract_taken" | null = null;
   try {
     const flip = await client.query(
       `UPDATE war_tokens
@@ -478,8 +564,20 @@ async function settleLateConfirmation(
     reclaimed = (flip.rowCount ?? 0) > 0;
     await client.query("RELEASE SAVEPOINT reclaim_colour");
   } catch (error) {
+    // The SAVEPOINT is what makes this survivable at all, and it is the
+    // whole fix: rethrowing here would abort the enclosing transaction, and
+    // `transaction()` would roll back the `unmatched_payments` row that the
+    // path below exists to guarantee along with it. A record written inside
+    // a transaction that then rolls back is not a record. Rolling back to
+    // the savepoint instead leaves the transaction alive and writable, so
+    // the payment is filed and COMMITTED on both losing races.
     await client.query("ROLLBACK TO SAVEPOINT reclaim_colour");
-    if (!isUniqueViolation(error) || violatedConstraint(error) !== "war_tokens_colour_live") {
+    const constraint = isUniqueViolation(error) ? violatedConstraint(error) : "";
+    if (constraint === "war_tokens_colour_live") {
+      blockedBy = "colour_taken";
+    } else if (constraint === "war_tokens_contract_live") {
+      blockedBy = "contract_taken";
+    } else {
       throw error;
     }
     reclaimed = false;
@@ -491,7 +589,9 @@ async function settleLateConfirmation(
       signature,
       amountBaseUnits,
       expectedBaseUnits,
-      reason: "colour_taken",
+      // No violation at all means the UPDATE simply matched nothing: the row
+      // is no longer 'released', so something else already has this seat.
+      reason: blockedBy ?? "colour_taken",
       warStillOpen: true,
     });
   }
@@ -535,6 +635,8 @@ async function freeColoursOnClient(client: PoolClient, warId: string): Promise<n
 
 const UNMATCHED_MESSAGES: Record<string, string> = {
   colour_taken: "Someone else claimed this colour before your payment arrived.",
+  contract_taken:
+    "This token already re-entered this war under a different colour before your payment arrived.",
   war_full: "This war's seats filled before your payment arrived.",
   war_closed: "This war is no longer open for entry.",
   late_confirm_past_grace:

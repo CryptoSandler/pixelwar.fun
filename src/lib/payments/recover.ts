@@ -156,25 +156,34 @@ const MAX_SIGNATURES_PER_REFERENCE = 5;
 const RECOVERY_MAX_AGE_DAYS = 7;
 
 /**
- * `settlePayment` failure reasons that mean a real payment was written to
- * `unmatched_payments` — see `fileUnmatched`'s call sites in settle.ts. Not
- * every failure reason gets here: `signature_reused`, the "never spendable
- * anywhere" verdicts (`failed_tx`/`wrong_token`/`wrong_destination`) and the
- * retryable ones (`not_confirmed`/`rpc_unavailable`/`no_block_time`/
- * `invalid_signature`) all leave nothing behind, by design — see
- * `handleVerificationFailure`'s own doc comment in settle.ts.
+ * `settlePayment` failure reasons that CAN mean a real payment was written
+ * to `unmatched_payments` — see `fileUnmatched`'s call sites in settle.ts.
+ * Not every failure reason gets here: `signature_reused`, the "never
+ * spendable anywhere" verdicts (`failed_tx`/`wrong_token`/a substantiated
+ * `wrong_destination`) and the retryable ones (`not_confirmed`/
+ * `rpc_unavailable`/`no_block_time`/`invalid_signature`) all leave nothing
+ * behind, by design — see `handleVerificationFailure`'s own doc comment in
+ * settle.ts.
  *
- * Critically, `wrong_payer` and `insufficient_amount` also leave the
- * signature itself unclaimed (`settle.ts`'s `handleVerificationFailure`
- * never reaches `consumed_signatures` for either) — a junk candidate that
- * lands on one of these verdicts today will land on the exact same verdict
- * again tomorrow. A reason being in this set means "record it", never
- * "stop looking" — see the loop below.
+ * "Can", not "does", for the three verification verdicts: `wrong_payer`,
+ * `insufficient_amount` and `outside_bid_window` file only when the
+ * transaction genuinely credited our wallet, which is the only case there is
+ * anything to file. Over-reporting an order here costs a name on a list an
+ * operator reads; under-reporting one loses the lead entirely, so this set
+ * is deliberately the wider of the two.
+ *
+ * Critically, all three also leave the signature itself unclaimed
+ * (`settle.ts`'s `handleVerificationFailure` never reaches
+ * `consumed_signatures` for any of them) — a junk candidate that lands on
+ * one of these verdicts today will land on the exact same verdict again
+ * tomorrow. A reason being in this set means "record it", never "stop
+ * looking" — see the loop below.
  */
 const FILED_REASONS = new Set<SettleFailureReason>([
   "unmatched",
   "wrong_payer",
   "insufficient_amount",
+  "outside_bid_window",
   "already_settled",
 ]);
 
@@ -189,9 +198,9 @@ const FILED_REASONS = new Set<SettleFailureReason>([
  * A filed verdict (`FILED_REASONS`) does not stop the search: it means
  * *this candidate* is not this order's payment — a stray transfer that
  * merely named the reference, or a genuine underpayment — not that the
- * order has nothing to find. `wrong_payer` and `insufficient_amount`
- * specifically leave the signature unclaimed (see `FILED_REASONS`'s own
- * comment), so treating them as a reason to stop would make one cheap junk
+ * order has nothing to find. `wrong_payer`, `insufficient_amount` and
+ * `outside_bid_window` specifically leave the signature unclaimed (see
+ * `FILED_REASONS`'s own comment), so treating them as a reason to stop would make one cheap junk
  * transaction — sent by anyone, since the reference is public the instant a
  * real payment lands — a *permanent* block on that order ever being
  * recovered or even filed, forever, on every future pass. Only

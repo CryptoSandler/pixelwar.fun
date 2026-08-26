@@ -119,7 +119,7 @@ const okVerified = (amountBaseUnits: bigint): VerifyResult => ({ ok: true, amoun
 const failVerified = (
   reason: PaymentFailure,
   message = "verification failed",
-  extra: { receivedBaseUnits?: bigint; sender?: SenderInfo } = {},
+  extra: { receivedBaseUnits?: bigint; sender?: SenderInfo; provenNotOurs?: boolean } = {},
 ): VerifyResult => ({ ok: false, reason, message, ...extra });
 
 describe("settlePayment: the normal path", () => {
@@ -277,7 +277,15 @@ describe("settlePayment: verification failure", () => {
         const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
         const signature = randomUUID();
 
-        const result = await settlePayment({ order, signature, verified: failVerified(reason, `${reason} message`) });
+        const result = await settlePayment({
+          order,
+          signature,
+          // `provenNotOurs` is what makes the wrong_destination case belong
+          // in this list at all: the RPC positively reported USDC moving,
+          // attributed to an owner who is not us. The unsubstantiated case
+          // is the test below, and it must NOT be claimed.
+          verified: failVerified(reason, `${reason} message`, { provenNotOurs: true }),
+        });
 
         expect(result).toEqual({ ok: false, reason, message: `${reason} message` });
         const [consumedRow] = await query<{ outcome: string }>(
@@ -440,6 +448,162 @@ describe("settlePayment: verification failure", () => {
       expect(victimRefreshed?.status).toBe("paid");
     },
   );
+  /**
+   * The late paste-in, which needs no race at all: someone pays from an
+   * exchange or a hardware wallet, comes back forty minutes later, and
+   * pastes the signature. Real, confirmed, correctly addressed USDC, for the
+   * right amount, in our wallet — just too late for this order.
+   *
+   * Before this, `outside_bid_window` filed nothing and claimed nothing, so
+   * that money existed in our wallet and in no table anywhere. The
+   * reference-key recovery pass is not a net for it either: recovery finds
+   * payments by the order's reference key, and a payer paying from an
+   * exchange never attached one.
+   */
+  it(
+    "files a late payment that really reached our wallet, and still leaves its signature spendable",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId, amountUsd: 25 });
+      const signature = randomUUID();
+
+      const result = await settlePayment({
+        order,
+        signature,
+        verified: failVerified(
+          "outside_bid_window",
+          "That transaction was not made during this order.",
+          { receivedBaseUnits: 25_000_000n, sender: CHAIN_SENDER },
+        ),
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("outside_bid_window");
+
+      // On the record, with the amount and the sender the CHAIN reported.
+      const [unmatchedRow] = await query<{
+        reason: string;
+        received_base_units: string;
+        order_id: string | null;
+        sender_fee_payer: string | null;
+      }>(
+        `SELECT reason, received_base_units, order_id, sender_fee_payer
+           FROM unmatched_payments WHERE signature = $1`,
+        [signature],
+      );
+      expect(unmatchedRow).toMatchObject({
+        reason: "outside_bid_window",
+        received_base_units: "25000000",
+        order_id: order.id,
+        sender_fee_payer: "OnChainFeePayer1111111111111111111111111111",
+      });
+
+      // Filing is not spending. This transfer may be exactly right for some
+      // other order's window, and burning the signature would destroy that.
+      const claimed = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+      expect(claimed).toHaveLength(0);
+
+      // And the payer is told their money was recorded and where to take it
+      // — never that it simply bounced.
+      expect(result.message).toMatch(/filed/i);
+      expect(result.supportContact).toBeDefined();
+
+      // Idempotent: a payer who pastes the same signature twice leaves one
+      // row, not two, for the operator to work through.
+      await settlePayment({
+        order,
+        signature,
+        verified: failVerified("outside_bid_window", "late", {
+          receivedBaseUnits: 25_000_000n,
+          sender: CHAIN_SENDER,
+        }),
+      });
+      const rows = await query(`SELECT 1 FROM unmatched_payments WHERE signature = $1`, [signature]);
+      expect(rows).toHaveLength(1);
+    },
+  );
+
+  it(
+    "files nothing for an out-of-window transfer that never credited our wallet",
+    { timeout: 20_000 },
+    async () => {
+      // Nothing arrived, so there is nothing to file. A row here would be a
+      // refund obligation for money nobody ever sent us.
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 6, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
+      const signature = randomUUID();
+
+      const result = await settlePayment({
+        order,
+        signature,
+        verified: failVerified("outside_bid_window", "not during this order"),
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: "outside_bid_window",
+        message: "not during this order",
+      });
+      const unmatched = await query(`SELECT 1 FROM unmatched_payments WHERE signature = $1`, [signature]);
+      expect(unmatched).toHaveLength(0);
+      const claimed = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+      expect(claimed).toHaveLength(0);
+    },
+  );
+
+  /**
+   * `wrong_destination` is the one permanently-spending verdict that rests
+   * on evidence being ABSENT — our wallet appears in neither balance array.
+   * A parseable but incomplete RPC response produces that same absence for a
+   * payment that genuinely reached us, and `defaultFetchTransaction` retries
+   * only on a thrown error, so one 200 with empty balance arrays is accepted
+   * as truth. Claiming there burns a real payment's signature globally and
+   * forever: the payer's retry gets `signature_reused`, and a recovery pass
+   * skips it as `signature_reused` without filing, so the money ends up
+   * recorded nowhere at all. A payment we cannot classify is not a payment
+   * we may burn.
+   */
+  it(
+    "does not spend a signature on a wrong_destination the response never established, and the retry still settles",
+    { timeout: 20_000 },
+    async () => {
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "reserved" });
+      const order = await insertOrder({ warId: w.id, warTokenId: tokenId });
+      const signature = randomUUID();
+
+      // The thin response: verifyPayment could not tell where the money
+      // went, so it does not claim it went elsewhere.
+      const first = await settlePayment({
+        order,
+        signature,
+        verified: failVerified("wrong_destination", "could not be read in full"),
+      });
+      expect(first).toEqual({
+        ok: false,
+        reason: "wrong_destination",
+        message: "could not be read in full",
+      });
+
+      const claimed = await query(`SELECT 1 FROM consumed_signatures WHERE signature = $1`, [signature]);
+      expect(claimed).toHaveLength(0);
+
+      // A healthy node answers the retry, and the payment lands where it
+      // always belonged.
+      const second = await settlePayment({ order, signature, verified: okVerified(25_000_000n) });
+      expect(second).toEqual({ ok: true, amountBaseUnits: 25_000_000n });
+      const refreshed = await orderById(order.id);
+      expect(refreshed?.status).toBe("paid");
+      const [tokenRow] = await query<{ status: string }>(`SELECT status FROM war_tokens WHERE id = $1`, [
+        tokenId,
+      ]);
+      expect(tokenRow.status).toBe("active");
+    },
+  );
 });
 
 describe("settlePayment: the replay", () => {
@@ -493,7 +657,11 @@ describe("settlePayment: the replay", () => {
       const first = await settlePayment({
         order: orderA,
         signature,
-        verified: failVerified("wrong_destination", "wrong wallet"),
+        // Substantiated: the RPC positively reported USDC moving to an owner
+        // who is not us, which is what makes this verdict spend the
+        // signature at all. An unproven wrong_destination leaves it
+        // spendable — see the verification-failure suite above.
+        verified: failVerified("wrong_destination", "wrong wallet", { provenNotOurs: true }),
       });
       expect(first.ok).toBe(false);
 
@@ -787,12 +955,14 @@ describe("settlePayment: late confirmation", () => {
     maxTokens?: number;
     colourSlot?: number;
     expiredMinutesAgo?: number;
+    contractKey?: string;
   } = {}) {
     const w = await war({ maxTokens: overrides.maxTokens ?? 24 });
     const tokenId = await insertToken({
       warId: w.id,
       colourSlot: overrides.colourSlot ?? 5,
       status: "released",
+      contractKey: overrides.contractKey,
     });
     const order = await insertOrder({
       warId: w.id,
@@ -1008,6 +1178,86 @@ describe("settlePayment: late confirmation", () => {
         if (original === undefined) delete process.env.SUPPORT_CONTACT;
         else process.env.SUPPORT_CONTACT = original;
       }
+    },
+  );
+
+  /**
+   * The colour race has a twin nobody covered, and it is the more ordinary
+   * of the two: the same TOKEN re-enters the war at a DIFFERENT colour after
+   * its first order expired, and then the first order's payment lands.
+   *
+   * The reclaim UPDATE moves one row out of 'released', which puts it back
+   * into both `WHERE status <> 'released'` partial unique indexes at once.
+   * Colour is free, so `war_tokens_colour_live` is happy; the token is not,
+   * so `war_tokens_contract_live` fires. An earlier version of this code
+   * tolerated only the first and rethrew the second, which aborted the whole
+   * settlement transaction — taking with it the `unmatched_payments` row
+   * that is the payer's ONLY trace of money that is sitting in our wallet,
+   * and answering with a 500 that reads as transient for something that
+   * repeats identically on every retry.
+   */
+  it(
+    "files the payment when the token itself re-entered the war at another colour, rather than destroying the record",
+    { timeout: 20_000 },
+    async () => {
+      const sharedContract = randomUUID();
+      const { war: w, tokenId, order } = await expiredReservation({
+        maxTokens: 24,
+        colourSlot: 3,
+        contractKey: sharedContract,
+      });
+
+      // The same community comes back with the same token at colour 7 —
+      // legal precisely because the first row is 'released'.
+      const reEntered = await insertToken({
+        warId: w.id,
+        colourSlot: 7,
+        status: "active",
+        contractKey: sharedContract,
+      });
+
+      const signature = randomUUID();
+      const result = await settlePayment({
+        order,
+        signature,
+        verified: okVerified(25_000_000n),
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("unmatched");
+      expect(result.supportContact).toBeDefined();
+      // Never "could not be checked": the money is on the record and the
+      // payer is told so, plus where to take it.
+      expect(result.message).toMatch(/already re-entered this war/i);
+      expect(result.message).toMatch(/filed/i);
+
+      // The whole point: the row survived, which means the transaction it
+      // was written in committed rather than rolling back.
+      const [unmatchedRow] = await query<{ reason: string; received_base_units: string }>(
+        `SELECT reason, received_base_units FROM unmatched_payments WHERE signature = $1`,
+        [signature],
+      );
+      expect(unmatchedRow).toMatchObject({
+        reason: "contract_taken",
+        received_base_units: "25000000",
+      });
+
+      // And nothing was half-applied: the expired order stays expired, its
+      // released row stays released, and the live re-entry is untouched.
+      const refreshed = await orderById(order.id);
+      expect(refreshed?.status).toBe("expired");
+      const [oldRow] = await query<{ status: string }>(`SELECT status FROM war_tokens WHERE id = $1`, [
+        tokenId,
+      ]);
+      expect(oldRow.status).toBe("released");
+      const [liveRow] = await query<{ status: string; colour_slot: number }>(
+        `SELECT status, colour_slot FROM war_tokens WHERE id = $1`,
+        [reEntered],
+      );
+      expect(liveRow).toMatchObject({ status: "active", colour_slot: 7 });
+      const paymentRows = await query(`SELECT 1 FROM payments WHERE order_id = $1`, [order.id]);
+      expect(paymentRows).toHaveLength(0);
     },
   );
 });

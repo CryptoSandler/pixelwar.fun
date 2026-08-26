@@ -383,3 +383,128 @@ describe("edges inherited from the sibling verifier", () => {
     expect(result.reason).toBe("no_block_time");
   });
 });
+
+describe("the difference between a transaction that did not pay us and a response that does not say", () => {
+  /**
+   * `wrong_destination` is the fall-through: our wallet is in neither
+   * balance array. That is what a transfer to somebody else looks like, and
+   * it is ALSO what a parseable-but-thin RPC response looks like for a
+   * payment that really did reach us — `defaultFetchTransaction` retries
+   * only on a thrown error, so a 200 carrying a result with empty balance
+   * arrays is accepted as truth on the first attempt.
+   *
+   * The two cannot be allowed to look the same to the caller, because
+   * `settlePayment` permanently and globally spends a signature on this
+   * verdict. `provenNotOurs` is the distinction: it is set from what the
+   * response CONTAINS (an attributed USDC balance entry), which a thin
+   * response cannot manufacture.
+   */
+  it("proves the verdict when the response really does report USDC going elsewhere", async () => {
+    const result = await check(tx({ owner: PAYER, before: "0", after: "100000000" }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("wrong_destination");
+    expect(result.provenNotOurs).toBe(true);
+  });
+
+  it("does not prove it from a response that parses, returns a transaction, and carries empty balance arrays", async () => {
+    const thin: SolanaTransaction = {
+      slot: 1,
+      blockTime: INSIDE,
+      transaction: { message: { accountKeys: [{ pubkey: PAYER, signer: true }] } },
+      meta: { err: null, preTokenBalances: [], postTokenBalances: [] },
+    };
+
+    const result = await check(thin);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("wrong_destination");
+    expect(result.provenNotOurs).toBe(false);
+    // And the copy must not assert something the response never established.
+    expect(result.message).not.toMatch(/did not send USDC to our payment wallet/);
+    expect(result.message).toMatch(/try again/i);
+  });
+
+  it("does not prove it from balance entries that name no owner, the shape old transactions have", async () => {
+    // `owner` was not always reported on token balances. Without it we
+    // cannot tell whose account moved, so our wallet's absence from the
+    // array says nothing at all.
+    const ownerless: SolanaTransaction = {
+      slot: 1,
+      blockTime: INSIDE,
+      transaction: { message: { accountKeys: [{ pubkey: PAYER, signer: true }] } },
+      meta: {
+        err: null,
+        preTokenBalances: [{ accountIndex: 0, mint: USDC_MINT, uiTokenAmount: { amount: "0" } }],
+        postTokenBalances: [
+          { accountIndex: 0, mint: USDC_MINT, uiTokenAmount: { amount: "100000000" } },
+        ],
+      },
+    };
+
+    const result = await check(ownerless);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("wrong_destination");
+    expect(result.provenNotOurs).toBe(false);
+  });
+
+  it("does not prove it from a transaction that moved only some other token", async () => {
+    // No USDC entry at all: the response may be complete, but it gives us no
+    // positive evidence about where USDC went, so we do not spend a
+    // signature on it.
+    const result = await check(tx({ owner: PAYER, mint: OTHER_MINT, after: "100000000" }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("wrong_destination");
+    expect(result.provenNotOurs).toBe(false);
+  });
+});
+
+describe("a payment that reached our wallet outside the order's window", () => {
+  /**
+   * The forty-minutes-later case, which needs no race: someone pays from an
+   * exchange or a hardware wallet and pastes the signature long after the
+   * order closed. Real USDC, correctly addressed, at the right price. The
+   * verdict is still `outside_bid_window` — it cannot buy this seat — but
+   * the amount and the sender have to come back with it, because they are
+   * the only way `settlePayment` can put the money on the record for support
+   * to refund. Recovery cannot help here: a payer paying from an exchange
+   * never attached the order's reference key for it to search on.
+   */
+  it("reports what arrived and who sent it", async () => {
+    const late = tx({
+      after: "100000000",
+      payer: PAYER,
+      payerBefore: "500000000",
+      payerAfter: "400000000",
+      blockTime: Math.floor((WINDOW_END + 40 * 60_000) / 1000),
+    });
+
+    const result = await check(late);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("outside_bid_window");
+    expect(result.receivedBaseUnits).toBe(100_000_000n);
+    expect(result.sender?.feePayer).toBe(PAYER);
+    expect(result.sender?.debited).toEqual([{ owner: PAYER, amountBaseUnits: "100000000" }]);
+  });
+
+  it("reports no amount and no sender when the transfer never touched our wallet", async () => {
+    // Nothing arrived, so there is nothing to file and nobody to name.
+    // Filing here would put rows in the operator's queue for money we were
+    // never sent.
+    const elsewhere = tx({
+      owner: PAYER,
+      after: "100000000",
+      blockTime: Math.floor((WINDOW_END + 40 * 60_000) / 1000),
+    });
+
+    const result = await check(elsewhere);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("outside_bid_window");
+    expect(result.receivedBaseUnits).toBeUndefined();
+    expect(result.sender).toBeUndefined();
+  });
+});
