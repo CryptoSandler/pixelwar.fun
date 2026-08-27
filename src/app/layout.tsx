@@ -83,8 +83,24 @@ const chrome = {
 
 export const metadata: Metadata = {
   title: "pixelwar.fun",
+  /**
+   * Deliberately promises nothing about price or architecture.
+   *
+   * This used to read "Up to 24 memecoin tokens each hold one colour — paint
+   * for free, no account, no wallet." Two problems, and the second is the one
+   * that matters. The first half stopped being true when the palette was
+   * freed: colours belong to nobody now. The second half is a ONE-WAY
+   * PROMISE, published — "free", "no account", "no wallet" are three
+   * commitments the product cannot walk back without being caught having
+   * changed its terms, and all three are live product questions.
+   *
+   * So the wording is neutral by design: true today, true if painting stays
+   * free forever, and true if a future war asks a painter to connect a wallet
+   * to prove they hold a token. Nothing here forbids that and nothing
+   * promises it. See CLAUDE.md, "Decisions with a door".
+   */
   description:
-    "A timed war on a shared 200x200 canvas. Up to 24 memecoin tokens each hold one colour — paint for free, no account, no wallet.",
+    "A timed war on a shared 200×200 canvas. Communities compete for territory; anyone can paint.",
   /**
    * Layer 2 of the pre-launch noindex. See `src/app/robots.ts` for why there
    * are three of these and what each one covers; the short version is that

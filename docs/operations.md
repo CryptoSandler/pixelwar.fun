@@ -34,3 +34,33 @@ is about to type a number.
 **When this rule expires:** the day `PALETTE` grows past 24 entries. Then the
 cap can rise to the new palette size with nothing else to change, because
 `flagColourForSlot` already wraps at `PALETTE_SIZE` rather than at a literal.
+
+## Ban terms: how long is a ban, by default
+
+**The admin panel offers a fixed term (24 hours) and never writes a ban with
+no expiry. Whether the product should have permanent bans at all is the
+owner's open decision.**
+
+The mechanism supports both. `bans.expires_at` is nullable and `banKey` will
+write `null` when a caller asks for it, so nothing has to be rebuilt whichever
+way this lands. What the panel does is choose a default, and the default is a
+term.
+
+**Why a term is the default rather than a policy choice made by omission.** A
+ban with no end is an irreversible sentence, and the identity it names is a
+cookie or a hashed address — neither of which reliably identifies a person for
+very long. A permanent ban on a discardable key mostly punishes whoever
+inherits that address next, which is somebody who did nothing. The offender
+clears their cookies and comes back either way.
+
+**What is NOT written anywhere, and must not be:** no copy in this application
+tells anybody they are banned permanently, or for how long, or that a ban can
+be appealed. The panel's operator sees the expiry; the banned painter is
+simply refused, exactly as `isBanned` has always refused them — see
+`paint.ts`, where a banned caller leaves no row behind, because a refusal that
+records something tells the attacker they exist.
+
+**If this is revisited:** the thing to look at is whether repeat offences
+cluster on the same key, which is the only evidence that a longer term would
+do anything. `listBans` keeps expired rows for exactly that reason — a list
+that dropped them would make a second offence look like a first one.

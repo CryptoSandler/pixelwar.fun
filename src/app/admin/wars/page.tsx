@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { AdmissionCap } from "../../../components/AdmissionCap";
+import { Moderation, type BanRow } from "../../../components/Moderation";
 import { Cabinet } from "../../../components/Cabinet";
 import { adminSessionLabel } from "../../../lib/admin";
 import { query } from "../../../lib/db";
+import { listBans } from "../../../lib/moderation";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +14,8 @@ type WarRow = {
   slug: string;
   status: string;
   max_tokens: number;
+  width: number;
+  height: number;
   seated: string;
 };
 
@@ -47,8 +51,24 @@ export default async function AdminWarsPage() {
     );
   }
 
+  // Read here rather than fetched by the panel: the screen is correct on
+  // first paint instead of empty for a round trip, the same way
+  // /admin/orphans reads its own rows. Only the controls that WRITE are
+  // client components.
+  const bans = await listBans();
+  const banRows: BanRow[] = bans.map((ban) => ({
+    id: ban.id,
+    keyType: ban.keyType,
+    key: ban.key,
+    reason: ban.reason,
+    actor: ban.actor,
+    live: ban.live,
+    createdAt: ban.createdAt.toISOString(),
+    expiresAt: ban.expiresAt?.toISOString() ?? null,
+  }));
+
   const wars = await query<WarRow>(
-    `SELECT w.id, w.title, w.slug, w.status, w.max_tokens,
+    `SELECT w.id, w.title, w.slug, w.status, w.max_tokens, w.width, w.height,
             (SELECT count(*) FROM war_tokens t
               WHERE t.war_id = w.id AND t.status IN ('reserved','active')) AS seated
        FROM wars w
@@ -78,12 +98,20 @@ export default async function AdminWarsPage() {
         ) : (
           <ul className="flex flex-col gap-3">
             {wars.map((war) => (
-              <li key={war.id}>
+              <li key={war.id} className="flex flex-col gap-3">
                 <AdmissionCap
                   warId={war.id}
                   title={`${war.title} (${war.status})`}
                   current={war.max_tokens}
                   seated={Number(war.seated)}
+                />
+                <Moderation
+                  warId={war.id}
+                  warSlug={war.slug}
+                  warStatus={war.status}
+                  width={war.width}
+                  height={war.height}
+                  bans={banRows}
                 />
               </li>
             ))}

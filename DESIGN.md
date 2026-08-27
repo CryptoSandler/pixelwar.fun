@@ -39,6 +39,54 @@ in direct competition with twenty-four saturated colours and lose.
 
 ---
 
+---
+
+## 1a. What the product sells
+
+**Pixelwar does not charge the painter. It turns painters into buyers of the
+token. What a community buys with its admission is demand, not pixels. Every
+future monetisation proposal is judged against this sentence.**
+
+This is a norm, not a preference, and it is written down so the next argument
+cites it instead of remembering it.
+
+**Why it holds.** On Solana the credential of loyalty already exists and this
+product does not issue it: it is holding the bag. A per-person entry fee is
+therefore not sacrifice for the tribe — it is a cover charge for the venue,
+and it *competes with what the tribe is asking of the same wallet*. No
+community leader running a raid wants their soldiers spending on the arena
+instead of on the ticker. Charging the painter builds a second status ladder,
+bought here, that cannibalises the one bought in the token — and a cult has
+exactly one healthy hierarchy.
+
+The corollary is the design rule that falls out of it: **status is earned in
+the token and displayed here, never sold here.** Two castes, and the rung
+between them is bought from the community, not from us.
+
+| Caste | How you get it | What it costs |
+| --- | --- | --- |
+| Recruit | Paint. The first pixel commits you to one token for that war. | Nothing |
+| Sworn | Connect a wallet, prove you hold the token. | Nothing — the token you already own |
+
+**Loyalty is enforced socially, not cryptographically.** A recruit's commitment
+lives in a cookie and is trivially discarded, and that is accepted rather than
+fought: the cost of switching sides is abandoning your own record and starting
+at zero, which is how loyalty is actually enforced in the communities this is
+built for. The sworn caste's commitment binds to a wallet, which is not
+discardable — so the people who care most get the hard version, and nobody
+pays for a lock the product does not need.
+
+**Copy consequence, and it is absolute.** Nothing in this application promises
+a price, promises "free forever", promises "no wallet ever", or calls an
+allegiance "permanent" or "irrevocable" — the recruit's lock is soft and copy
+saying otherwise would be a lie the product tells about itself. The allowed
+form is the one that is true either way: *you fight for one token this war.*
+See CLAUDE.md, "Decisions with a door".
+
+**A per-person checkout is refused, not deferred by accident.** The reasoning
+above is the reason. It may be revisited with data from a war that actually
+happened; until then there is no line of copy, no schema and no route for it.
+
 ## 2. Colour
 
 Two separate colour systems share one screen and must never be confused.
