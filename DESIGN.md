@@ -459,8 +459,31 @@ closed today.
 
 ### I5 — The accent means action, and only action
 
-`ACCENT` appears on the primary button, the selected swatch, and the wordmark.
-Never on a chip, a bar, a border, or any element that represents a token.
+`ACCENT` marks **an action the visitor can take**, and the wordmark. Never a
+chip, a bar, a border, or any element that represents a token.
+
+Stated as a principle rather than as a list of three, because the list was
+read as a cap and it is not one: the board screen carries brass on Paint AND
+on "Add your token", which are two actions for two different people — one
+paints, the other enters a community — and they sit in different zones of the
+screen for that reason. What the invariant forbids has not moved an inch: no
+token ever wears the accent, because no token ever appears as a filled
+control.
+
+The risk the list was guarding against is real and worth naming: if everything
+is brass, nothing is. The check is not "how many" but "is this an action" —
+a brass element that does not do something has broken the rule however few
+there are.
+
+> **Two accents, for two different people, in two different zones. A proposal
+> that adds a third is debated against this principle before it is built — if
+> everything is brass, nothing is.**
+>
+> Written as a clause rather than left as a reservation in a batch report,
+> because a reservation in a report is remembered wrongly or not at all, and
+> the next round is supposed to cite this file rather than somebody's memory
+> of it. The count is not the rule; it is the tripwire. A third accent may
+> well be right — it just does not get added without the argument.
 
 > *Test:* partially enforced — `chroma(ACCENT) > chroma(surround)` asserts it
 > stays the loudest chrome. Placement is a review rule, not yet a test, because

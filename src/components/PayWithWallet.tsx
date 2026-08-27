@@ -8,6 +8,11 @@ import { getChainForEndpoint } from "@solana/wallet-standard-util";
 import { WalletConnect, useInBrowser } from "./WalletProvider";
 import { buildPaymentTransaction } from "../lib/payments/transfer";
 import { formatUsdc, usdToBaseUnits } from "../lib/payments/config";
+import {
+  checkoutOutcome,
+  isRetryableConfirmReason,
+  walletErrorMessage,
+} from "../lib/payments/checkout";
 import { orderStatus } from "../lib/payments/order-status";
 import { clusterLabel, isLocalHostname, paymentSafety } from "../lib/payments/cluster";
 import type { ProxyCluster } from "../lib/payments/cluster";
@@ -72,24 +77,6 @@ const STATUS_POLL_MS = 2_000;
  */
 const CONFIRM_RETRY_MS = 5_000;
 const CONFIRM_MAX_ATTEMPTS = 5;
-
-/**
- * A wallet's own failure, as a sentence.
- *
- * Wallet errors are developer strings — `Transaction simulation failed: Error
- * processing Instruction 1: custom program error: 0x1` is what an underfunded
- * payer gets from a preflight — and DESIGN.md §8 rules that out. The detail
- * still goes to the console, where it is useful; it just does not go on
- * screen as the explanation.
- */
-function walletErrorMessage(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error ?? "");
-  if (/reject|denied|cancel/i.test(raw)) return "You dismissed the payment in your wallet.";
-  if (/insufficient|0x1\b/i.test(raw)) {
-    return "The payment did not go through. Check the wallet holds enough USDC, and a little SOL for the fee.";
-  }
-  return "Your wallet could not send this payment. Try again in a moment.";
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -198,15 +185,13 @@ export function PayWithWallet({
         if (response.ok) return { ok: true };
         lastMessage = typeof body?.error === "string" ? body.error : lastMessage;
         lastReason = typeof body?.reason === "string" ? body.reason : undefined;
-        // Only the reasons that can change on their own are worth another
-        // attempt. A wrong amount or a wrong payer will still be wrong in
-        // five seconds, and each attempt spends the order's verification
-        // quota.
-        const retryable =
-          body?.reason === "not_confirmed" ||
-          body?.reason === "no_block_time" ||
-          body?.reason === "rpc_unavailable";
-        if (!retryable) return { ok: false, message: lastMessage, reason: lastReason };
+        // The retry decision lives in `checkout.ts`, where a test can reach
+        // it. A second copy here is a second thing to keep in step, and the
+        // cost of them drifting is a payer's verification quota spent on a
+        // failure that was never going to change.
+        if (!isRetryableConfirmReason(body?.reason)) {
+          return { ok: false, message: lastMessage, reason: lastReason };
+        }
       }
       return { ok: false, message: lastMessage, reason: lastReason };
     },
@@ -322,25 +307,23 @@ export function PayWithWallet({
     const confirmed = await confirmWithServer(signature);
     if (!alive.current) return;
     if (!confirmed.ok) {
-      // `signature_reused`, and only that reason. A dropped response to a
-      // `/confirm` that actually settled makes the retry post a signature the
-      // server has already claimed, and the answer is that this signature is
-      // spent — so the one message this flow must never produce, "your
-      // payment failed", is what a successful payment would get. Asking the
-      // order settles it, and it costs one request.
-      //
-      // The neighbouring reason must NOT come here, which is why this is not
-      // written as "any failure on a paid order". `already_settled` means the
-      // order was paid by a DIFFERENT payment and this one is real, unmatched
-      // and filed for support (`settle.ts` files it and returns a contact).
-      // The order does read `paid` in that case — by someone else's money —
-      // so a status check would "confirm" success for a payer who is owed a
-      // refund and bury the only message that tells them so.
-      if (confirmed.reason === "signature_reused" && (await pollOrder()) === "paid") {
+      // Which of the two failures this is decides whether a payer is told
+      // their money landed or that it is in the unmatched queue, and getting
+      // it backwards produces the one message this flow must never produce.
+      // The reasoning is in `checkout.ts` with its own tests; asking the
+      // order costs one request and only happens for the reason that needs
+      // it.
+      const orderStatus =
+        confirmed.reason === "signature_reused" ? await pollOrder() : null;
+      const outcome = checkoutOutcome({
+        failure: { reason: confirmed.reason, message: confirmed.message },
+        orderStatus,
+      });
+      if (outcome.kind === "paid") {
         setPhase({ kind: "paid" });
         return;
       }
-      setPhase({ kind: "error", message: confirmed.message, signature });
+      setPhase({ kind: "error", message: outcome.message, signature });
       return;
     }
 

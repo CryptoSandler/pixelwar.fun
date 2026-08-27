@@ -253,14 +253,32 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
 
         <span className="section-label hidden truncate rail:inline">{war.title}</span>
 
-        <button
-          type="button"
-          className="btn-secondary bevel shrink-0 px-3 py-1 rail:hidden"
-          aria-expanded={railOpen}
-          onClick={() => setRailOpen((open) => !open)}
-        >
-          {railOpen ? "Close" : "War"}
-        </button>
+        <span className="flex shrink-0 items-center gap-2">
+          {/*
+            THE ACTION THAT BILLS, and it was a `muted` underlined link at the
+            foot of the rail — below the fold on a phone, and styled as a
+            footnote on a desktop. A community leader arriving to find rivals
+            on the board had no visible way in.
+
+            Brass because it is an action (DESIGN.md I5, which is a principle
+            and not a cap of three). It sits in the header rather than beside
+            Paint on purpose: two brass controls for two different people, in
+            two different zones. Paint is for whoever is painting; this is for
+            whoever wants a colour of their own.
+          */}
+          <Link href="/join" className="btn-primary px-3 py-1.5">
+            Add your token
+          </Link>
+
+          <button
+            type="button"
+            className="btn-secondary bevel px-3 py-1 rail:hidden"
+            aria-expanded={railOpen}
+            onClick={() => setRailOpen((open) => !open)}
+          >
+            {railOpen ? "Close" : "War"}
+          </button>
+        </span>
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col rail:flex-row">
@@ -330,9 +348,6 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
             {layer === "token" ? "Showing territory" : "Show territory"}
           </button>
 
-          <Link className="muted mt-auto text-[13px] underline" href="/join">
-            Add your token
-          </Link>
         </aside>
 
         {/* Margins in service of the canvas: the board takes every pixel the
