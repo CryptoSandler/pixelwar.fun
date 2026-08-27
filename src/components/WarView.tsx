@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Board } from "./Board";
 import { PaintButton } from "./PaintButton";
-import { TokenRail, type RailToken } from "./TokenRail";
+import { ActivityFeed, type FeedEvent } from "./ActivityFeed";
+import type { RailToken } from "./TokenRail";
 import { Scoreboard } from "./Scoreboard";
+import { leaderOf } from "../lib/canvas/standings";
 import { SwearOath } from "./SwearOath";
 import { WarClock } from "./WarClock";
 import { WarHud } from "./WarHud";
@@ -58,6 +60,7 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
    */
   const [railOpen, setRailOpen] = useState(false);
   /** This painter's side, once the session answers. Null until then, and for a painter with none. */
+  const [activity, setActivity] = useState<FeedEvent[]>([]);
   const [allegiance, setAllegiance] = useState<{
     warTokenId: string;
     ticker: string | null;
@@ -123,8 +126,9 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
     const load = () => {
       fetch(`/api/leaderboard?war=${encodeURIComponent(war.slug)}`)
         .then((response) => (response.ok ? response.json() : null))
-        .then((body: { tokens: LeaderboardToken[] } | null) => {
+        .then((body: { tokens: LeaderboardToken[]; activity?: FeedEvent[] } | null) => {
           if (cancelled || !body) return;
+          setActivity(body.activity ?? []);
           setTokens(
             body.tokens.map((token) => ({
               id: token.id,
@@ -166,6 +170,8 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   // so it covers every response path (200, 429, 409, and anything else)
   // without duplicating the reset in each branch.
   const [inFlight, setInFlight] = useState(false);
+
+  const leader = leaderOf(tokens, war.width * war.height);
 
   const paintAt = useCallback(
     async (x: number, y: number) => {
@@ -338,7 +344,34 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
             />
           </div>
 
+          {/* THE HEADLINE. Who is winning, in words, above the bars that
+              prove it — a scoreboard answers "who is winning" only after you
+              have read every row and compared them, and the first three
+              seconds do not contain that reading. Null when nobody holds
+              anything: "T3 leads with 0" is a headline about nothing, and an
+              empty board gets its own sentence instead. */}
+          <section className="readout bevel-in flex flex-col gap-0.5 px-3 py-2">
+            {leader ? (
+              <>
+                <h2 className="section-label">Leading</h2>
+                <p className="text-[15px] font-medium">
+                  {leader.ticker}{" "}
+                  <span className="numeric text-[13px]">
+                    {leader.share < 0.1 ? "<0.1" : leader.share.toFixed(1)}%
+                  </span>
+                </p>
+              </>
+            ) : (
+              <p className="text-[13px]">The board is empty. Whoever paints first leads.</p>
+            )}
+          </section>
+
           <section className="flex flex-col gap-1">
+            {/* One list, not two. This used to be a scoreboard stacked on a
+                token rail that rendered the identical tokens with the
+                identical chips and a second click target for the identical
+                action — the sidebar asking the same question twice. The row
+                IS the selector. */}
             <h2 className="section-label">Board</h2>
             <Scoreboard
               tokens={tokens}
@@ -346,11 +379,6 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
               selectedId={selectedId}
               onSelect={setSelectedId}
             />
-          </section>
-
-          <section className="flex flex-col gap-1">
-            <h2 className="section-label">Painting for</h2>
-            <TokenRail tokens={tokens} selectedId={selectedId} onSelect={setSelectedId} />
             {/* True for both castes, and it is the only sentence the design
                 sanctions about allegiance: never "permanent", never
                 "irrevocable". The recruit's lock is a cookie and copy
@@ -365,6 +393,11 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
               ticker={allegiance?.ticker ?? null}
               alreadySworn={allegiance?.sworn ?? false}
             />
+          </section>
+
+          <section className="flex flex-col gap-1">
+            <h2 className="section-label">Live</h2>
+            <ActivityFeed events={activity} />
           </section>
 
           <section className="flex flex-col gap-1">

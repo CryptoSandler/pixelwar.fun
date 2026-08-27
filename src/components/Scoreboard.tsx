@@ -5,7 +5,8 @@ import { flagColourForSlot } from "../lib/wars/palette";
 import type { RailToken } from "./TokenRail";
 
 /**
- * Who is winning, readable without reading.
+ * Who is winning, readable without reading — and the selector, because they
+ * were always the same list.
  *
  * WHAT CHANGED AND WHY. This was a list of tickers with a count beside each.
  * A list answers "who is here"; a war asks "who is winning", and those are
@@ -25,6 +26,13 @@ import type { RailToken } from "./TokenRail";
  * the scoreboard is where a community's colour still means the community. I5
  * is not at risk — brass is the accent and no flag is brass, because no token
  * colour clears the palette distance the accent had to.
+ *
+ * ONE COMPONENT, NOT TWO. This sat above a `TokenRail` that rendered the
+ * identical tokens with the identical chips and a second click target for
+ * the identical action: the rail was "which token am I painting for" and the
+ * scoreboard was "how is that token doing", stacked, so the sidebar asked the
+ * same question twice and answered it in two places. The row IS the selector.
+ * `TokenRail` is gone.
  *
  * SCALED TO THE LEADER, not to the board. Early in a war every token owns a
  * fraction of a percent, and bars drawn against 40,000 cells are all zero
@@ -71,8 +79,13 @@ export function Scoreboard({
         const share = boardPixels > 0 ? (token.owned / boardPixels) * 100 : 0;
         // Below a tenth of a percent, "0.0%" is a rounding artefact that reads
         // as "none". A war's first hour is entirely made of this case.
-        const shareText =
-          token.owned === 0 ? "—" : share < 0.1 ? "<0.1%" : `${share.toFixed(1)}%`;
+        // ZERO IS 0%, NOT AN EM DASH. This read "—" for a token holding
+        // nothing, on the reasoning that absolute zero and no-data are
+        // different facts. They are — but an em dash is how a table says "no
+        // data", so a token that genuinely holds none of the board looked
+        // broken rather than losing. A war's first hour is entirely made of
+        // this case.
+        const shareText = share === 0 ? "0%" : share < 0.1 ? "<0.1%" : `${share.toFixed(1)}%`;
         const width = leader > 0 ? Math.max(token.owned > 0 ? 2 : 0, (token.owned / leader) * 100) : 0;
         const selected = token.id === selectedId;
 
@@ -98,6 +111,11 @@ export function Scoreboard({
                   }}
                 />
                 <span className="ticker">{token.ticker}</span>
+                {token.painters > 0 ? (
+                  <span className="numeric shrink-0 text-[11px]" title={`${token.painters} painters`}>
+                    {token.painters}
+                  </span>
+                ) : null}
 
                 {/*
                   THE SWORN MARK, and it is the whole status ladder in one

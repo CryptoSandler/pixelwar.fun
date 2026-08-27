@@ -1,5 +1,6 @@
 import { query } from "../../../lib/db";
 import { json } from "../../../lib/http";
+import { recentActivity } from "../../../lib/canvas/activity-feed";
 import { armyCounts } from "../../../lib/paint/allegiance";
 import { warBySlug } from "../../../lib/wars/lifecycle";
 
@@ -37,6 +38,13 @@ export async function GET(request: Request): Promise<Response> {
   // and buy one. See DESIGN.md §1a.
   const armies = await armyCounts(war.id);
 
+  // Carried on the poll that already runs every two seconds rather than on a
+  // second one of its own. The feed and the standings are read together and
+  // rendered together; two endpoints would mean two round trips to draw one
+  // panel, and they could disagree by a poll interval — a leader that has
+  // just been overtaken, beside the paint that overtook them.
+  const activity = await recentActivity(war.id, war.width);
+
   return json(
     {
       tokens: rows.map((row) => ({
@@ -48,6 +56,14 @@ export async function GET(request: Request): Promise<Response> {
         placed: row.placed,
         painters: armies.get(row.id)?.painters ?? 0,
         sworn: armies.get(row.id)?.sworn ?? 0,
+      })),
+      activity: activity.map((event) => ({
+        seq: event.seq,
+        x: event.x,
+        y: event.y,
+        colourSlot: event.colourSlot,
+        ticker: event.ticker,
+        paintedAt: event.paintedAt.toISOString(),
       })),
     },
     { headers: { "cache-control": "public, s-maxage=1, stale-while-revalidate=4" } },
