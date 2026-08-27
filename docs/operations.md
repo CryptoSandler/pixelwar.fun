@@ -134,3 +134,73 @@ scratch:**
 
 Both are decisions about how fast a human must hear, and that number is not
 knowable until real money has been through the queue once.
+
+## The write ceiling is ~40 paints per second, per war
+
+**Measured, and it is architectural rather than a setting.** Every paint takes
+a row lock on its war — `UPDATE wars SET last_seq = last_seq + 1` — and holds
+it for **five more round trips** before COMMIT. Throughput per war is
+therefore `1 / (5 x round-trip time)`, and nothing about connection pools,
+instance count or CPU changes it.
+
+**It scales horizontally by war, not by hardware. N wars run at N x the
+throughput.**
+
+### The evidence
+
+A load test against the `preview` branch, from a machine 173ms from Neon:
+
+| painters | wall clock | throughput |
+| --- | --- | --- |
+| 25 | 24.4s | 1.02/s |
+| 50 | 45.9s | 1.09/s |
+| 100 | 58.4s | 1.07/s |
+
+Flat throughput under rising concurrency is the signature of serialisation
+rather than saturation — a pool that was merely too small would show
+throughput climbing with the pool, and raising it from 10 to 50 changed
+nothing.
+
+Confirmed rather than inferred, by running two wars at once:
+
+    15 paints in ONE war  : 15.8s  (0.95/s)
+    30 paints in TWO wars : 16.3s  (1.84/s)
+
+Almost exactly double. The lock is per war.
+
+### Why the sequence is not the thing to change
+
+Migration 001 already answers this: `last_seq` is allocated inside the paint
+transaction and not by a `BIGSERIAL` because **"BIGSERIAL hands out values
+before commit, so a client polling ?since= could step over a row that
+committed late and lose it for good."** The diff protocol needs a gapless,
+monotonic sequence, and the serialisation is what that costs. Trading it away
+would trade a throughput ceiling for silently lost pixels.
+
+### The number that matters in production
+
+The table above was measured at 173ms per round trip, which is this
+developer's latency to Neon and **not** the deployment's. Derived from
+production rather than assumed: `robots.txt` (static, no database) answers in
+0.14s and `/api/leaderboard` (four queries) answers in 0.12-0.13s — the
+queries are indistinguishable from a static file, so the round trip is on the
+order of 5ms.
+
+**That projects to roughly 40 paints per second per war**, which is about
+1,200 active painters on a 30-second cooldown. It is a projection from a
+derived round trip, not a measurement of paint under load on Vercel; the
+preview deployment is behind SSO and was deliberately not exposed to measure
+it. The first real war measures it for free.
+
+### Trigger for revisiting
+
+**A war sustained anywhere near its ceiling.** The known path is reducing the
+number of round trips held under the lock — the five after the sequence
+update are a `SELECT` of the previous owner, the pixel `INSERT`, the event
+`INSERT` and two count updates, and some of those can move outside the lock
+or merge. **Not** abandoning the gapless sequence, for the reason above.
+
+`DATABASE_POOL_MAX` is 25 in production, raised from the default 10 after this
+test. It is not the ceiling and was never the ceiling; it is headroom for the
+announcement spike, and an environment variable change needs a redeploy to
+take effect.
