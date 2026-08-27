@@ -9,6 +9,10 @@ export type RailToken = {
   name: string;
   colourSlot: number;
   owned: number;
+  /** Painters who fight for this token in this war. */
+  painters: number;
+  /** How many of them proved a wallet holding it. */
+  sworn: number;
 };
 
 export function TokenRail({

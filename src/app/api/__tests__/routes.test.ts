@@ -52,7 +52,11 @@ describe("GET /api/session", () => {
     const setCookie = response.headers.get("set-cookie")!;
     expect(setCookie).toContain("pw_painter=");
     expect(setCookie).toContain("HttpOnly");
-    expect(await response.json()).toEqual({ cooldownUntil: null });
+    // Exhaustive on purpose, and kept that way: `toEqual` is what noticed
+    // when this response grew an `allegiance` field, and a body that gains
+    // fields nobody asserted is how a cookie-identified endpoint starts
+    // returning more about a person than anybody decided it should.
+    expect(await response.json()).toEqual({ cooldownUntil: null, allegiance: null });
   });
 
   it("does not replace a cookie the caller already has", async () => {

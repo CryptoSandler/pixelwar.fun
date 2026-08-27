@@ -6,6 +6,7 @@ import { Board } from "./Board";
 import { PaintButton } from "./PaintButton";
 import { TokenRail, type RailToken } from "./TokenRail";
 import { Scoreboard } from "./Scoreboard";
+import { SwearOath } from "./SwearOath";
 import { WarClock } from "./WarClock";
 import { WarHud } from "./WarHud";
 import { useCanvasStream } from "../hooks/useCanvasStream";
@@ -30,6 +31,8 @@ type LeaderboardToken = {
   colourSlot: number;
   owned: number;
   placed: number;
+  painters?: number;
+  sworn?: number;
 };
 
 const LEADERBOARD_POLL_MS = 2000;
@@ -54,6 +57,12 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
    * a column and this never applies.
    */
   const [railOpen, setRailOpen] = useState(false);
+  /** This painter's side, once the session answers. Null until then, and for a painter with none. */
+  const [allegiance, setAllegiance] = useState<{
+    warTokenId: string;
+    ticker: string | null;
+    sworn: boolean;
+  } | null>(null);
   const { image, version, applyLocal } = useCanvasStream(war.slug, layer);
   const [tokens, setTokens] = useState<RailToken[]>(initialTokens);
   const [selectedId, setSelectedId] = useState<string | null>(initialTokens[0]?.id ?? null);
@@ -86,9 +95,22 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
     let cancelled = false;
     fetch("/api/session")
       .then((response) => (response.ok ? response.json() : null))
-      .then((body: { cooldownUntil: string | null } | null) => {
-        if (!cancelled && body) setCooldownUntil(body.cooldownUntil);
-      })
+      .then(
+        (
+          body: {
+            cooldownUntil: string | null;
+            allegiance: { warTokenId: string; ticker: string | null; sworn: boolean } | null;
+          } | null,
+        ) => {
+          if (cancelled || !body) return;
+          setCooldownUntil(body.cooldownUntil);
+          setAllegiance(body.allegiance);
+          // A painter who already has a side has it preselected: the token
+          // rail is a selector, and offering a choice that the next paint
+          // would refuse is offering a trap.
+          if (body.allegiance) setSelectedId(body.allegiance.warTokenId);
+        },
+      )
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -110,6 +132,8 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
               name: token.name,
               colourSlot: token.colourSlot,
               owned: token.owned,
+              painters: token.painters ?? 0,
+              sworn: token.sworn ?? 0,
             })),
           );
         })
@@ -327,6 +351,20 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
           <section className="flex flex-col gap-1">
             <h2 className="section-label">Painting for</h2>
             <TokenRail tokens={tokens} selectedId={selectedId} onSelect={setSelectedId} />
+            {/* True for both castes, and it is the only sentence the design
+                sanctions about allegiance: never "permanent", never
+                "irrevocable". The recruit's lock is a cookie and copy
+                claiming otherwise would be the application lying about
+                itself. */}
+            {allegiance ? (
+              <p className="muted text-[12px]">You fight for one token this war.</p>
+            ) : null}
+            <SwearOath
+              warSlug={war.slug}
+              warTokenId={allegiance?.warTokenId ?? null}
+              ticker={allegiance?.ticker ?? null}
+              alreadySworn={allegiance?.sworn ?? false}
+            />
           </section>
 
           <section className="flex flex-col gap-1">

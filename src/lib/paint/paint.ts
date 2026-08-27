@@ -19,11 +19,20 @@ export type PaintFailure =
   | "out_of_bounds"
   | "unknown_token"
   | "unknown_colour"
+  | "wrong_allegiance"
   | "banned"
   | "cooldown";
 
 export type PaintResult =
-  | { ok: true; seq: number; idx: number; colourSlot: number; cooldownUntil: string }
+  | {
+      ok: true;
+      seq: number;
+      idx: number;
+      colourSlot: number;
+      cooldownUntil: string;
+      /** The token this painter now fights for, whether it was just decided or already was. */
+      allegianceTokenId: string;
+    }
   | { ok: false; reason: PaintFailure; message: string; retryAfterSeconds?: number };
 
 export type PaintInput = {
@@ -221,6 +230,47 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
       };
     }
 
+    // ALLEGIANCE. The first pixel of a war commits this painter to one token
+    // for the rest of it, and every pixel after that has to agree.
+    //
+    // Written as INSERT ... ON CONFLICT DO NOTHING RETURNING rather than
+    // SELECT-then-INSERT, because those two are a race: two paints arriving
+    // together would both find no row and both insert, and only the unique
+    // index would notice — as an error, on the paint that had done nothing
+    // wrong. One statement decides it, and the empty result IS the answer
+    // "somebody already did".
+    const claimed = await client.query<{ war_token_id: string }>(
+      `INSERT INTO war_painters (war_id, painter_key, war_token_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (war_id, painter_key) DO NOTHING
+       RETURNING war_token_id`,
+      [war.id, painterKey, tokenId],
+    );
+
+    let allegiance = claimed.rows[0]?.war_token_id;
+    if (!allegiance) {
+      const existing = await client.query<{ war_token_id: string }>(
+        `SELECT war_token_id FROM war_painters WHERE war_id = $1 AND painter_key = $2`,
+        [war.id, painterKey],
+      );
+      allegiance = existing.rows[0]?.war_token_id;
+    }
+
+    if (allegiance && allegiance !== tokenId) {
+      const sworn = await client.query<{ ticker: string }>(
+        `SELECT ticker FROM war_tokens WHERE id = $1`,
+        [allegiance],
+      );
+      return {
+        ok: false as const,
+        reason: "wrong_allegiance" as const,
+        // Names the side rather than scolding. And says "this war", never
+        // "permanent" — the lock is soft and copy claiming otherwise would
+        // be the application lying about itself.
+        message: `You fight for ${sworn.rows[0]?.ticker ?? "another token"} this war.`,
+      };
+    }
+
     // Always painter, then ip, then subnet. A fixed order means two concurrent
     // paints can never hold one key each and wait on the other. Each gate
     // carries its own wait — a painter cooldown and a subnet window are
@@ -289,6 +339,7 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
       idx,
       colourSlot,
       cooldownUntil: new Date(Date.now() + cooldown * 1000).toISOString(),
+      allegianceTokenId: allegiance ?? tokenId,
     };
   }).catch((error: unknown) => {
     if (error instanceof CooldownError) {

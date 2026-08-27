@@ -64,3 +64,33 @@ records something tells the attacker they exist.
 cluster on the same key, which is the only evidence that a longer term would
 do anything. `listBans` keeps expired rows for exactly that reason — a list
 that dropped them would make a second offence look like a first one.
+
+## Sworn holdings: verified once, at the oath
+
+**A wallet's holding is checked when it swears and never again. Selling
+afterwards does not revoke the badge. Whether that should change is the
+owner's open decision, to be taken after the first real war.**
+
+The oath is sworn with skin in the game and it is good for the war. Two
+alternatives were considered and both are worse today:
+
+**Re-verify on every paint** puts an RPC call in the hot path of the one
+action that has to stay free and fast. Painting is the volume, the volume is
+what a community's admission buys (DESIGN.md §1a), and taxing it to police a
+badge inverts the product.
+
+**Re-verify on a schedule** is a different product, not a setting. It means
+deciding what a lapsed oath looks like — does the badge vanish mid-war, does
+the painter get told, does their allegiance survive it — and every one of
+those is a question about how the game feels rather than about correctness.
+
+**What would justify revisiting it:** evidence of the specific abuse, which
+is somebody borrowing tokens to swear and returning them. That leaves a
+trace — a wallet sworn to a token it no longer holds — and the trace can be
+looked for with a query before any code is written for it. Nothing has been
+built to detect it because nothing has happened yet.
+
+**What is NOT written anywhere:** no copy says a badge is permanent, or that
+holdings are monitored, or that an oath can be lost. The sanctioned wording
+is the one the whole allegiance mechanic uses — *you fight for one token this
+war.*

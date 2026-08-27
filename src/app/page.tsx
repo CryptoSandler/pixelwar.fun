@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { armyCounts } from "../lib/paint/allegiance";
 import { activeTokens, currentWar } from "../lib/wars/lifecycle";
 import { WarView } from "../components/WarView";
 
@@ -33,6 +34,10 @@ export default async function Page() {
   }
 
   const tokens = await activeTokens(war.id);
+  // Read here rather than left at zero for a poll cycle: the sworn mark is a
+  // recruiting signal, and a scoreboard whose badges appear two seconds after
+  // the page does looks like a glitch on the first paint everybody sees.
+  const armies = await armyCounts(war.id);
 
   return (
     <WarView
@@ -51,6 +56,8 @@ export default async function Page() {
         name: token.name,
         colourSlot: token.colourSlot,
         owned: 0,
+        painters: armies.get(token.id)?.painters ?? 0,
+        sworn: armies.get(token.id)?.sworn ?? 0,
       }))}
     />
   );

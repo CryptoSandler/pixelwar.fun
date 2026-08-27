@@ -155,6 +155,26 @@ count, the verification has to span it. `pg_locks` once, a `curl` once, a log
 line once — each answers "at this instant", and the bug you are hunting
 usually lives between two instants.
 
+## A green run against a tree that no longer exists is not green
+
+The same lesson one level up, and it costs a suite rather than a query.
+
+A test run reads the working tree as it goes. Edit a file after the run
+starts and the result belongs to a tree that is part old and part new — and
+which part it tested depends on the order vitest happened to load files in.
+It reports green either way.
+
+**So a run that was overtaken by edits is killed and restarted, not
+believed.** That happened here twice in one session: a suite verifying a
+merge was still running while the next batch's files were being written, and
+another was overtaken by a change to a route one of its own tests imports.
+Seventeen minutes of re-running costs less than a green that means nothing.
+
+The practical rule that follows: **finish a unit, then verify it, then start
+the next one.** Overlapping the two feels faster and produces results nobody
+can stand behind. If a wait is genuinely dead time, spend it reading or
+planning — not editing the tree the verification is reading.
+
 # Every new module names its caller
 
 **A brief that creates a function, a job, or a route says who invokes it. If

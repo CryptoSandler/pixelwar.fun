@@ -1,5 +1,6 @@
 import { query } from "../../../lib/db";
 import { json } from "../../../lib/http";
+import { armyCounts } from "../../../lib/paint/allegiance";
 import { warBySlug } from "../../../lib/wars/lifecycle";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,13 @@ export async function GET(request: Request): Promise<Response> {
     [war.id],
   );
 
+  // TWO NUMBERS, NOT ONE, and the difference is the whole status ladder.
+  // `painters` is the army — the volume a community's admission actually buys.
+  // `sworn` is how many of them proved they hold the token, which is the
+  // credential the community itself issues and the reason a painter would go
+  // and buy one. See DESIGN.md §1a.
+  const armies = await armyCounts(war.id);
+
   return json(
     {
       tokens: rows.map((row) => ({
@@ -38,6 +46,8 @@ export async function GET(request: Request): Promise<Response> {
         colourSlot: row.colour_slot,
         owned: row.owned,
         placed: row.placed,
+        painters: armies.get(row.id)?.painters ?? 0,
+        sworn: armies.get(row.id)?.sworn ?? 0,
       })),
     },
     { headers: { "cache-control": "public, s-maxage=1, stale-while-revalidate=4" } },

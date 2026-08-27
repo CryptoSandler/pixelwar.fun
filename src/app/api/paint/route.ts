@@ -11,6 +11,10 @@ const STATUS: Record<string, number> = {
   banned: 403,
   unknown_token: 400,
   unknown_colour: 400,
+  // 409, not 400: the request is well-formed and the caller is not confused
+  // about the API — they are on the other side. A conflict is exactly what
+  // this is.
+  wrong_allegiance: 409,
   out_of_bounds: 400,
 };
 

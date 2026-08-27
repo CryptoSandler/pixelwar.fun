@@ -84,7 +84,7 @@ export function Scoreboard({
               aria-pressed={selected}
               className="score-row"
             >
-              <span className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5">
                 {/* I2: every chip carries the outline for the surface it is
                     drawn on. This one sits on a panel. Without it the white
                     token is invisible here and the black one nearly so. */}
@@ -98,6 +98,27 @@ export function Scoreboard({
                   }}
                 />
                 <span className="ticker">{token.ticker}</span>
+
+                {/*
+                  THE SWORN MARK, and it is the whole status ladder in one
+                  glyph. `sworn` counts painters who proved a wallet holding
+                  this token — a credential the community issues, never one
+                  sold here (DESIGN.md §1a). It is rendered as a count rather
+                  than a boolean because "nine holders are fighting for this"
+                  is the recruiting message; "someone did" is not.
+
+                  Not brass. The accent means an action a visitor can take
+                  (I5), and this is a fact about other people.
+                */}
+                {token.sworn > 0 ? (
+                  <span
+                    className="numeric shrink-0 px-1 text-[11px]"
+                    style={{ background: "var(--chrome-readout)" }}
+                    title={`${token.sworn} of ${token.painters} painters hold this token`}
+                  >
+                    ✦{token.sworn}
+                  </span>
+                ) : null}
               </span>
 
               {/* The race. `aria-hidden` because the bar is a second rendering
