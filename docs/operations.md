@@ -116,6 +116,16 @@ because no external scheduler could be relied on. What is affected is only
 the ALERT: an unmatched payment can sit past its 24-hour threshold before the
 red run that announces it actually happens.
 
+**A SECOND PASSENGER RIDES THE SAME CHANNEL, and it is more sensitive to the
+delay.** The board signal (below) reports on the same response, so **the
+detection latency for "something odd is on the board" is the job's cadence,
+which is hours.** That matters more than it does for payments: the scenario
+the board signal was built for is the first hour after an announcement, and
+an alert that arrives four hours later has missed it. This does not change
+what was built — it changes what the alert can be relied on for, which is
+"catch it eventually", not "catch it now". Somebody watching in the first hour
+is still the only thing that catches the first hour.
+
 **THE TRIGGER FOR REVISITING THIS, written down so nobody has to notice it
 twice:**
 
@@ -204,3 +214,47 @@ or merge. **Not** abandoning the gapless sequence, for the reason above.
 test. It is not the ceiling and was never the ceiling; it is headroom for the
 announcement spike, and an environment variable change needs a redeploy to
 take effect.
+
+## The board signal reports, and nothing acts on it
+
+**No threshold pauses a war, bans anybody, or slows a paint. The alert says
+"look"; a human decides.**
+
+The reason is not caution, it is that **a raid and an attack are the same
+shape.** A community coordinating on Telegram to fill a corner of the board
+produces exactly the signal an attacker produces — a burst of paints
+concentrated in one region — and that is the single behaviour this whole
+product exists to cause (DESIGN.md §1a). An automatic brake tuned to catch
+the attack fires on every successful launch, which is to say it punishes the
+case the product is for.
+
+The alert's WORDING follows from the same fact and is part of the design: it
+says the board is busy and names both possibilities, never "abuse". An
+operator primed to expect an attack bans somebody on their best day; an
+operator who learns the alert cries wolf ignores it on their worst.
+
+### The thresholds are initial values and are meant to be wrong
+
+| Setting | Default | What it means |
+| --- | --- | --- |
+| `ABUSE_WINDOW_MINUTES` | 10 | How far back the rate is measured |
+| `ABUSE_RATE_PER_MINUTE` | 120 | Board-wide paints per minute worth a look |
+| `ABUSE_CELL_PAINTS` | 60 | Paints inside one 10x10 cell worth a look |
+
+They are environment variables rather than constants for exactly one reason:
+**they are guesses and correcting them must cost a variable change, not a
+deploy.** The only rate data that existed when they were chosen came from a
+load test, which measured what the SYSTEM can do rather than what people do.
+
+Concentration is the more useful of the two. A busy war is paints everywhere;
+a picture is paints in one place, and whether the picture is a logo or a
+swastika is a question only eyes answer.
+
+**TRIGGER: the first real war recalibrates these numbers.** Watch what a
+legitimate raid actually produces, then set the thresholds above it. Until
+then, expect false alarms and treat each one as data rather than as a defect.
+
+**Parked, with a door: if practice shows abuse that cannot wait for a human,
+an automatic response becomes a future round WITH THAT DATA.** Not before —
+the argument above says any brake built today would fire on the good case,
+and only real numbers can show whether a brake exists that does not.

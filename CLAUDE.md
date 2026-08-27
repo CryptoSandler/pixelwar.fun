@@ -252,19 +252,41 @@ commits are made and possibly pushed, and the fix is a rebase.
    mechanism — a check that only runs at push time cannot tell you which of
    twenty commits went wrong or why, and by then the cheap fix is gone.
 
-## What is true in THIS repository, specifically
+## The identity must be LOCAL to the repository
 
-**The identity is set in `.git/config` directly, not only through the global
-`includeIf`.** Every process working in this directory picks it up
-unconditionally, including a subagent's, so the inheritance failure above
-cannot occur here as long as that stays true. Verified: 158 commits, all with
-the correct address as both author and committer.
+**Check that `user.name` and `user.email` are set in this repository's own
+`.git/config`, not merely resolved through the global `includeIf`. If either
+is empty locally, set it now.**
 
-**There is no pre-push hook here.** `.git/hooks` is not versioned, so a hook
-installed on one machine protects one machine and nobody else. The durable
-options are `core.hooksPath` pointing at a versioned directory, or accepting
-that `/cierre`'s author check is the only gate — which is what is true today.
-Say which it is rather than assuming a net that is not there.
+    git config --local user.name
+    git config --local user.email
+
+`--local` is the whole point: without it the command prints whatever the
+resolution chain produced, which is exactly the answer that looks fine in the
+parent process and is not there in the child's.
+
+**This is what separated the repository that was safe from the one that was
+not.** A value in `.git/config` is read by every process that touches the
+directory, subagents included, unconditionally. An `includeIf` is a
+*condition*, and a child process that does not resolve it the way the parent
+did falls back to whatever the global default is — which is the personal
+address. The include stays as a net; it is not the source.
+
+Set it, if it is missing, with:
+
+    git config --local user.name  "CryptoSandler"
+    git config --local user.email "294572464+CryptoSandler@users.noreply.github.com"
+
+**Verified here:** both are in `.git/config`, and every commit in the history
+carries the correct address as author and as committer.
+
+## There is no pre-push hook here
+
+`.git/hooks` is not versioned, so a hook installed on one machine protects one
+machine and nobody else. The durable options are `core.hooksPath` pointing at
+a versioned directory, or accepting that `/cierre`'s author check is the only
+gate — which is what is true today. Say which it is rather than assuming a net
+that is not there.
 
 # Every new module names its caller
 

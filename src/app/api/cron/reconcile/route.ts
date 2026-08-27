@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { json, NO_STORE } from "../../../../lib/http";
 import { expireStaleOrders } from "../../../../lib/payments/orders";
+import { currentAbuseSignal } from "../../../../lib/paint/abuse";
 import { unmatchedBacklog } from "../../../../lib/payments/orphans";
 import { recoverUnclaimedOrders } from "../../../../lib/payments/recover";
 
@@ -153,6 +154,12 @@ async function reconcile(request: Request): Promise<Response> {
   // opens is not an alert.
   const backlog = await unmatchedBacklog();
 
+  // "Something odd is happening on the board", carried on the same request
+  // for the same reason the backlog is: this is the one call that already
+  // runs on a schedule and already reaches a human when it fails. It reports
+  // and does not act — see `abuse.ts` on why nothing here can safely brake.
+  const board = await currentAbuseSignal();
+
   // Counts, not ids. An order id is the handle on somebody's payment, and
   // this response leaves the deployment for a CI log that is retained for
   // ninety days and, on a public repository, is world-readable. The numbers
@@ -169,6 +176,18 @@ async function reconcile(request: Request): Promise<Response> {
         oldestAgeHours: backlog.oldestAgeHours,
         stale: backlog.stale,
       },
+      // Rate and location only. No ids, no painter keys, no addresses — this
+      // body reaches a public CI log, and "who" is a question for /admin.
+      board: board
+        ? {
+            war: board.warSlug,
+            windowMinutes: board.windowMinutes,
+            paints: board.paints,
+            perMinute: board.perMinute,
+            hottest: board.hottest,
+            worthALook: board.worthALook,
+          }
+        : null,
     },
     { headers: NO_STORE },
   );

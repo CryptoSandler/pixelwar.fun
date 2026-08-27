@@ -135,7 +135,8 @@ jobs:
           # into a plausible-looking zero. The body must PARSE and must carry
           # BOTH counts as numbers before this step is allowed to succeed.
           if ! jq -e '(.recovered | type) == "number" and (.filed | type) == "number"
-                       and (.backlog.open | type) == "number"' \
+                       and (.backlog.open | type) == "number"
+                       and (has("board"))' \
                   response.json > /dev/null 2>&1; then
             echo "::error::${status}, but the body is not the counts JSON this endpoint returns. Nothing here proves a reconcile pass ran — check the deployment above."
             exit 1
@@ -191,4 +192,28 @@ jobs:
 
           if [ "${open}" != "0" ]; then
             echo "::warning::${open} unmatched payment(s) are open; the oldest has waited ${age}h."
+          fi
+
+          # THE BOARD, and the wording is deliberate.
+          #
+          # This cannot tell a raid from an attack, because THEY ARE THE SAME
+          # SHAPE: a community coordinating on Telegram to fill a corner
+          # produces exactly the signal an attacker produces, and it is the
+          # single behaviour this product exists to cause. So the message says
+          # "look", never "abuse" — an operator primed to expect an attack
+          # bans somebody on their best day, and an operator who learns the
+          # alert cries wolf ignores it on their worst.
+          #
+          # Nothing here acts. No threshold pauses a war, bans anybody, or
+          # slows a paint. See docs/operations.md.
+          look=$(jq -r '.board.worthALook // false' response.json)
+          if [ "${look}" = "true" ]; then
+            war=$(jq -r '.board.war' response.json)
+            rate=$(jq -r '.board.perMinute' response.json)
+            win=$(jq -r '.board.windowMinutes' response.json)
+            hx=$(jq -r '.board.hottest.x // "-"' response.json)
+            hy=$(jq -r '.board.hottest.y // "-"' response.json)
+            hn=$(jq -r '.board.hottest.paints // 0' response.json)
+            echo "::error::Board \"${war}\" is busy: ${rate} paints/min over ${win}m, and ${hn} of them inside the 10x10 cell at (${hx},${hy}). This is what a raid looks like AND what an attack looks like. Open the board and decide: https://pixelwar.fun"
+            exit 1
           fi

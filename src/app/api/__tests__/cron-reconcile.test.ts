@@ -115,6 +115,12 @@ describe("POST /api/cron/reconcile", () => {
       recovered: 2,
       filed: 1,
       backlog: { open: 0, oldestAgeHours: 0, stale: false },
+      // Null because no war is live in this test. That it is PRESENT and null
+      // rather than absent is the contract reconcile.yml checks with
+      // `has("board")` — a missing key and a null one are different answers,
+      // and the workflow must be able to tell "no war" from "the endpoint
+      // stopped reporting".
+      board: null,
     });
     // The response goes into a CI log. No order id may travel with it.
     expect(body).not.toContain("order-a");
