@@ -94,3 +94,43 @@ built to detect it because nothing has happened yet.
 holdings are monitored, or that an oath can be lost. The sanctioned wording
 is the one the whole allegiance mechanic uses — *you fight for one token this
 war.*
+
+## The backlog alert travels on a late channel
+
+**Parked, deliberately. Nothing is built for this now.**
+
+The unmatched-payment alert reaches a person by failing
+`.github/workflows/reconcile.yml`, which emails the repository owner. That is
+the right mechanism — it needs no new service, no new secret and no
+integration to keep alive — and it rides a channel that is measurably late.
+
+GitHub's scheduler deprioritises low-activity repositories. Measured here:
+two consecutive scheduled runs 2h29m apart against a five-minute schedule,
+and after the interval was changed to hourly, a gap of more than four hours.
+The daily Vercel cron in `vercel.json` fires the same endpoint, so there are
+two paths; neither is punctual.
+
+**What this does and does not break.** Reconciliation itself does not depend
+on either — that moved to the request path in `lazy-recovery.ts` precisely
+because no external scheduler could be relied on. What is affected is only
+the ALERT: an unmatched payment can sit past its 24-hour threshold before the
+red run that announces it actually happens.
+
+**THE TRIGGER FOR REVISITING THIS, written down so nobody has to notice it
+twice:**
+
+- the first real orphaned payment that waits more than 24 hours, or
+- a war with paid entries running.
+
+Either one, and the channel gets looked at.
+
+**Options already known, so the next round starts from here rather than from
+scratch:**
+
+1. **An external punctual cron** hitting `/api/cron/reconcile` — the endpoint
+   already accepts a bearer token, so this is configuration rather than code.
+2. **Accept the daily sweep's latency** and say so in the operator's
+   expectations, which is honest and costs nothing.
+
+Both are decisions about how fast a human must hear, and that number is not
+knowable until real money has been through the queue once.
