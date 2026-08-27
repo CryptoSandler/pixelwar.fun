@@ -219,6 +219,53 @@ sentences are hard-wrapped, and asserting the raw file means asserting where
 somebody's editor broke the line — a test that fails on a reflow is a test
 people learn to edit rather than read.
 
+# Commit identity, and the process that does not inherit it
+
+**Every author line must read
+`CryptoSandler <294572464+CryptoSandler@users.noreply.github.com>`.** The
+`noreply` address is the point: a personal email in the log is a leak that
+survives in public history, and rewriting it after a push means rewriting
+published commits.
+
+**THE FAILURE MODE, AND IT IS NOT WHERE IT LOOKS.** In a sibling repository
+every commit carrying the wrong address turned out to be a SUBAGENT's — the
+orchestrator's commits in the same working tree were correct at the same
+moment. The cause is that a subagent runs in its own process, and that
+process does not necessarily resolve the global config's `includeIf` the way
+the parent did. So the identity is right for the session and wrong for the
+work it delegated, in one tree, at one time.
+
+That makes "check at the close" the wrong place to look, because by then the
+commits are made and possibly pushed, and the fix is a rebase.
+
+## The double defence
+
+1. **Check each subagent's range the moment it delivers**, not at the close:
+
+       git log --format='%an <%ae>' <base>..<head>
+
+   A wrong line here costs `git commit --amend --reset-author` or a short
+   rebase. The same line found after a push costs a force-push over published
+   history.
+
+2. **The pre-push author gate stays as the last net.** It is a net, not the
+   mechanism — a check that only runs at push time cannot tell you which of
+   twenty commits went wrong or why, and by then the cheap fix is gone.
+
+## What is true in THIS repository, specifically
+
+**The identity is set in `.git/config` directly, not only through the global
+`includeIf`.** Every process working in this directory picks it up
+unconditionally, including a subagent's, so the inheritance failure above
+cannot occur here as long as that stays true. Verified: 158 commits, all with
+the correct address as both author and committer.
+
+**There is no pre-push hook here.** `.git/hooks` is not versioned, so a hook
+installed on one machine protects one machine and nobody else. The durable
+options are `core.hooksPath` pointing at a versioned directory, or accepting
+that `/cierre`'s author check is the only gate — which is what is true today.
+Say which it is rather than assuming a net that is not there.
+
 # Every new module names its caller
 
 **A brief that creates a function, a job, or a route says who invokes it. If
