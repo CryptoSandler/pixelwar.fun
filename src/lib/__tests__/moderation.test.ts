@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { makeToken, makeWar, paintRaw } from "../canvas/__tests__/fixtures";
+import { makeToken, makeWar, paintRaw, registerPainter } from "../canvas/__tests__/fixtures";
 import { execute, pool, query, queryOne } from "../db";
 import { isBanned } from "../paint/bans";
 import {
@@ -13,6 +13,21 @@ import {
 } from "../moderation";
 import { paintPixel } from "../paint/paint";
 import { warById } from "../wars/lifecycle";
+
+/**
+ * Every painter these tests use, registered before each one.
+ *
+ * Painting has needed a registered wallet since migration 012, and these are
+ * unit tests of everything EXCEPT that gate — so the world they arrange is
+ * one where the gate is satisfied. A key missing from this list fails loudly
+ * with `not_registered` rather than quietly passing.
+ */
+const PAINTERS = ["other", "painter-mod", "x"];
+
+beforeEach(async () => {
+  for (const key of PAINTERS) await registerPainter(key);
+});
+
 
 /**
  * Moderation, which is the only part of the launch plan that cannot be added

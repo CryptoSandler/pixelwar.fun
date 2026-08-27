@@ -4,6 +4,7 @@ import { transaction } from "../db";
 import type { War } from "../wars/lifecycle";
 import { PALETTE_SIZE } from "../wars/palette";
 import { isBanned } from "./bans";
+import { paintingWallet } from "./registration";
 
 /**
  * One pixel, one transaction.
@@ -21,6 +22,7 @@ export type PaintFailure =
   | "unknown_colour"
   | "wrong_allegiance"
   | "banned"
+  | "not_registered"
   | "cooldown";
 
 export type PaintResult =
@@ -211,6 +213,31 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
         ok: false as const,
         reason: "banned" as const,
         message: "You cannot paint in this war.",
+      };
+    }
+
+    // THE REGISTRATION GATE. After the ban and before anything is written.
+    //
+    // AFTER THE BAN on purpose: a banned caller is told they cannot paint,
+    // not invited to go and pay for the privilege first. Taking a fee from
+    // somebody the board has already refused would be taking money for
+    // nothing, and it would also be a way for a ban to generate revenue,
+    // which is a thing nobody should ever be able to say about this.
+    //
+    // INSIDE THE TRANSACTION for the reason at the top of this file: a check
+    // made outside is a check a second request races past. It reads one row
+    // and it happens before the `last_seq` lock, so it costs nothing at the
+    // ceiling the load test found.
+    const wallet = await paintingWallet(client, painterKey);
+    if (!wallet) {
+      return {
+        ok: false as const,
+        reason: "not_registered" as const,
+        // The screen turns this into the registration flow. The message says
+        // what is missing and not what it costs — the price lives in one
+        // place, and a stale price quoted from here would be a lie about
+        // money.
+        message: "Painting needs a registered wallet.",
       };
     }
 

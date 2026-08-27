@@ -1,0 +1,22 @@
+-- A challenge that is not about a war.
+--
+-- Migration 012 made a registration permanent per wallet and a LINK
+-- disposable per browser. Re-linking — a cleared cookie, a second device —
+-- has to be proved, because no payment happens the second time and the
+-- painter key on its own is just a string the caller sends. The proof is a
+-- wallet signature, which is the machinery migration 010 already built.
+--
+-- What did not fit was the war. `oath_nonces.war_id` was NOT NULL because an
+-- oath is sworn IN a war and a signature from one war must not swear in the
+-- next. A link belongs to no war: it says which browser holds a registration,
+-- and a registration is not per-war. Scoping it to whichever war happened to
+-- be live would tie a war-less fact to a war — and it would break outright in
+-- the case that is easiest to reach, a war that ends while the panel is open,
+-- where there is no live war to name and nothing about linking has changed.
+--
+-- So NULL means "not about a war", and `spendNonce` compares the column
+-- against the caller's expectation rather than ignoring it: a link nonce
+-- cannot be spent as an oath and an oath nonce cannot be spent as a link.
+-- The alternative was a second nonce table with the same five columns, the
+-- same expiry index and the same one-use UPDATE, kept in step by hand.
+ALTER TABLE oath_nonces ALTER COLUMN war_id DROP NOT NULL;

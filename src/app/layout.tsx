@@ -100,7 +100,7 @@ export const metadata: Metadata = {
    * promises it. See CLAUDE.md, "Decisions with a door".
    */
   description:
-    "A timed war on a shared 200×200 canvas. Communities compete for territory; anyone can paint.",
+    "A timed war on a shared 200×200 canvas. Communities compete for territory; painting takes a one-time registration.",
   /**
    * Layer 2 of the pre-launch noindex. See `src/app/robots.ts` for why there
    * are three of these and what each one covers; the short version is that

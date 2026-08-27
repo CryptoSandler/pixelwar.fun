@@ -1,4 +1,4 @@
-import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import type { Connection } from "@solana/web3.js";
 
 /**
@@ -183,6 +183,49 @@ export async function buildPaymentTransaction(
     transaction.add(createRecipientAccountInstruction(params));
   }
   transaction.add(transferCheckedInstruction(params));
+  transaction.feePayer = params.payer;
+
+  try {
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+    transaction.recentBlockhash = blockhash;
+    transaction.lastValidBlockHeight = lastValidBlockHeight;
+  } catch {
+    return { ok: false, message: "The Solana network did not answer. Try again in a moment." };
+  }
+
+  return { ok: true, transaction };
+}
+
+/**
+ * The registration fee: lamports, straight from the payer to the receiving
+ * wallet.
+ *
+ * A NATIVE TRANSFER AND NOT A TOKEN ONE, so none of the machinery above
+ * applies — no associated accounts to derive, none to create, no mint to
+ * check. `SystemProgram.transfer` from web3.js rather than the hand-written
+ * layout the SPL instructions needed, because there is no dependency to save
+ * here: web3.js is already what builds and sends every transaction on this
+ * screen.
+ *
+ * NO REFERENCE ACCOUNT, which is the real difference from a checkout. An
+ * entry payment has to be findable later by a recovery pass that only knows
+ * the order — hence the reference key. A registration is claimed by the payer
+ * handing us the signature, and if they never do, `registrations` simply has
+ * no row: the wallet can pay again another day, and the only thing lost is
+ * a fee somebody paid and did not claim. That case is filed by hand like any
+ * other unmatched payment, and it is the reason the fee is small.
+ */
+export async function buildSolTransfer(
+  connection: Connection,
+  params: { payer: PublicKey; recipient: PublicKey; lamports: bigint },
+): Promise<BuildResult> {
+  const transaction = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: params.payer,
+      toPubkey: params.recipient,
+      lamports: params.lamports,
+    }),
+  );
   transaction.feePayer = params.payer;
 
   try {

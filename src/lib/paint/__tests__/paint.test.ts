@@ -2,8 +2,23 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { execute, query } from "../../db";
 import { warById } from "../../wars/lifecycle";
-import { makeToken, makeWar } from "../../canvas/__tests__/fixtures";
+import { makeToken, makeWar, registerPainter } from "../../canvas/__tests__/fixtures";
 import { paintPixel } from "../paint";
+
+/**
+ * Every painter these tests use, registered before each one.
+ *
+ * Painting has needed a registered wallet since migration 012, and these are
+ * unit tests of everything EXCEPT that gate — so the world they arrange is
+ * one where the gate is satisfied. A key missing from this list fails loudly
+ * with `not_registered` rather than quietly passing.
+ */
+const PAINTERS = ["a-brand-new-painter", "painter-a", "painter-b"];
+
+beforeEach(async () => {
+  for (const key of PAINTERS) await registerPainter(key);
+});
+
 
 /**
  * The painter's identity keys, plus a colour to paint in.
@@ -173,6 +188,10 @@ describe("paintPixel", () => {
     const war = await makeWar({ width: 32, height: 32 });
     const token = await makeToken(war.id, 5);
 
+    // The eight painters below are made up on the spot, so they are not in
+    // PAINTERS and have to be registered here.
+    for (let i = 0; i < 8; i++) await registerPainter(`painter-${i}`);
+
     // Eight, not twenty: the pool is ten clients and every paint holds one for
     // the length of a transaction that serialises on the wars row. Twenty
     // concurrent callers starve the pool and fail on pg's own connect timeout,
@@ -298,6 +317,8 @@ describe("paintPixel", () => {
       try {
         const war = await makeWar({ width: 32, height: 32, cooldownSeconds: 5 });
         const token = await makeToken(war.id, 5);
+
+        for (let i = 0; i < 5; i++) await registerPainter(`painter-${i}`);
 
         const results = [];
         for (let i = 0; i < 5; i++) {

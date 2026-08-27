@@ -7,6 +7,8 @@ import { PaintButton } from "./PaintButton";
 import { ActivityFeed, type FeedEvent } from "./ActivityFeed";
 import type { RailToken } from "./TokenRail";
 import { Scoreboard } from "./Scoreboard";
+import type { ProxyCluster } from "../lib/payments/cluster";
+import { Register } from "./Register";
 import { leaderOf } from "../lib/canvas/standings";
 import { SwearOath } from "./SwearOath";
 import { WarClock } from "./WarClock";
@@ -44,7 +46,24 @@ const LEADERBOARD_POLL_MS = 2000;
  * here. Everything that draws or ticks is delegated to a component that
  * does only that one thing.
  */
-export function WarView({ war, tokens: initialTokens }: { war: WarSummary; tokens: RailToken[] }) {
+export function WarView({
+  war,
+  tokens: initialTokens,
+  registration,
+}: {
+  war: WarSummary;
+  tokens: RailToken[];
+  /**
+   * What registering costs and where it is paid, from the server.
+   *
+   * THE CLUSTER ARRIVES AS A NAME, never as a URL: the browser only ever
+   * talks to `/api/rpc` and cannot see which chain sits behind it, so the
+   * classification is the server's and the disclosure on the fee panel is
+   * built from this. Passing the endpoint down to label a screen would undo
+   * the whole point of that proxy from the other side.
+   */
+  registration: { payTo: string | null; feeLamports: string; proxyCluster: ProxyCluster };
+}) {
   /**
    * Which board is on screen: what was painted, or who owns it.
    *
@@ -93,6 +112,17 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   const [warNotStarted, setWarNotStarted] = useState(war.status === "scheduled");
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The wallet this browser paints as, once the session answers. Null both
+   * for "not registered" and for "not asked yet", which is why the panel
+   * below opens on a REFUSED PAINT rather than on this being null: the board
+   * belongs to everybody who loads the page, and a registration wall in front
+   * of a war nobody has seen yet is the landing page `/` deliberately does
+   * not have.
+   */
+  const [wallet, setWallet] = useState<string | null>(null);
+  const [registering, setRegistering] = useState(false);
+
   // Pick up the painter cookie and any cooldown already in progress.
   useEffect(() => {
     let cancelled = false;
@@ -103,11 +133,13 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
           body: {
             cooldownUntil: string | null;
             allegiance: { warTokenId: string; ticker: string | null; sworn: boolean } | null;
+            registration: { wallet: string | null };
           } | null,
         ) => {
           if (cancelled || !body) return;
           setCooldownUntil(body.cooldownUntil);
           setAllegiance(body.allegiance);
+          setWallet(body.registration?.wallet ?? null);
           // A painter who already has a side has it preselected: the token
           // rail is a selector, and offering a choice that the next paint
           // would refuse is offering a trap.
@@ -218,6 +250,15 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
             .catch(() => null);
           if (body?.reason === "war_not_started") setWarNotStarted(true);
           else setWarEnded(true);
+          return;
+        }
+
+        // 402: this painter has not registered. The board they were just
+        // clicking on stays exactly where it is; the panel opens beside it.
+        // A pixel is the moment somebody decided to take part, and it is the
+        // only honest moment to ask them to register.
+        if (response.status === 402) {
+          setRegistering(true);
           return;
         }
 
@@ -394,6 +435,26 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
               alreadySworn={allegiance?.sworn ?? false}
             />
           </section>
+
+          {registering && !wallet ? (
+            <section className="flex flex-col gap-1">
+              <h2 className="section-label">Register</h2>
+              <Register
+                payTo={registration.payTo}
+                feeLamports={registration.feeLamports}
+                proxyCluster={registration.proxyCluster}
+                onRegistered={(registered) => {
+                  setWallet(registered);
+                  setRegistering(false);
+                  // Says nothing about the pixel that was refused: it was not
+                  // painted, and the painter is holding the cursor over the
+                  // square they want. Painting it for them would put a pixel
+                  // down that nobody clicked twice on.
+                  setError(null);
+                }}
+              />
+            </section>
+          ) : null}
 
           <section className="flex flex-col gap-1">
             <h2 className="section-label">Live</h2>

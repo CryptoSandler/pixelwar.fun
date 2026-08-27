@@ -152,3 +152,65 @@ export function formatUsdc(baseUnits: bigint): string {
   const decimals = fraction.length < 2 ? fraction.padEnd(2, "0") : fraction;
   return `${whole}.${decimals}`;
 }
+
+/**
+ * Lamports in one SOL. Not a setting.
+ */
+export const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+/**
+ * What registering to paint costs, denominated in SOL.
+ *
+ * IN SOL AND NOT IN DOLLARS, and that was a deliberate refusal rather than a
+ * shortcut. A dollar price charged in SOL needs a live SOL/USD rate, which
+ * means an external price feed in the money path — with its own outage ("can
+ * nobody register while the feed is down?"), its own staleness window, and
+ * its own manipulation surface — to collect the equivalent of fifty cents.
+ * The USDC checkout dodges the entire problem by using a dollar-pegged token;
+ * this path cannot, so it does not pretend to. When SOL moves far enough to
+ * matter, the operator moves this number, which is the same gesture the
+ * amount already required.
+ *
+ * ZERO IS A VALID VALUE AND IT IS THE DOOR. Set it to 0 and registration
+ * becomes a wallet signature with no payment — the whole fee switches off
+ * with a variable and no deploy. It exists so a launch that shows the fee is
+ * killing the volume can stop charging in a minute instead of a release.
+ *
+ * NEVER CALL IT A NETWORK FEE in copy. The network's own fee is under a
+ * thousandth of a cent; this one is ours, and saying otherwise would be a
+ * lie about who is being paid.
+ */
+export function registrationFeeLamports(): bigint {
+  const raw = process.env.REGISTRATION_FEE_SOL?.trim();
+  const sol = raw === undefined || raw === "" ? 0.003 : Number(raw);
+  if (!Number.isFinite(sol) || sol < 0) {
+    // A malformed value falls back to the default rather than to zero: a typo
+    // that silently switches the fee off is a typo that costs money quietly,
+    // and one that silently raises it is worse.
+    console.error(`REGISTRATION_FEE_SOL is not a non-negative number: ${raw}. Using 0.003.`);
+    return (LAMPORTS_PER_SOL * 3n) / 1000n;
+  }
+  // Rounded to whole lamports, which is what the chain moves.
+  return BigInt(Math.round(sol * Number(LAMPORTS_PER_SOL)));
+}
+
+/**
+ * Lamports as a SOL amount somebody can read.
+ *
+ * Trailing zeros trimmed, but never below two decimals, so the number on
+ * screen looks like a price rather than like a float. The exact value is
+ * kept: this quotes what a wallet is about to be asked for, and a rounded
+ * quote next to an unrounded wallet dialog is the kind of small disagreement
+ * that makes a payer close the tab.
+ */
+export function formatSol(lamports: bigint): string {
+  const whole = lamports / LAMPORTS_PER_SOL;
+  const fraction = (lamports % LAMPORTS_PER_SOL).toString().padStart(9, "0").replace(/0+$/, "");
+  const decimals = fraction.length < 2 ? fraction.padEnd(2, "0") : fraction;
+  return `${whole}.${decimals}`;
+}
+
+/** True when the operator has switched the fee off. */
+export function registrationIsFree(): boolean {
+  return registrationFeeLamports() === 0n;
+}

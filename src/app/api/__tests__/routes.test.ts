@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeToken, makeWar } from "../../../lib/canvas/__tests__/fixtures";
+import { makeToken, makeWar, registeredPainter } from "../../../lib/canvas/__tests__/fixtures";
 import { GET as canvasRoute } from "../canvas/route";
 import { GET as diffRoute } from "../diff/route";
 import { GET as leaderboardRoute } from "../leaderboard/route";
@@ -30,6 +30,22 @@ function post(path: string, body: unknown, cookie?: string, ip = "1.2.3.4"): Req
   });
 }
 
+/**
+ * A cookie whose painter has registered a wallet.
+ *
+ * Painting has needed one since migration 012, and a cookieless POST mints a
+ * painter key nobody has registered — so every test below that expects a
+ * paint to SUCCEED sends one of these. A fresh one per call, because two
+ * paints inside one cooldown have to come from two people.
+ *
+ * Tests that expect a paint to be REFUSED for some other reason deliberately
+ * do not send one: those refusals all happen before the registration gate,
+ * and a test that satisfied the gate anyway would stop proving that.
+ */
+async function painter(): Promise<string> {
+  return (await registeredPainter()).cookie;
+}
+
 /** Pulls the painter cookie out of a Set-Cookie header, for the next request. */
 function cookieFrom(response: Response): string {
   const header = response.headers.get("set-cookie")!;
@@ -56,7 +72,17 @@ describe("GET /api/session", () => {
     // when this response grew an `allegiance` field, and a body that gains
     // fields nobody asserted is how a cookie-identified endpoint starts
     // returning more about a person than anybody decided it should.
-    expect(await response.json()).toEqual({ cooldownUntil: null, allegiance: null });
+    expect(await response.json()).toEqual({
+      cooldownUntil: null,
+      allegiance: null,
+      // Grew when painting started needing a registration. The wallet is null
+      // for a browser that has not linked one, and the fee is the number the
+      // screen quotes — read from configuration on every call so a deployment
+      // that changes it does not have to redeploy the client. This is the
+      // default, with REGISTRATION_FEE_SOL unset; setting it in a local env
+      // file is what makes this line fail.
+      registration: { wallet: null, feeLamports: "3000000", free: false },
+    });
   });
 
   it("does not replace a cookie the caller already has", async () => {
@@ -80,7 +106,9 @@ describe("GET /api/canvas", () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 7);
 
-    const painted = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 1, tokenId: token, colourSlot: PAINT_COLOUR }));
+    const painted = await paintRoute(
+      post("/api/paint", { warSlug: war.slug, x: 1, y: 1, tokenId: token, colourSlot: PAINT_COLOUR }, await painter()),
+    );
     expect(painted.status).toBe(200);
 
     const response = await canvasRoute(get(`/api/canvas?war=${war.slug}`));
@@ -102,7 +130,9 @@ describe("GET /api/diff", () => {
   it("returns changes after the given sequence", { timeout: 20_000 }, async () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 3);
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }));
+    await paintRoute(
+      post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }, await painter()),
+    );
 
     // The default layer is the PAINTED board, so the pair carries the colour
     // the caller chose (7), not the token's own slot (3).
@@ -118,7 +148,7 @@ describe("GET /api/diff", () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 3);
     await paintRoute(
-      post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }),
+      post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }, await painter()),
     );
 
     const response = await diffRoute(get(`/api/diff?war=${war.slug}&since=0&layer=token`));
@@ -146,7 +176,9 @@ describe("POST /api/paint", () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 2);
 
-    const response = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 3, y: 4, tokenId: token, colourSlot: PAINT_COLOUR }));
+    const response = await paintRoute(
+      post("/api/paint", { warSlug: war.slug, x: 3, y: 4, tokenId: token, colourSlot: PAINT_COLOUR }, await painter()),
+    );
     expect(response.status).toBe(200);
     // The colour that comes back is the one the caller ASKED for, not the
     // one its token happens to hold (2). That difference is the whole change.
@@ -157,8 +189,11 @@ describe("POST /api/paint", () => {
     const war = await makeWar({ cooldownSeconds: 30 });
     const token = await makeToken(war.id, 2);
 
-    const first = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }));
-    const cookie = cookieFrom(first);
+    const cookie = await painter();
+    const first = await paintRoute(
+      post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }, cookie),
+    );
+    expect(first.status).toBe(200);
     const second = await paintRoute(
       post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }, cookie),
     );
@@ -213,6 +248,7 @@ describe("POST /api/paint", () => {
           "x-forwarded-for": "1.2.3.4",
           "content-type": "application/json",
           origin: "https://pixelwar.fun",
+          cookie: await painter(),
         },
         body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }),
       }),
@@ -264,9 +300,9 @@ describe("GET /api/leaderboard", () => {
     // different caller — which is exactly what the product requires of a real
     // community. A war with no cooldown is not a thing that can exist: the
     // schema pins cooldown_seconds to 1..3600.
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: blue, colourSlot: PAINT_COLOUR }, undefined, "1.2.3.4"));
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: blue, colourSlot: PAINT_COLOUR }, undefined, "1.2.3.5"));
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 2, y: 0, tokenId: red, colourSlot: PAINT_COLOUR }, undefined, "1.2.3.6"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: blue, colourSlot: PAINT_COLOUR }, await painter(), "1.2.3.4"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: blue, colourSlot: PAINT_COLOUR }, await painter(), "1.2.3.5"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 2, y: 0, tokenId: red, colourSlot: PAINT_COLOUR }, await painter(), "1.2.3.6"));
 
     const body = await (await leaderboardRoute(get(`/api/leaderboard?war=${war.slug}`))).json();
     expect(body.tokens.map((t: { colourSlot: number }) => t.colourSlot)).toEqual([13, 1]);

@@ -1,11 +1,26 @@
 import { generateKeyPairSync, randomBytes, sign as signEd25519 } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { base58Encode } from "../../base58";
-import { makeToken, makeWar } from "../../canvas/__tests__/fixtures";
+import { makeToken, makeWar, registerPainter } from "../../canvas/__tests__/fixtures";
 import { execute, queryOne } from "../../db";
 import { allegianceOf } from "../allegiance";
 import { issueOathChallenge, swearOath, verifyWalletSignature } from "../oath";
 import { paintPixel } from "../paint";
+
+/**
+ * Every painter these tests use, registered before each one.
+ *
+ * Painting has needed a registered wallet since migration 012, and these are
+ * unit tests of everything EXCEPT that gate — so the world they arrange is
+ * one where the gate is satisfied. A key missing from this list fails loudly
+ * with `not_registered` rather than quietly passing.
+ */
+const PAINTERS = ["sw1", "sw2", "sw2b", "sw3", "sw4", "sw5", "sw6", "sw7", "sw8", "sw8-other-cookie"];
+
+beforeEach(async () => {
+  for (const key of PAINTERS) await registerPainter(key);
+});
+
 
 /**
  * The oath, which is the one part of allegiance built as security.

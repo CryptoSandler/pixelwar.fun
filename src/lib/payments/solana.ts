@@ -100,6 +100,15 @@ export type SolanaTransaction = {
     err?: unknown;
     preTokenBalances?: TokenBalance[];
     postTokenBalances?: TokenBalance[];
+    /**
+     * Native lamport balances, POSITIONAL: entry N belongs to
+     * `accountKeys[N]`. Unlike the token balances above they carry no owner,
+     * and the fee payer's entry includes the network fee. Read by
+     * `sol-transfer.ts`, which exists because that difference makes them a
+     * different verification rather than a parameter of this one.
+     */
+    preBalances?: number[];
+    postBalances?: number[];
   } | null;
 } | null;
 

@@ -43,49 +43,83 @@ in direct competition with twenty-four saturated colours and lose.
 
 ## 1a. What the product sells
 
-**Pixelwar does not charge the painter. It turns painters into buyers of the
-token. What a community buys with its admission is demand, not pixels. Every
-future monetisation proposal is judged against this sentence.**
+**Painting pixelwar requires a paid registration: one wallet, one small SOL
+transfer, once, for every war there will ever be. What a community buys with
+its admission is still demand — the registration is what makes a painter a
+person rather than a cleared cookie.**
 
-This is a norm, not a preference, and it is written down so the next argument
-cites it instead of remembering it.
+**This section was rewritten on 2026-08-26 by the owner's decision, and it
+supersedes the version before it.** That version said "Pixelwar does not
+charge the painter", refused a per-person checkout outright, and was the
+conclusion of an adversarial round. The round is not disowned here: its
+argument is recorded below, because the reason a norm was overturned is worth
+as much as the norm.
 
-**Why it holds.** On Solana the credential of loyalty already exists and this
-product does not issue it: it is holding the bag. A per-person entry fee is
-therefore not sacrifice for the tribe — it is a cover charge for the venue,
-and it *competes with what the tribe is asking of the same wallet*. No
-community leader running a raid wants their soldiers spending on the arena
-instead of on the ticker. Charging the painter builds a second status ladder,
-bought here, that cannibalises the one bought in the token — and a cult has
-exactly one healthy hierarchy.
+**What the round argued, and it still stands as far as it goes.** On Solana
+the credential of loyalty already exists and this product does not issue it:
+it is holding the bag. A per-person fee is not sacrifice for the tribe, it is
+a cover charge for the venue, and it competes with what the tribe is asking of
+the same wallet. No community leader running a raid wants their soldiers
+spending on the arena instead of on the ticker.
 
-The corollary is the design rule that falls out of it: **status is earned in
-the token and displayed here, never sold here.** Two castes, and the rung
-between them is bought from the community, not from us.
+**Why the owner decided otherwise.** Three things, two of which the round had
+weighed and one it had not:
+
+1. **A small SOL fee to the creator is an established Solana pattern.** It is
+   read as ritual, not as a toll — the gesture is familiar to everybody this
+   product is for, and the round scored it against a general audience's
+   instincts rather than against this one's.
+2. **The audience being judged already holds a funded wallet.** A cover charge
+   is a barrier to somebody who has to go and get money. It is not one to
+   somebody who is holding the ticker being fought over.
+3. **The fee is real anti-sybil, and nothing else here was.** Without it,
+   thirty painters is thirty cleared cookies. With it, thirty painters is
+   thirty funded wallets. That is the function the round did not price, and it
+   is why the fee is a mechanic and not just revenue.
+
+**What the fee buys, and what it does not.** It buys the identity — permanent,
+per wallet, across every war. It does not buy status, a colour, a place on the
+board, or anything a leaderboard can see. The two castes are unchanged, and
+the rung between them is still bought from the community rather than from us.
 
 | Caste | How you get it | What it costs |
 | --- | --- | --- |
-| Recruit | Paint. The first pixel commits you to one token for that war. | Nothing |
+| Registered | Pay once, ever. Then paint. The first pixel commits you to one token for that war. | The registration fee, once |
 | Sworn | Connect a wallet, prove you hold the token. | Nothing — the token you already own |
 
-**Loyalty is enforced socially, not cryptographically.** A recruit's commitment
-lives in a cookie and is trivially discarded, and that is accepted rather than
-fought: the cost of switching sides is abandoning your own record and starting
-at zero, which is how loyalty is actually enforced in the communities this is
-built for. The sworn caste's commitment binds to a wallet, which is not
-discardable — so the people who care most get the hard version, and nobody
-pays for a lock the product does not need.
+**The price is denominated in SOL and set by configuration, and zero is a
+valid value.** `REGISTRATION_FEE_SOL=0` turns registration into a wallet
+signature with no payment, in a variable, without a deploy. It exists because
+a launch that shows the fee is killing the volume has to be able to stop
+charging in a minute. The path is the same one either way: with the fee off
+the code still requires a wallet, so a deployment that switches it off is not
+running an untested variant of the paint path. See CLAUDE.md, "Decisions with
+a door".
+
+**Never call it a network fee.** Not in copy, not in a tooltip, not in an
+error. Solana's own fee on this transfer is under a thousandth of a cent and
+this one is ours. "Registration", "one-time registration", or the number
+itself — those are the words.
+
+**The board is not behind the fee.** `/` renders the war to everybody who
+loads it, and the registration panel opens on a REFUSED PAINT, never before.
+A pixel is the moment somebody decided to take part, and it is the only
+honest moment to ask. A wall in front of a war nobody has seen yet is the
+landing page `/` deliberately does not have.
+
+**Loyalty is still enforced socially, not cryptographically.** A recruit's
+commitment lives in a cookie and is trivially discarded, and that is accepted
+rather than fought: the cost of switching sides is abandoning your own record
+and starting at zero. What the registration changes is the price of a NEW
+identity, not the strength of an old one's lock.
 
 **Copy consequence, and it is absolute.** Nothing in this application promises
-a price, promises "free forever", promises "no wallet ever", or calls an
-allegiance "permanent" or "irrevocable" — the recruit's lock is soft and copy
-saying otherwise would be a lie the product tells about itself. The allowed
-form is the one that is true either way: *you fight for one token this war.*
-See CLAUDE.md, "Decisions with a door".
-
-**A per-person checkout is refused, not deferred by accident.** The reasoning
-above is the reason. It may be revisited with data from a war that actually
-happened; until then there is no line of copy, no schema and no route for it.
+"free forever", promises "no wallet ever", or calls an allegiance "permanent"
+or "irrevocable" — the recruit's lock is soft and copy saying otherwise would
+be a lie the product tells about itself. The registration itself IS permanent
+per wallet and copy may say so, because a row in `registrations` never
+expires. The allowed form for allegiance is the one true either way: *you
+fight for one token this war.*
 
 ## 2. Colour
 

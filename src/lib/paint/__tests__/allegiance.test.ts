@@ -1,8 +1,23 @@
-import { describe, expect, it } from "vitest";
-import { makeToken, makeWar } from "../../canvas/__tests__/fixtures";
+import { beforeEach, describe, expect, it } from "vitest";
+import { makeToken, makeWar, registerPainter } from "../../canvas/__tests__/fixtures";
 import { query } from "../../db";
 import { allegianceOf, armyCounts } from "../allegiance";
 import { paintPixel } from "../paint";
+
+/**
+ * Every painter these tests use, registered before each one.
+ *
+ * Painting has needed a registered wallet since migration 012, and these are
+ * unit tests of everything EXCEPT that gate — so the world they arrange is
+ * one where the gate is satisfied. A key missing from this list fails loudly
+ * with `not_registered` rather than quietly passing.
+ */
+const PAINTERS = ["a1", "a2", "b1", "p1", "p2", "p3", "p4", "p5", "p6"];
+
+beforeEach(async () => {
+  for (const key of PAINTERS) await registerPainter(key);
+});
+
 
 /**
  * A painter fights for one token per war.

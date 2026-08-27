@@ -1,4 +1,6 @@
 import { armyCounts } from "../lib/paint/allegiance";
+import { classifyEndpoints } from "../lib/payments/cluster";
+import { paymentWallet, registrationFeeLamports, solanaRpcUrls } from "../lib/payments/config";
 import { queryOne } from "../lib/db";
 import { activeTokens, currentWar, lastFinishedWar } from "../lib/wars/lifecycle";
 import { Intermission, type FinishedWar } from "../components/Intermission";
@@ -42,8 +44,19 @@ export default async function Page() {
     const tokens = await activeTokens(war.id);
     const armies = await armyCounts(war.id);
 
+    const receiving = paymentWallet();
+
     return (
       <WarView
+        // Assembled on the server, and the cluster arrives as a NAME. The
+        // browser only talks to /api/rpc, so it cannot see which chain is
+        // behind it; classifying here is the only place the answer exists,
+        // and passing the endpoint itself would undo what that proxy is for.
+        registration={{
+          payTo: receiving.ok ? receiving.address : null,
+          feeLamports: registrationFeeLamports().toString(),
+          proxyCluster: classifyEndpoints(solanaRpcUrls()),
+        }}
         war={{
           slug: war.slug,
           title: war.title,

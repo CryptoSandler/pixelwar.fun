@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { makeToken, makeWar } from "../../../lib/canvas/__tests__/fixtures";
+import { beforeEach, describe, expect, it } from "vitest";
+import { makeToken, makeWar, registerPainter } from "../../../lib/canvas/__tests__/fixtures";
 import { paintPixel } from "../../../lib/paint/paint";
 
 /**
@@ -20,6 +20,14 @@ import { paintPixel } from "../../../lib/paint/paint";
  */
 
 const KEYS = { painterKey: "painter-a", ipHash: "ip-a", subnetKey: "subnet-a" };
+
+// Painting has needed a registered wallet since migration 012. These tests
+// are about what the leaderboard counts, so they arrange a world where the
+// gate is already satisfied.
+beforeEach(async () => {
+  await registerPainter("painter-a");
+  await registerPainter("painter-b");
+});
 
 async function leaderboard(slug: string) {
   const { GET } = await import("../leaderboard/route");

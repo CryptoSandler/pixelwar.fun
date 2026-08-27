@@ -120,13 +120,19 @@ export type OathResult =
  *
  * Returns the stored message, because that is the only thing the signature is
  * checked against.
+ *
+ * `warId` is null for a challenge that belongs to no war — the link
+ * challenge migration 013 opened the column for. The comparison is strict in
+ * both directions, so a link nonce cannot be spent as an oath and an oath
+ * nonce cannot be spent as a link. Exported for that one caller; the policy
+ * around each kind of challenge lives with the thing it grants.
  */
-async function spendNonce(
+export async function spendNonce(
   nonce: string,
-  warId: string,
+  warId: string | null,
 ): Promise<{ ok: true; message: string } | { ok: false; reason: OathFailure }> {
   const existing = await queryOne<{
-    war_id: string;
+    war_id: string | null;
     message: string;
     expired: boolean;
     spent: boolean;
@@ -137,7 +143,7 @@ async function spendNonce(
   );
 
   if (!existing) return { ok: false, reason: "unknown_nonce" };
-  if (existing.war_id !== warId) return { ok: false, reason: "wrong_war" };
+  if ((existing.war_id ?? null) !== warId) return { ok: false, reason: "wrong_war" };
   if (existing.spent) return { ok: false, reason: "nonce_spent" };
   if (existing.expired) return { ok: false, reason: "nonce_expired" };
 

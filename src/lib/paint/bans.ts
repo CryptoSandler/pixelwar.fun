@@ -14,10 +14,14 @@ import type { PoolClient } from "pg";
  * later and paying for it under the lock.
  *
  * The wallet key is the only one of the four that cannot be shed. A painter
- * key is a cookie and an address rotates; a sworn wallet is bound by
- * `war_painters_wallet` and getting another costs another token purchase.
- * That is why this exists — see DESIGN.md §1a on why the sybil price is the
- * token and not a fee.
+ * key is a cookie and an address rotates; a wallet is bound either by
+ * `war_painters_wallet`, where getting another costs another token purchase,
+ * or by `painter_wallets`, where getting another costs another registration
+ * fee. Both are looked at, because they are different wallets on the same
+ * person: a sworn holder's wallet need not be the one that registered.
+ *
+ * The UNION rather than two subqueries because a ban on either is a ban. It
+ * still costs one round trip and it still happens before the lock.
  */
 export async function isBanned(
   client: PoolClient,
@@ -29,9 +33,12 @@ export async function isBanned(
         AND ( (key_type = 'painter' AND key = $1)
            OR (key_type = 'ip'      AND key = $2)
            OR (key_type = 'subnet'  AND key = $3)
-           OR (key_type = 'wallet'  AND key = (
+           OR (key_type = 'wallet'  AND key IN (
                  SELECT wallet FROM war_painters
                   WHERE war_id = $4 AND painter_key = $1 AND wallet IS NOT NULL
+                 UNION
+                 SELECT wallet FROM painter_wallets
+                  WHERE painter_key = $1
                )) )
       LIMIT 1`,
     [keys.painterKey, keys.ipHash, keys.subnetKey, keys.warId],

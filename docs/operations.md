@@ -65,24 +65,35 @@ cluster on the same key, which is the only evidence that a longer term would
 do anything. `listBans` keeps expired rows for exactly that reason — a list
 that dropped them would make a second offence look like a first one.
 
-## The sybil price is the token, not a fee
+## The sybil price: the registration first, the token second
 
-**Painting is not charged for, and the identity that is expensive to replace
-is the sworn wallet.** A proposal to charge a small registration fee as an
-anti-sybil measure was weighed and refused on this ground: the expensive
-identity already exists, thirty sworn identities cost thirty token purchases,
-and that money goes to the community rather than to us — which is DESIGN.md
-§1a working as written rather than an exception to it.
+**SUPERSEDED IN PART, 2026-08-26.** This section used to say "painting is not
+charged for, and the identity that is expensive to replace is the sworn
+wallet". The first half is no longer true: the owner decided painting requires
+a paid registration, and DESIGN.md §1a carries the decision and the argument
+it overturned. The rest of this section stands, so it is corrected rather than
+deleted — what it says about MODERATION was never about the fee.
 
-What was missing was that moderation could not name a wallet. `bans` accepted
-`painter`, `ip` and `subnet`, and every one of those is shed by clearing a
-cookie or changing network. Migration 011 adds `wallet`, and a banned wallet
-cannot swear itself back in — without that the ban would be a ceremony, since
-the offender re-swears the same wallet and recovers the badge.
+**There are now two expensive identities, and they are different wallets.** A
+registration is one funded wallet per painter, paid to us. A sworn wallet is a
+token purchase, paid to the community. Neither is shed by clearing a cookie,
+which is the whole point of both.
 
-**Reach for the wallet key first when it exists.** It is the only one that
-costs something to replace. Most painters are recruits with no wallet, and
-that is the volume rather than a lesser state.
+`bans` accepts `wallet` since migration 011, and `isBanned` resolves BOTH: the
+sworn wallet in `war_painters` and the registered wallet in `painter_wallets`,
+in one subquery, before the paint transaction takes its row lock. A ban that
+only bit one of them would be a ceremony — the offender re-links or re-swears
+the other and carries on.
+
+**Reach for the wallet key first when it exists**, and it now almost always
+exists: a painter who has painted has registered. It is the only key that
+costs money to replace.
+
+**What a ban does NOT do is refund.** A banned wallet's registration stays in
+the table and stays paid. That is deliberate and it is also the uncomfortable
+part: the operator is banning somebody who paid. Two consequences worth
+holding in view — bans should name a reason, and the registration fee stays
+small enough that a ban is not a financial event.
 
 ## Sworn holdings: verified once, at the oath
 
@@ -302,3 +313,43 @@ from inside the repository — a script that reads `DATABASE_URL` and writes is
 indistinguishable from the application doing its job. The discipline that
 covers it is the one used for every destructive operation in this project:
 assert the endpoint by id before writing, and count rows before and after.
+
+## Registration: what is open, what was refused, what to watch
+
+**The fee is `REGISTRATION_FEE_SOL`, in SOL, default 0.003, and `0` switches
+it off without a deploy.** That door is in DESIGN.md §1a and in
+`.env.example`; it is the first thing to reach for if the fee is visibly
+killing volume at launch. Changing it does not change the code path — a
+wallet is still required at zero — so switching it off is not a jump into an
+untested variant.
+
+**A dollar price was refused, not forgotten.** Charging "about fifty cents"
+means a live SOL/USD feed inside the money path: an outage question ("can
+nobody register while the feed is down?"), a staleness window, and a
+manipulation surface, all to collect fifty cents. The USDC checkout avoids
+the entire problem by being denominated in a dollar-pegged token; this path
+cannot be, so it is denominated in SOL and the operator moves the number when
+SOL moves. Revisit only if the fee's real value drifts far enough that the
+number needs changing more often than a person wants to change it.
+
+**An unclaimed payment is not recovered automatically, and that is the
+trade.** An entry order carries a reference account so a recovery pass can
+find a payment nobody confirmed; a registration has no order to find, so a
+transfer whose payer closes the tab before `/api/register` answers leaves a
+payment with no row. The payer can retry with the same signature — the route
+is idempotent and will register them — and if they never come back it is a
+hand-filed case like any other unmatched payment. **This is the reason the fee
+is small.** If registrations start appearing in support, the fix is a
+reference account and a recovery pass, not a bigger apology.
+
+**A wallet that already registered and pays again is refused, and its money is
+NOT taken as a fee.** `already_registered` says so in the message. Watch for
+it: repeated instances mean the screen is failing to tell somebody they are
+already registered, which is a UI bug wearing a payments costume.
+
+**What to watch in the first war.** How many people who click a pixel go on to
+register (the panel opens on a refused paint, so a refusal is the denominator
+and a registration is the numerator); how many register but never paint; and
+whether `verification_attempts` shows callers hammering `/api/register` with
+signatures that verify to nothing — that counter is shared with the checkout,
+so an attack on one spends the other's allowance.

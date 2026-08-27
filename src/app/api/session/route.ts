@@ -1,6 +1,7 @@
 import { identify, json, NO_STORE } from "../../../lib/http";
 import { queryOne } from "../../../lib/db";
 import { allegianceOf } from "../../../lib/paint/allegiance";
+import { linkedWallet, registrationCost } from "../../../lib/paint/registration";
 import { currentWar } from "../../../lib/wars/lifecycle";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +9,24 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   const caller = identify(request);
   if (!caller.ok) return json({ error: caller.message }, { status: 400, headers: NO_STORE });
+
+  /**
+   * Whether this browser may paint, and what registering costs if not.
+   *
+   * ANSWERED WHETHER OR NOT A WAR IS RUNNING, unlike everything else here: a
+   * registration is not per-war, and the intermission is a perfectly good
+   * moment to get set up for the next one.
+   *
+   * THE WALLET IS RETURNED HERE AND DELIBERATELY NOT BELOW, which is a real
+   * difference and not an inconsistency. `sworn` is a badge — the screen
+   * needs the fact, never the address. This one is an identity the person is
+   * currently acting as, and the screen compares it against the wallet the
+   * browser has connected: without it, somebody linked to a wallet they no
+   * longer use has no way to see that, and re-linking is exactly the fix
+   * they cannot find.
+   */
+  const wallet = await linkedWallet(caller.painterKey);
+  const cost = registrationCost();
 
   const war = await currentWar();
   let cooldownUntil: string | null = null;
@@ -46,7 +65,15 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   return json(
-    { cooldownUntil, allegiance },
+    {
+      cooldownUntil,
+      allegiance,
+      registration: {
+        wallet,
+        feeLamports: cost.lamports.toString(),
+        free: cost.free,
+      },
+    },
     { headers: { ...NO_STORE, ...(caller.setCookie ? { "set-cookie": caller.setCookie } : {}) } },
   );
 }

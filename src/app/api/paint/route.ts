@@ -9,6 +9,11 @@ const STATUS: Record<string, number> = {
   war_not_started: 409,
   cooldown: 429,
   banned: 403,
+  // 402, not 403: the caller is not forbidden, they have not registered yet,
+  // and the screen turns this exact status into the registration flow. The
+  // ban above stays 403 so the two can never be confused — one is a door
+  // that opens by paying and the other is not.
+  not_registered: 402,
   unknown_token: 400,
   unknown_colour: 400,
   // 409, not 400: the request is well-formed and the caller is not confused

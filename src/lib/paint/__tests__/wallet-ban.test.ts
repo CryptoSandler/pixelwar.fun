@@ -1,10 +1,25 @@
 import { generateKeyPairSync, sign as signEd25519 } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { base58Encode } from "../../base58";
-import { makeToken, makeWar } from "../../canvas/__tests__/fixtures";
+import { makeToken, makeWar, registerPainter } from "../../canvas/__tests__/fixtures";
 import { inspectPixel, banKey } from "../../moderation";
 import { issueOathChallenge, swearOath } from "../oath";
 import { paintPixel } from "../paint";
+
+/**
+ * Every painter these tests use, registered before each one.
+ *
+ * Painting has needed a registered wallet since migration 012, and these are
+ * unit tests of everything EXCEPT that gate — so the world they arrange is
+ * one where the gate is satisfied. A key missing from this list fails loudly
+ * with `not_registered` rather than quietly passing.
+ */
+const PAINTERS = ["wb1", "wb2", "wb3", "wb4", "wb5", "wb6"];
+
+beforeEach(async () => {
+  for (const key of PAINTERS) await registerPainter(key);
+});
+
 
 /**
  * A wallet can be banned, and that is the only ban that cannot be shed.
