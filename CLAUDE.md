@@ -35,6 +35,87 @@ Four things are never simplified away, at any level: input validation at trust b
 security, error handling that prevents data loss, and accessibility basics. Laziness governs
 how much code gets written. It never governs what that code is allowed to skip.
 
+# Before building: one round with no code
+
+**A change to the data model, or a product decision of any size, gets an
+adversarial round before a line is written. Not a plan — an argument.** Three
+things are asked for explicitly, and the round is not closed until all three
+have answers:
+
+1. **The strongest case AGAINST.** Not caveats, not risks-and-mitigations. The
+   version of "this is the wrong thing to build" that would actually change
+   the decision if it were true.
+2. **The collision with the real code.** What survives, what gets thrown away,
+   and — the one that pays for the round — *what does the repo already know
+   that the discussion does not.*
+3. **An honest recommendation, with standing permission to say the idea is
+   wrong.** A round that can only produce "yes, and here is how" is a round
+   that produced nothing.
+
+**Why this is a rule and not a habit.** The third question is the one that
+keeps earning it. "Free palette" arrived as a data-model rewrite and the repo
+already had `pixels.war_token_id` from migration 001 — attribution was never
+derived, only the colour was, so the change was one column instead of a new
+model. Nothing in the brief could have known that; twenty minutes of reading
+did. In the other direction, a batch brief specified the accent as
+`#B87A1E` — a value `chrome.ts` had already recorded as superseded for failing
+WCAG AA on its own button at 4.31:1. Building it first and discovering that
+second would have shipped a measured defect that this repo has a whole
+invariant suite to prevent.
+
+The round costs a message. Not having it costs a batch.
+
+# Every verdict cites the written norm
+
+**A gate, a critique or a design verdict is made against the normative
+document OPEN — DESIGN.md, this file, the migration, the spec — never against
+a memory of what it says. A verdict that cannot quote the line has not earned
+the right to be a verdict yet: read the document first.**
+
+This cuts both ways, and the second way is the one people miss.
+
+**A citation can be stale.** DESIGN.md §1 and §2 said "twenty-four
+communities each hold one colour" and "they belong to tokens" for a full batch
+after that stopped being true. Anybody quoting those lines in good faith would
+have been quoting a document that no longer described the product. So the rule
+is not "the document wins" — it is *open the document, and check it against
+the code it claims to govern.* Where they disagree, one of them is a bug, and
+saying which is the verdict.
+
+**Memory reliably produces a plausible wrong number.** The brass above is the
+clean example: `#B87A1E` was real, was written down somewhere, and was wrong,
+and no amount of confidence would have surfaced the 4.31:1 that decided it.
+The number is in `chrome.ts` and takes one grep.
+
+# Decisions with a door
+
+**When the owner is not convinced of a one-way decision — a promise in copy, a
+prohibition, a guarantee, anything the product cannot walk back — do not
+decide it for them.** Three moves, in order:
+
+1. **Find the neutral wording**: text that neither promises nor forbids, and
+   is honest in both futures.
+2. **Build the mechanism that fits both.** The code should not need rewriting
+   whichever way the policy lands.
+3. **Record the policy as the owner's open decision**, somewhere an operator
+   reads — not buried in a commit message.
+
+**The irreversible sentence gets written once, and only when it is asked for
+explicitly.**
+
+The token admission cap is the worked example. The ceiling in the schema is
+255, which is arithmetic and not taste: the territory layer names a pixel's
+owner in one byte and reserves 0 for unpainted. The *policy* — keep wars at 24
+or fewer while the palette has 24 colours, so no two tokens fly the same flag
+— lives in `docs/operations.md` and on the admin screen beside the input.
+
+Putting 24 in a `CHECK` would have been the door slammed: a limit imposed by
+the length of a colour list, frozen into the database, changeable only by
+migration, and unreadable afterwards as to whether it was a decision or an
+accident. It had been an accident for the entire life of the project until
+migration 008 removed it. A rule an operator can read and break is a rule that
+can be revisited; a constraint is a rule that has to be excavated.
+
 # Every new module names its caller
 
 **A brief that creates a function, a job, or a route says who invokes it. If
