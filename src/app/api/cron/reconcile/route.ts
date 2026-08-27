@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { json, NO_STORE } from "../../../../lib/http";
 import { expireStaleOrders } from "../../../../lib/payments/orders";
+import { unmatchedBacklog } from "../../../../lib/payments/orphans";
 import { recoverUnclaimedOrders } from "../../../../lib/payments/recover";
 
 export const dynamic = "force-dynamic";
@@ -144,12 +145,31 @@ async function reconcile(request: Request): Promise<Response> {
 
   const { recovered, filed } = await recoverUnclaimedOrders();
 
+  // THE PILE, not just this pass's flow. `filed` counts what THIS run could
+  // not settle; a payment filed a week ago is in neither number and has been
+  // in neither number every run since. Reporting the backlog here is what
+  // lets the scheduled caller shout about it — see reconcile.yml, which
+  // fails the job rather than warning, because a warning in a log nobody
+  // opens is not an alert.
+  const backlog = await unmatchedBacklog();
+
   // Counts, not ids. An order id is the handle on somebody's payment, and
   // this response leaves the deployment for a CI log that is retained for
   // ninety days and, on a public repository, is world-readable. The numbers
   // are what a schedule needs to know; the ids are in the database.
   return json(
-    { recovered: recovered.length, filed: filed.length },
+    {
+      recovered: recovered.length,
+      filed: filed.length,
+      // Counts and an age, never ids — this body reaches a CI log retained
+      // for ninety days and world-readable on a public repository, and an
+      // order id is the handle on somebody's payment.
+      backlog: {
+        open: backlog.open,
+        oldestAgeHours: backlog.oldestAgeHours,
+        stale: backlog.stale,
+      },
+    },
     { headers: NO_STORE },
   );
 }

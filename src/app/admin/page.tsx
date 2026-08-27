@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AdminSignOut } from "../../components/AdminSignOut";
 import { Cabinet } from "../../components/Cabinet";
 import { adminSessionLabel } from "../../lib/admin";
+import { unmatchedBacklog } from "../../lib/payments/orphans";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,11 @@ export default async function AdminPage({
   const error = (await searchParams).error;
 
   if (label) {
+    // On the link, not behind it. An operator who opens this page should not
+    // have to click through to learn there is a queue — the whole failure
+    // this batch is about is that the only way to find out was to go and
+    // look.
+    const backlog = await unmatchedBacklog();
     return (
       <Cabinet label="Admin">
         <section className="panel bevel flex flex-col gap-3 p-4">
@@ -38,9 +44,17 @@ export default async function AdminPage({
           <p className="muted text-[13px]">
             Operator <span className="numeric">{label}</span>.
           </p>
+          {backlog.stale ? (
+            <p role="status" className="readout bevel-in px-3 py-1.5 text-[13px]">
+              The oldest unmatched payment has waited{" "}
+              <span className="numeric">{backlog.oldestAgeHours}h</span>. That is somebody&apos;s
+              money credited to nobody.
+            </p>
+          ) : null}
           <div className="flex flex-wrap items-center gap-3">
             <Link href="/admin/orphans" className="btn-primary px-4 py-2">
               Unmatched payments
+              {backlog.open > 0 ? <span className="numeric"> ({backlog.open})</span> : null}
             </Link>
             <Link href="/admin/wars" className="btn-secondary px-4 py-2">
               Wars

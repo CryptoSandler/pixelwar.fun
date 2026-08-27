@@ -1,4 +1,4 @@
-import { query } from "../db";
+import { query, queryOne } from "../db";
 import { formatUsdc } from "./config";
 
 /**
@@ -191,4 +191,63 @@ export async function assignableOrders(limit = 100): Promise<AssignableOrder[]> 
     priceUsd: row.amount_usd,
     status: row.status,
   }));
+}
+
+/**
+ * How long an unmatched payment may sit before the deployment shouts.
+ *
+ * A day. An unmatched payment is somebody's real money, sitting in our
+ * wallet, credited to nobody — `already_settled` in particular means the
+ * payer is owed a refund and does not know it. A human has to look, and a
+ * threshold measured in days would be measuring how long we are comfortable
+ * holding money that is not ours.
+ */
+export const UNMATCHED_ALERT_AGE_HOURS = 24;
+
+export type UnmatchedBacklog = {
+  /** Filed and still nobody's — neither applied nor discarded. */
+  open: number;
+  /** When the oldest open one was filed, or null when there are none. */
+  oldestFiledAt: Date | null;
+  /** Whole hours the oldest has been waiting. 0 when there are none. */
+  oldestAgeHours: number;
+  /** True when the oldest has waited longer than a person should take. */
+  stale: boolean;
+};
+
+/**
+ * The pile, rather than the flow.
+ *
+ * WHY THIS EXISTS AND WHAT WAS MISSING. `reconcile.yml` has warned since it
+ * was written when a pass FILES something — and that is a flow measurement.
+ * A payment filed on Monday produces one warning on Monday and silence
+ * forever after. Nothing anywhere reported that a pile was growing, so the
+ * only way to learn about an unresolved refund was for somebody to open
+ * `/admin/orphans` and count, which is exactly the thing nobody does until
+ * they already suspect.
+ *
+ * Two numbers, because they answer different questions: how many are waiting,
+ * and how long the worst of them has waited. A single count says nothing
+ * about urgency — ten filed this morning is a busy day, one filed a week ago
+ * is a person who has been ignored.
+ */
+export async function unmatchedBacklog(): Promise<UnmatchedBacklog> {
+  const row = await queryOne<{ open: string; oldest: Date | null }>(
+    `SELECT count(*) AS open, min(created_at) AS oldest
+       FROM unmatched_payments
+      WHERE status = 'open'`,
+  );
+
+  const open = Number(row?.open ?? 0);
+  const oldestFiledAt = row?.oldest ?? null;
+  const oldestAgeHours = oldestFiledAt
+    ? Math.floor((Date.now() - oldestFiledAt.getTime()) / 3_600_000)
+    : 0;
+
+  return {
+    open,
+    oldestFiledAt,
+    oldestAgeHours,
+    stale: open > 0 && oldestAgeHours >= UNMATCHED_ALERT_AGE_HOURS,
+  };
 }

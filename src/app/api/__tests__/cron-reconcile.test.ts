@@ -104,7 +104,18 @@ describe("POST /api/cron/reconcile", () => {
 
     expect(response.status).toBe(200);
     expect(recover).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(body)).toEqual({ recovered: 2, filed: 1 });
+    // Exhaustive, and it stays exhaustive because this body leaves the
+    // deployment for a CI log that is retained for ninety days and is
+    // world-readable on a public repository. A field appearing here that
+    // nobody asserted is how an order id — the handle on somebody's payment
+    // — ends up published. `toEqual` is what noticed the backlog counts
+    // arriving; the counts are fine, and the next addition gets the same
+    // scrutiny.
+    expect(JSON.parse(body)).toEqual({
+      recovered: 2,
+      filed: 1,
+      backlog: { open: 0, oldestAgeHours: 0, stale: false },
+    });
     // The response goes into a CI log. No order id may travel with it.
     expect(body).not.toContain("order-a");
     expect(body).not.toContain("order-c");

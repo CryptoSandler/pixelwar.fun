@@ -134,7 +134,8 @@ jobs:
           # which passed silently while `// 0` quietly turned a missing count
           # into a plausible-looking zero. The body must PARSE and must carry
           # BOTH counts as numbers before this step is allowed to succeed.
-          if ! jq -e '(.recovered | type) == "number" and (.filed | type) == "number"' \
+          if ! jq -e '(.recovered | type) == "number" and (.filed | type) == "number"
+                       and (.backlog.open | type) == "number"' \
                   response.json > /dev/null 2>&1; then
             echo "::error::${status}, but the body is not the counts JSON this endpoint returns. Nothing here proves a reconcile pass ran — check the deployment above."
             exit 1
@@ -157,4 +158,37 @@ jobs:
 
           if [ "${filed}" != "0" ]; then
             echo "::warning::${filed} payment(s) could not be settled automatically and are filed as unmatched. They need a human."
+          fi
+
+          # THE BACKLOG, WHICH IS THE PART A WARNING CANNOT CARRY.
+          #
+          # `filed` above counts what THIS pass could not settle. A payment
+          # filed last Monday is not in it, was not in Tuesday's, and will not
+          # be in any future one — so for as long as this workflow only
+          # reported flow, an unresolved refund produced exactly one line, on
+          # one day, in a log nobody opens afterwards.
+          #
+          # The endpoint now reports the pile as well. Anything open is worth
+          # saying; anything open for more than a day FAILS the job, and that
+          # is the whole mechanism: a red run emails the repository owner. No
+          # new service, no new secret, no integration to keep alive — the
+          # alerting channel is the one this repository already has, and the
+          # difference between a warning and a failure is whether it reaches
+          # somebody who is not looking.
+          open=$(jq -r '.backlog.open // 0' response.json)
+          age=$(jq -r '.backlog.oldestAgeHours // 0' response.json)
+          stale=$(jq -r '.backlog.stale // false' response.json)
+
+          {
+            echo "| Unmatched, still open | ${open} |"
+            echo "| Oldest, in hours | ${age} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${stale}" = "true" ]; then
+            echo "::error::${open} unmatched payment(s) are open and the oldest has waited ${age}h. That is somebody's money sitting in our wallet, credited to nobody. Work the queue at /admin/orphans."
+            exit 1
+          fi
+
+          if [ "${open}" != "0" ]; then
+            echo "::warning::${open} unmatched payment(s) are open; the oldest has waited ${age}h."
           fi
