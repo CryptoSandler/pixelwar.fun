@@ -29,10 +29,16 @@ export async function GET(request: Request): Promise<Response> {
       "x-canvas-height": String(war.height),
       "x-canvas-layer": layer,
       // "ended" is not actually forever: an operator can extend a war after
-      // the fact, and a later batch changes what this endpoint returns for
-      // one. A year-long immutable response cannot be recalled once a client
-      // has cached it, so an ended board gets a short cache instead of a
+      // the fact. That used to be a possibility this comment anticipated;
+      // `reviveWar` in lifecycle.ts is the transition that makes it real, so
+      // the sixty seconds below is now the only thing standing between a
+      // revived war and a client showing a board that stopped changing.
+      //
+      // A year-long immutable response cannot be recalled once a client has
+      // cached it, so an ended board gets a short cache instead of a
       // permanent one — long enough to matter, short enough to recover from.
+      // Raising it is the change that needs an argument; lowering it is
+      // always safe. `canvas-cache.test.ts` holds the ceiling.
       "cache-control":
         war.status === "ended"
           ? "public, max-age=60"

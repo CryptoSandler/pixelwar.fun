@@ -121,6 +121,55 @@ export async function advanceWar(war: War): Promise<War> {
   return war;
 }
 
+export type ReviveResult =
+  | { ok: true; war: War }
+  | { ok: false; reason: "not_ended" | "ends_in_the_past" };
+
+/**
+ * Brings an ended war back, with a new deadline. The third transition.
+ *
+ * WHY IT LIVES HERE. `advanceWar` covers `scheduled -> live` and
+ * `live -> ended` and there is no path back — so extending a war that has
+ * already run out has, until now, been impossible without an UPDATE typed
+ * somewhere that is not a state machine. Migration 004's own comment has
+ * assumed this exists since it was written ("an operator can extend a war
+ * after the fact"); it simply never did. It is written next to the other two
+ * so the three transitions can be read together, and so nothing is tempted
+ * to reach for a bare UPDATE in a route again.
+ *
+ * A NEW DEADLINE IN THE PAST IS REFUSED, and the reason is not tidiness:
+ *
+ * - It is not an extension, it is a typo or a timezone.
+ * - Allowing it produces a war that flips straight back to `ended` on the
+ *   next request, which looks like a bug to everybody watching and rewrites
+ *   `ended_at` for nothing.
+ * - **No capability is lost.** Setting a live war's deadline to the past IS
+ *   "end it now", and that already exists with its own name and a typed
+ *   confirmation — `endWarNow`, the kill switch. Two routes to one action,
+ *   one deliberate and one accidental, is how a war gets switched off by
+ *   mistake.
+ *
+ * `ended_at` is cleared, because it means "when this war finished" and this
+ * war has not.
+ */
+export async function reviveWar(warId: string, endsAt: Date): Promise<ReviveResult> {
+  const war = await warById(warId);
+  if (!war) return { ok: false, reason: "not_ended" };
+  if (war.status !== "ended") return { ok: false, reason: "not_ended" };
+  if (endsAt.getTime() <= Date.now()) return { ok: false, reason: "ends_in_the_past" };
+
+  // Guarded on the status it expects, like the other two: two operators
+  // reviving at once produce one winner and one no-op.
+  const revived = await execute(
+    `UPDATE wars SET status = 'live', ends_at = $2, ended_at = NULL
+      WHERE id = $1 AND status = 'ended'`,
+    [warId, endsAt],
+  );
+  if (revived === 0) return { ok: false, reason: "not_ended" };
+
+  return { ok: true, war: (await warById(warId))! };
+}
+
 /**
  * The war the home page shows: the one that is running, or the one about to.
  *

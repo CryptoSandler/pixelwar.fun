@@ -175,6 +175,50 @@ the next one.** Overlapping the two feels faster and produces results nobody
 can stand behind. If a wait is genuinely dead time, spend it reading or
 planning — not editing the tree the verification is reading.
 
+# A status is never an input
+
+**When a state machine derives a status from data, no endpoint and no form
+accepts that status from a caller. They move the data; the machine decides the
+status.**
+
+`advanceWar` turns a scheduled war live at `starts_at` and a live war ended at
+`ends_at`, on its own, with guards on the transitions. So the admin's "start
+now" is `starts_at = now()` and nothing else — the status follows. A control
+that took a status would be offering an operator a way to contradict the
+machine, and the first thing anybody does with such a control is create a
+live war whose start has not arrived: a row no transition can produce and
+every reader has to special-case forever.
+
+The corollary, and the reason this is a rule rather than a preference: when a
+transition genuinely does not exist, **write the transition**, next to the
+others, with the same guards. Do not reach for a bare UPDATE in a route.
+Reviving an ended war was missing for the whole life of the project and the
+temptation was a one-line UPDATE in an admin handler; it is `reviveWar` in
+`lifecycle.ts` instead, where the other two live and where the next person
+looking for "what states can this be in" will find it.
+
+# A defended number keeps its reason in the same file
+
+**A magic number that a test protects also carries, at the site of the
+decision, the sentence explaining why it is that number. The test asserts the
+sentence is still there.**
+
+`/api/canvas` caches an ended war's board for sixty seconds, and that ceiling
+is the only thing between a revived war and a client showing a board that
+stopped changing. A test in another file can hold the number; it cannot stop
+somebody deleting the comment that says why, and once the why is gone the
+number is arbitrary and the next person "optimises" it. Then the test fails,
+and its failure is a mystery rather than an argument.
+
+So `canvas-cache.test.ts` asserts the ceiling AND asserts the route still
+explains it. The comment and the assertion travel together or neither is
+worth much.
+
+**Match on collapsed whitespace with comment markers stripped.** These
+sentences are hard-wrapped, and asserting the raw file means asserting where
+somebody's editor broke the line — a test that fails on a reflow is a test
+people learn to edit rather than read.
+
 # Every new module names its caller
 
 **A brief that creates a function, a job, or a route says who invokes it. If

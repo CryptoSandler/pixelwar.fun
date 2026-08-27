@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { AdmissionCap } from "../../../components/AdmissionCap";
+import { CreateWar } from "../../../components/CreateWar";
+import { WarClocks } from "../../../components/WarClocks";
 import { Moderation, type BanRow } from "../../../components/Moderation";
 import { Cabinet } from "../../../components/Cabinet";
 import { adminSessionLabel } from "../../../lib/admin";
@@ -16,6 +18,8 @@ type WarRow = {
   max_tokens: number;
   width: number;
   height: number;
+  starts_at: Date;
+  ends_at: Date;
   seated: string;
 };
 
@@ -68,7 +72,7 @@ export default async function AdminWarsPage() {
   }));
 
   const wars = await query<WarRow>(
-    `SELECT w.id, w.title, w.slug, w.status, w.max_tokens, w.width, w.height,
+    `SELECT w.id, w.title, w.slug, w.status, w.max_tokens, w.width, w.height, w.starts_at, w.ends_at,
             (SELECT count(*) FROM war_tokens t
               WHERE t.war_id = w.id AND t.status IN ('reserved','active')) AS seated
        FROM wars w
@@ -93,6 +97,8 @@ export default async function AdminWarsPage() {
           answering the question it exists for.
         </p>
 
+        <CreateWar />
+
         {wars.length === 0 ? (
           <p className="muted text-[13px]">No wars yet.</p>
         ) : (
@@ -104,6 +110,12 @@ export default async function AdminWarsPage() {
                   title={`${war.title} (${war.status})`}
                   current={war.max_tokens}
                   seated={Number(war.seated)}
+                />
+                <WarClocks
+                  warId={war.id}
+                  status={war.status}
+                  startsAt={war.starts_at.toISOString()}
+                  endsAt={war.ends_at.toISOString()}
                 />
                 <Moderation
                   warId={war.id}
