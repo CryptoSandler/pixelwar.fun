@@ -1,7 +1,7 @@
 "use client";
 
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
-import { colourForSlot } from "../lib/wars/palette";
+import { flagColourForSlot } from "../lib/wars/palette";
 
 export type RailToken = {
   id: string;
@@ -23,15 +23,19 @@ export function TokenRail({
   return (
     <ul className="flex gap-2 overflow-x-auto md:flex-col">
       {tokens.map((token, index) => {
+        // A TOKEN's colour is its flag, which wraps the palette past 24
+        // tokens — not `colourForSlot`, which is strict because a painted
+        // pixel outside the palette is a corrupt byte with no honest colour.
+        //
         // /api/leaderboard is untrusted input, same as the canvas bytes
         // BoardImage renders — and BoardImage was deliberately hardened to
-        // degrade a bad slot to unpainted rather than throw. colourForSlot
+        // degrade a bad slot to unpainted rather than throw. flagColourForSlot
         // still throws RangeError on an out-of-range slot, which would take
         // down this whole page's render for one bad token. Same input, same
         // policy: skip the token we cannot render rather than crash.
         let colour: string;
         try {
-          colour = colourForSlot(token.colourSlot);
+          colour = flagColourForSlot(token.colourSlot);
         } catch {
           return null;
         }

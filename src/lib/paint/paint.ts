@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import { subnetBurst } from "../config";
 import { transaction } from "../db";
 import type { War } from "../wars/lifecycle";
+import { PALETTE_SIZE } from "../wars/palette";
 import { isBanned } from "./bans";
 
 /**
@@ -17,6 +18,7 @@ export type PaintFailure =
   | "war_not_started"
   | "out_of_bounds"
   | "unknown_token"
+  | "unknown_colour"
   | "banned"
   | "cooldown";
 
@@ -28,7 +30,20 @@ export type PaintInput = {
   war: War;
   x: number;
   y: number;
+  /**
+   * The token this paint is ATTRIBUTED to — who the painter is playing for.
+   * No longer has anything to do with what colour lands on the board.
+   */
   tokenId: string;
+  /**
+   * The colour to paint, 1..PALETTE_SIZE, chosen freely by the painter.
+   *
+   * Validated here rather than trusted from the route, because this is the
+   * trust boundary that matters: a slot outside the palette reaches the
+   * canvas as a byte no client can render, and 0 would mean "unpainted" — a
+   * caller could erase somebody else's pixel by painting the ground colour.
+   */
+  colourSlot: number;
   painterKey: string;
   ipHash: string;
   subnetKey: string;
@@ -117,7 +132,7 @@ async function takeBurst(client: PoolClient, warId: string, key: string): Promis
 }
 
 export async function paintPixel(input: PaintInput): Promise<PaintResult> {
-  const { war, x, y, tokenId, painterKey, ipHash, subnetKey } = input;
+  const { war, x, y, tokenId, colourSlot, painterKey, ipHash, subnetKey } = input;
 
   if (
     !Number.isInteger(x) ||
@@ -128,6 +143,17 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
     y >= war.height
   ) {
     return { ok: false, reason: "out_of_bounds", message: "That pixel is not on the board." };
+  }
+
+  // Slot 0 is the unpainted ground and is deliberately not paintable: it is
+  // the one value that would let a caller blank a pixel rather than take it,
+  // which is erasure dressed up as painting and is not a move this game has.
+  if (!Number.isInteger(colourSlot) || colourSlot < 1 || colourSlot > PALETTE_SIZE) {
+    return {
+      ok: false,
+      reason: "unknown_colour",
+      message: "That colour is not on the palette.",
+    };
   }
 
   const idx = y * war.width + x;
@@ -179,8 +205,11 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
       };
     }
 
-    const token = await client.query<{ colour_slot: number }>(
-      `SELECT colour_slot FROM war_tokens
+    // Still checked, and still required — but only to establish that this is a
+    // token somebody may play for. What colour the paint lands in is the
+    // painter's choice and was settled above.
+    const token = await client.query<{ id: string }>(
+      `SELECT id FROM war_tokens
         WHERE id = $1 AND war_id = $2 AND status = 'active'`,
       [tokenId, war.id],
     );
@@ -191,7 +220,6 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
         message: "That token is not in this war.",
       };
     }
-    const colourSlot = token.rows[0].colour_slot;
 
     // Always painter, then ip, then subnet. A fixed order means two concurrent
     // paints can never hold one key each and wait on the other. Each gate
@@ -224,17 +252,18 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
     );
 
     await client.query(
-      `INSERT INTO pixels (war_id, idx, war_token_id, seq, painted_at, painter_key, ip_hash)
-       VALUES ($1, $2, $3, $4, now(), $5, $6)
+      `INSERT INTO pixels (war_id, idx, war_token_id, colour_slot, seq, painted_at, painter_key, ip_hash)
+       VALUES ($1, $2, $3, $7, $4, now(), $5, $6)
        ON CONFLICT (war_id, idx) DO UPDATE
-         SET war_token_id = $3, seq = $4, painted_at = now(), painter_key = $5, ip_hash = $6`,
-      [war.id, idx, tokenId, seq, painterKey, ipHash],
+         SET war_token_id = $3, colour_slot = $7, seq = $4, painted_at = now(),
+             painter_key = $5, ip_hash = $6`,
+      [war.id, idx, tokenId, seq, painterKey, ipHash, colourSlot],
     );
 
     await client.query(
-      `INSERT INTO pixel_events (war_id, seq, idx, colour_slot, painted_at)
-       VALUES ($1, $2, $3, $4, now())`,
-      [war.id, seq, idx, colourSlot],
+      `INSERT INTO pixel_events (war_id, seq, idx, colour_slot, war_token_id, painted_at)
+       VALUES ($1, $2, $3, $4, $5, now())`,
+      [war.id, seq, idx, colourSlot, tokenId],
     );
 
     const previousOwner = previous.rows[0]?.war_token_id;

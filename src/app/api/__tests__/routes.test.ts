@@ -36,6 +36,16 @@ function cookieFrom(response: Response): string {
   return header.split(";")[0];
 }
 
+/**
+ * The colour these tests paint in.
+ *
+ * Deliberately not the slot of any token the fixtures below create (1, 2, 13):
+ * since the free-palette change the painted colour is an independent input,
+ * and a test that reused a token's own slot could pass while the two were
+ * still secretly wired together.
+ */
+const PAINT_COLOUR = 7;
+
 describe("GET /api/session", () => {
   it("issues a painter cookie that a script cannot read", async () => {
     const response = await sessionRoute(get("/api/session"));
@@ -66,7 +76,7 @@ describe("GET /api/canvas", () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 7);
 
-    const painted = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 1, tokenId: token }));
+    const painted = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 1, tokenId: token, colourSlot: PAINT_COLOUR }));
     expect(painted.status).toBe(200);
 
     const response = await canvasRoute(get(`/api/canvas?war=${war.slug}`));
@@ -88,9 +98,26 @@ describe("GET /api/diff", () => {
   it("returns changes after the given sequence", { timeout: 20_000 }, async () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 3);
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token }));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }));
 
+    // The default layer is the PAINTED board, so the pair carries the colour
+    // the caller chose (7), not the token's own slot (3).
     const response = await diffRoute(get(`/api/diff?war=${war.slug}&since=0`));
+    expect(await response.json()).toEqual({
+      resync: false,
+      seq: 1,
+      changes: [[0, PAINT_COLOUR]],
+    });
+  });
+
+  it("serves owners rather than colours on the token layer", { timeout: 20_000 }, async () => {
+    const war = await makeWar({ width: 8, height: 8 });
+    const token = await makeToken(war.id, 3);
+    await paintRoute(
+      post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }),
+    );
+
+    const response = await diffRoute(get(`/api/diff?war=${war.slug}&since=0&layer=token`));
     expect(await response.json()).toEqual({ resync: false, seq: 1, changes: [[0, 3]] });
   });
 
@@ -115,19 +142,21 @@ describe("POST /api/paint", () => {
     const war = await makeWar({ width: 8, height: 8 });
     const token = await makeToken(war.id, 2);
 
-    const response = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 3, y: 4, tokenId: token }));
+    const response = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 3, y: 4, tokenId: token, colourSlot: PAINT_COLOUR }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ seq: 1, idx: 35, colourSlot: 2 });
+    // The colour that comes back is the one the caller ASKED for, not the
+    // one its token happens to hold (2). That difference is the whole change.
+    expect(await response.json()).toMatchObject({ seq: 1, idx: 35, colourSlot: PAINT_COLOUR });
   });
 
   it("answers 429 with Retry-After inside the cooldown", { timeout: 20_000 }, async () => {
     const war = await makeWar({ cooldownSeconds: 30 });
     const token = await makeToken(war.id, 2);
 
-    const first = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token }));
+    const first = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }));
     const cookie = cookieFrom(first);
     const second = await paintRoute(
-      post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: token }, cookie),
+      post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }, cookie),
     );
 
     expect(second.status).toBe(429);
@@ -142,7 +171,7 @@ describe("POST /api/paint", () => {
     });
     const token = await makeToken(war.id, 2);
 
-    const response = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token }));
+    const response = await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }));
     expect(response.status).toBe(409);
   });
 
@@ -164,7 +193,7 @@ describe("POST /api/paint", () => {
           "content-type": "text/plain",
           origin: "https://evil.example",
         },
-        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
+        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }),
       }),
     );
     expect(response.status).toBe(403);
@@ -181,7 +210,7 @@ describe("POST /api/paint", () => {
           "content-type": "application/json",
           origin: "https://pixelwar.fun",
         },
-        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
+        body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }),
       }),
     );
     expect(response.status).toBe(200);
@@ -206,7 +235,7 @@ describe("POST /api/paint", () => {
         new Request("https://pixelwar.fun/api/paint", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token }),
+          body: JSON.stringify({ warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }),
         }),
       );
       expect(response.status).toBe(400);
@@ -231,9 +260,9 @@ describe("GET /api/leaderboard", () => {
     // different caller — which is exactly what the product requires of a real
     // community. A war with no cooldown is not a thing that can exist: the
     // schema pins cooldown_seconds to 1..3600.
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: blue }, undefined, "1.2.3.4"));
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: blue }, undefined, "1.2.3.5"));
-    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 2, y: 0, tokenId: red }, undefined, "1.2.3.6"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: blue, colourSlot: PAINT_COLOUR }, undefined, "1.2.3.4"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 1, y: 0, tokenId: blue, colourSlot: PAINT_COLOUR }, undefined, "1.2.3.5"));
+    await paintRoute(post("/api/paint", { warSlug: war.slug, x: 2, y: 0, tokenId: red, colourSlot: PAINT_COLOUR }, undefined, "1.2.3.6"));
 
     const body = await (await leaderboardRoute(get(`/api/leaderboard?war=${war.slug}`))).json();
     expect(body.tokens.map((t: { colourSlot: number }) => t.colourSlot)).toEqual([13, 1]);

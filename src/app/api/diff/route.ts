@@ -1,4 +1,6 @@
 import { changesSince } from "../../../lib/canvas/diff";
+import { diffMaxChanges } from "../../../lib/config";
+import type { CanvasLayer } from "../../../lib/canvas/state";
 import { json } from "../../../lib/http";
 import { advanceWar, warBySlug } from "../../../lib/wars/lifecycle";
 
@@ -19,10 +21,14 @@ export async function GET(request: Request): Promise<Response> {
     return json({ error: "since must be a non-negative integer" }, { status: 400 });
   }
 
+  // Same fallback as /api/canvas: an unrecognised layer serves the painted
+  // board rather than refusing, because that answer is never a lie.
+  const layer: CanvasLayer = params.get("layer") === "token" ? "token" : "colour";
+
   const found = await warBySlug(slug);
   if (!found) return json({ error: "No such war" }, { status: 404 });
 
-  const result = await changesSince(await advanceWar(found), since);
+  const result = await changesSince(await advanceWar(found), since, diffMaxChanges(), layer);
   return json(result, {
     headers: { "cache-control": "public, s-maxage=1, stale-while-revalidate=2" },
   });
