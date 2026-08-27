@@ -5,6 +5,7 @@ import { PayWithWallet } from "../../../components/PayWithWallet";
 import { queryOne } from "../../../lib/db";
 import { classifyEndpoints } from "../../../lib/payments/cluster";
 import { USDC_DECIMALS, USDC_MINT, paymentWallet, solanaRpcUrls } from "../../../lib/payments/config";
+import { scheduleReconcile } from "../../../lib/payments/lazy-recovery";
 import { orderById } from "../../../lib/payments/orders";
 import { warById } from "../../../lib/wars/lifecycle";
 
@@ -37,6 +38,26 @@ export default async function OrderPage({
 
   const order = await orderById(orderId);
   if (!order) notFound();
+
+  // The second trigger for lazy recovery, and the one that actually covers
+  // the case recovery was built for.
+  //
+  // `GET /api/orders/[id]` is the poll, and it is the obvious hook, but read
+  // what polls it: `PayWithWallet` runs its status loop only after a wallet
+  // signed and `/confirm` returned, and only for about twenty seconds. An
+  // order is not a recovery candidate until it is `expired`, which is thirty
+  // minutes after it was created. Those two windows barely overlap — so a
+  // hook on the poll alone would be correct, tested, and almost never reached
+  // by the case it exists for.
+  //
+  // The payer who signed and closed the tab does not come back to a fetch.
+  // They come back to THIS URL. That is the request that finds an expired
+  // order with money against it, so it is the request that has to look.
+  //
+  // Same `after` discipline as the poll route, for the same reason: this page
+  // is server-rendered and a recovery pass in front of it would put seconds
+  // of RPC latency between the payer and their own payment screen.
+  scheduleReconcile(order, `GET /join/${orderId}`);
 
   const wallet = paymentWallet();
   if (!wallet.ok) {

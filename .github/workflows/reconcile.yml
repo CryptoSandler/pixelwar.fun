@@ -4,37 +4,66 @@ name: Reconcile payments
 # payer who signed the transfer and closed the tab before /confirm ran — and
 # settles or files each one.
 #
-# This lives here rather than in Vercel Cron for one reason: the endpoint is
-# authenticated with a header, and Vercel Cron cannot send one.
+# THIS IS A BACKSTOP, NOT THE MECHANISM. It used to be the only trigger, and
+# that was the bug: reconciliation cannot depend on this workflow arriving on
+# time, because it does not. Measured on this repository, two consecutive
+# scheduled runs landed 2h29m apart against a schedule asking for every five
+# minutes; a second repository averages ~1h32m. GitHub's scheduler is
+# best-effort and deprioritises low-activity repositories, and no setting
+# here changes that.
+#
+# LATE_CONFIRM_GRACE_MINUTES is 10. A pass arriving two hours late cannot
+# reclaim the colour a payer paid for — it can only file the payment for a
+# human. So the ten-minute window is now served by lazy reconciliation on the
+# request path (src/lib/payments/lazy-recovery.ts, hooked into
+# GET /api/orders/[id] and /join/[orderId]), which cannot be late because the
+# payer's own request is the trigger.
+#
+# What is left for this file is the payer who never comes back, whose order
+# no request will ever name. Vercel Cron covers that too (vercel.json, daily
+# — Hobby allows one run per day and fires anywhere inside the nominated
+# hour). This workflow runs hourly in between, so money sits unfiled for
+# about an hour rather than about a day.
+#
+# WHY IT IS KEPT AT ALL, given the daily sweep exists: the gap between hourly
+# and daily is the gap between an operator seeing an unmatched payment the
+# same morning and seeing it a day later. That is cheap here — 24 runs a day,
+# a few seconds each — and it is the only part of reconciliation that still
+# runs when a deployment is otherwise idle.
+#
+# WHY IT IS NOT DELETED IN FAVOUR OF Vercel Cron alone: it is the only
+# trigger that is independent of Vercel. If a deployment is rolled back,
+# cron jobs are not updated with it (they keep running the old schedule), and
+# a cron job on a path that 404s still reports as executed. This one fails
+# loudly, in a log somebody reads, against whatever URL RECONCILE_URL names.
+#
+# It sends its secret in a header it chooses; Vercel Cron sends the same
+# secret as `Authorization: Bearer`, provisioned by the platform. The
+# endpoint accepts either — see src/app/api/cron/reconcile/route.ts.
 
 on:
   schedule:
-    # Every five minutes, GitHub's finest granularity, and still best-effort:
-    # its scheduler runs late under load, so treat this as "roughly every five
-    # minutes".
+    # Hourly, and deliberately NOT tuned to a deadline any more.
     #
-    # The interval is set by a cliff, not by a preference. A recovered payment
-    # can still reclaim the colour the payer paid for while it is within
-    # LATE_CONFIRM_GRACE_MINUTES (10) of the order's expiry; past that the
-    # settlement can only file an unmatched_payments row for a human to work
-    # through. So an interval near or above ten minutes does not merely make
-    # the payer wait longer — it converts nearly every recovery from automatic
-    # into a support ticket. Five minutes means a pass, even one arriving a
-    # few minutes late, usually still lands inside that window.
+    # This used to ask for every five minutes, on the reasoning that a pass
+    # arriving a few minutes late still landed inside LATE_CONFIRM_GRACE_MINUTES
+    # and so kept recovery automatic instead of manual. That reasoning was
+    # sound and the premise was false: the runs do not arrive a few minutes
+    # late, they arrive hours late (see the header). Asking for every five
+    # minutes did not buy the window — it bought 288 billable runs a day and a
+    # comment claiming a guarantee this file cannot make.
     #
-    # The cost on the other side is bounded, though no longer zero when the
-    # site is quiet. A pass examines at most MAX_ORDERS_PER_PASS (20) expired
-    # orders and spends one cheap getSignaturesForAddress on each; the
-    # expensive getTransaction calls happen only for orders something actually
-    # named on chain. Since an expired order is now a recovery candidate
-    # forever — the age bound stops a payment taking a colour, not the pass
-    # from finding it (see RECOVERY_MAX_AGE_DAYS in src/lib/payments/recover.ts)
-    # — a deployment with a tail of abandoned reservations keeps paying that
-    # small fixed cost per pass. What it also spends is Actions
-    # minutes — 288 runs a day, billable per started minute on a private
-    # repository — which is the real argument for a longer interval if that
-    # bill ever matters more than the ten-minute window does.
-    - cron: "*/5 * * * *"
+    # Nothing here is load-bearing on timing now, so the interval is chosen on
+    # cost alone: hourly is frequent enough that an operator finds an unmatched
+    # payment the same morning, and cheap enough to stop thinking about. If
+    # GitHub delivers it at 90-minute intervals instead, nothing breaks — that
+    # is the difference between this schedule and the one it replaced.
+    #
+    # The per-pass cost is unchanged and bounded: at most MAX_ORDERS_PER_PASS
+    # (20) expired orders, one cheap getSignaturesForAddress each, with the
+    # expensive getTransaction calls only for orders something actually named
+    # on chain.
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 # A run still going when the next one is due should finish, not be raced. The
