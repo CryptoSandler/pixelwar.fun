@@ -172,12 +172,22 @@ moved, which is the same failure with more steps.
 
 `fileParallelism: false` in `vitest.config.mts` stops files inside ONE run
 from racing. It does nothing about two runs — two sessions, two terminals,
-two repos — and those truncate each other's fixtures mid-assertion.
-`vitest.setup.ts` takes a Postgres advisory lock for the length of a run, so
-the second run waits instead of interleaving.
+two repos — and those truncate each other's fixtures mid-assertion. A Postgres
+advisory lock, held for the length of a run, makes the second run wait instead
+of interleave.
 
-Two things about that lock are load-bearing:
+Three things about that lock are load-bearing:
 
+- **THE LOCK LIVES IN `vitest.global-setup.ts`, NEVER IN `setupFiles`.**
+  `setupFiles` runs once per test FILE. A lock taken there is taken and
+  released once per file — N connections to the direct endpoint, and the lock
+  sitting FREE in every gap between files, which is precisely where a second
+  run slips in. It protects less than it appears to while costing more than it
+  looks, and it passes a naive check: look at `pg_locks` mid-run and the lock
+  is genuinely held, because you happened to look during a file rather than
+  between two. `globalSetup` runs once per run and its returned teardown runs
+  once at the end. This was written here as `setupFiles` first, and a hung
+  suite is what found it.
 - **It is taken on a DIRECT connection, not the pooled one.** Neon's pooled
   endpoint is PgBouncer in transaction mode, which hands one server connection
   to a different client between transactions — a session-level lock taken
@@ -186,6 +196,12 @@ Two things about that lock are load-bearing:
 - **It waits with a ceiling, and says which situation it is.** A run that hung
   and a run that is genuinely still going need different responses from
   whoever is reading the terminal.
+
+**Verify it by BEHAVIOUR, not by a snapshot.** The check that means something
+is: with a run in flight over SEVERAL files, a third connection's
+`pg_try_advisory_lock` returns `false` throughout, and `true` once the run
+ends. A single `pg_locks` reading proves only that the lock existed at the
+instant you looked — which is exactly what the broken version also does.
 
 **Never `pkill -f vitest`.** It matches every repo on the machine. Doing it
 here killed two other projects' suites mid-run. Kill by PID.

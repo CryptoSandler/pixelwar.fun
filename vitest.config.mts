@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
+    // Runs ONCE per run, unlike setupFiles which runs per test file. The
+    // one-run-at-a-time advisory lock lives there for exactly that reason.
+    globalSetup: ["./vitest.global-setup.ts"],
     // One fork. Later tasks add tests that truncate shared tables, and running
     // files in parallel would have them delete each other's fixtures
     // mid-assertion.
