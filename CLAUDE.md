@@ -116,6 +116,45 @@ accident. It had been an accident for the entire life of the project until
 migration 008 removed it. A rule an operator can read and break is a rule that
 can be revisited; a constraint is a rule that has to be excavated.
 
+# A verification that returns nothing needs a control
+
+**Before believing a check that came back empty, grep for something you KNOW
+is there. If that does not appear either, the instrument is broken, not the
+code.**
+
+An all-zero result reads exactly like a clean bill of health, and it is the
+shape a broken check takes most often — wrong path, wrong file, empty
+variable, a server that answered 302 instead of 200. Twice in one session
+here: a `curl` of a Vercel preview that was actually returning a login
+redirect reported "0 soft radii, 0 zinc classes" against an empty body, and a
+grep for a compiled breakpoint reported zero because the CSS path had been
+extracted wrong and the target was the HTML. Both were correct-looking
+answers to a question that was never asked.
+
+The control costs one line. In the first case the tell was that the wordmark
+count was zero too, and the wordmark is unmissable — that is what made it
+obvious the body was empty rather than clean.
+
+# Verify behaviour, not state
+
+**A snapshot says a thing was true at the instant you looked. It does not say
+how often, for how long, or under what conditions — and those are usually the
+property that matters.**
+
+The suite's advisory lock is the case that earned this. It was checked by
+reading `pg_locks` mid-run: the lock was genuinely held, the check was
+correct, and it proved the wrong thing. The lock was in `setupFiles`, so it
+was taken and released once per test FILE, sitting free in every gap between
+files. A single reading cannot tell "held throughout" from "held during the
+file you happened to sample". The check that means something runs across
+several files and asks a third connection whether it can take the lock — the
+whole time, and again at the end.
+
+The general form: when the claim is about a duration, an interval, or a
+count, the verification has to span it. `pg_locks` once, a `curl` once, a log
+line once — each answers "at this instant", and the bug you are hunting
+usually lives between two instants.
+
 # Every new module names its caller
 
 **A brief that creates a function, a job, or a route says who invokes it. If

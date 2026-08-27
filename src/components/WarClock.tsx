@@ -20,12 +20,23 @@ export function WarClock({
   notStarted,
   ended,
   onStart,
+  compact = false,
 }: {
   startsAt: string;
   endsAt: string;
   notStarted: boolean;
   ended: boolean;
   onStart?: () => void;
+  /**
+   * The header variant, for widths where the rail is a sheet.
+   *
+   * The clock does NOT go into the sheet on a phone. It is the event —
+   * criterion one of the whole redesign is that a stranger understands what
+   * is at stake in three seconds — and a stake behind a button is a stake
+   * nobody sees. So below 960px it moves into the header, smaller, with its
+   * label inline instead of above.
+   */
+  compact?: boolean;
 }) {
   const [remaining, setRemaining] = useState("--:--:--");
   // A war that has not started counts down to its own opening, not to a clock
@@ -50,14 +61,25 @@ export function WarClock({
 
   const label = ended ? "Ended" : notStarted ? "Starts in" : "Time left";
 
+  const value = ended ? "00:00:00" : remaining;
+
+  // aria-live off on both: this updates every second, and a screen reader
+  // announcing a countdown once per second is unusable. The value is readable
+  // on demand; it is not an alert.
+  if (compact) {
+    return (
+      <p className="flex items-baseline gap-2" aria-live="off">
+        <span className="section-label">{label}</span>
+        <span className="numeric text-[15px] font-medium tracking-[0.04em]">{value}</span>
+      </p>
+    );
+  }
+
   return (
     <section className="readout bevel-in flex flex-col gap-0.5 px-3 py-2.5">
       <h2 className="section-label">{label}</h2>
-      {/* aria-live off: this updates every second, and a screen reader
-          announcing a countdown once per second is unusable. The value is
-          readable on demand; it is not an alert. */}
       <p className="clock" aria-live="off">
-        {ended ? "00:00:00" : remaining}
+        {value}
       </p>
     </section>
   );

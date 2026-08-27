@@ -9,6 +9,8 @@ import { Scoreboard } from "./Scoreboard";
 import { WarClock } from "./WarClock";
 import { WarHud } from "./WarHud";
 import { useCanvasStream } from "../hooks/useCanvasStream";
+import { CHIP_OUTLINE } from "../lib/wars/chrome";
+import { colourForSlot } from "../lib/wars/palette";
 import { PaintPalette } from "./PaintPalette";
 
 export type WarSummary = {
@@ -46,6 +48,12 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
    * once colours stopped belonging to tokens.
    */
   const [layer, setLayer] = useState<"colour" | "token">("colour");
+  /**
+   * Whether the rail is showing, below 960px where it is a sheet over the
+   * board (DESIGN.md §5). Ignored at wider widths, where the rail is always
+   * a column and this never applies.
+   */
+  const [railOpen, setRailOpen] = useState(false);
   const { image, version, applyLocal } = useCanvasStream(war.slug, layer);
   const [tokens, setTokens] = useState<RailToken[]>(initialTokens);
   const [selectedId, setSelectedId] = useState<string | null>(initialTokens[0]?.id ?? null);
@@ -218,32 +226,75 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
      * decision; it is DESIGN.md applied.
      */
     <main className="flex h-screen flex-col" style={{ background: "var(--chrome-surround)" }}>
-      <header className="header-bar bevel flex shrink-0 items-baseline justify-between gap-4 px-4 py-2.5">
+      <header className="header-bar bevel flex shrink-0 items-center justify-between gap-3 px-4 py-2.5">
         {/* Brass, and one of exactly three places the accent is allowed
             (DESIGN.md I5). A visitor who lands here with no context reads the
             name of the thing before anything else. */}
         <span
-          className="text-[16px] font-medium tracking-[0.14em]"
+          className="shrink-0 text-[16px] font-medium tracking-[0.14em]"
           style={{ color: "var(--chrome-accent)" }}
         >
           PIXELWAR
         </span>
-        <span className="section-label truncate">{war.title}</span>
-      </header>
 
-      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <aside className="panel bevel flex shrink-0 flex-col gap-3 overflow-y-auto p-3 md:w-[280px]">
-          {/* THE CLOCK, and it is the event. It used to be six words of
-              unstyled mono in a corner strip above the canvas, which is where
-              a page puts a build number. A war is a thing with an ending, and
-              the ending is most of why anybody is watching. */}
+        {/* The clock rides in the header below 960px, where the rail is a
+            sheet. It does not go INTO the sheet: the ending is the stake, and
+            a stake behind a button is a stake nobody sees. */}
+        <span className="rail:hidden">
           <WarClock
+            compact
             startsAt={war.startsAt}
             endsAt={war.endsAt}
             notStarted={warNotStarted}
             ended={warEnded}
             onStart={() => setWarNotStarted(false)}
           />
+        </span>
+
+        <span className="section-label hidden truncate rail:inline">{war.title}</span>
+
+        <button
+          type="button"
+          className="btn-secondary bevel shrink-0 px-3 py-1 rail:hidden"
+          aria-expanded={railOpen}
+          onClick={() => setRailOpen((open) => !open)}
+        >
+          {railOpen ? "Close" : "War"}
+        </button>
+      </header>
+
+      <div className="relative flex min-h-0 flex-1 flex-col rail:flex-row">
+        {/*
+          THE BOARD NEVER GIVES (DESIGN.md §5).
+
+          Below 960px this <aside> is `.rail-sheet` — absolutely positioned
+          over the board — so the board's box is byte-identical whether the
+          rail is open or shut. It used to be a block in a column, which meant
+          the clock, the scoreboard, the token list and the palette all took
+          their height first and the board got whatever was left. On a phone
+          that made the canvas the smallest thing on screen.
+
+          At 960px and up it goes back to being a 280px column and `railOpen`
+          stops mattering.
+        */}
+        <aside
+          className={`panel bevel shrink-0 flex-col gap-3 overflow-y-auto p-3 rail:static rail:flex rail:w-[280px] ${
+            railOpen ? "rail-sheet flex" : "hidden"
+          }`}
+        >
+          {/* THE CLOCK, and it is the event. It used to be six words of
+              unstyled mono in a corner strip above the canvas, which is where
+              a page puts a build number. A war is a thing with an ending, and
+              the ending is most of why anybody is watching. */}
+          <div className="hidden rail:block">
+            <WarClock
+              startsAt={war.startsAt}
+              endsAt={war.endsAt}
+              notStarted={warNotStarted}
+              ended={warEnded}
+              onStart={() => setWarNotStarted(false)}
+            />
+          </div>
 
           <section className="flex flex-col gap-1">
             <h2 className="section-label">Board</h2>
@@ -328,6 +379,35 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
           </div>
 
           <div className="flex shrink-0 flex-col gap-2">
+            {/*
+              WHAT PRESSING THIS WILL DO, next to the thing that does it.
+
+              Below 960px the palette and the token list live in the sheet, so
+              without this a painter on a phone taps Paint without seeing what
+              colour is loaded or who it counts for. It earns its place at
+              every width for the same reason: "what happens if I press this"
+              is the question a primary action should not make you go and look
+              up.
+            */}
+            <p className="readout bevel-in flex items-center gap-2 px-3 py-1.5 text-[13px]">
+              <span
+                aria-hidden
+                className="h-4 w-4 shrink-0"
+                style={{
+                  background: colourForSlot(colourSlot),
+                  // I2: the chip carries the outline for the surface it is on,
+                  // and this one is on the readout. Without it #AEC0DE swallows
+                  // nothing but the outline is what stops #FFFFFF doing so.
+                  outline: `1px solid ${CHIP_OUTLINE.readout}`,
+                  outlineOffset: "-1px",
+                }}
+              />
+              <span className="truncate">
+                Painting for{" "}
+                <strong>{tokens.find((t) => t.id === selectedId)?.ticker ?? "no token"}</strong>
+              </span>
+            </p>
+
             <PaintButton
               cooldownUntil={cooldownUntil}
               disabled={warEnded || warNotStarted || !selectedId || !target || inFlight}

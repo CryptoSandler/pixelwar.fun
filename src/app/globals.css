@@ -10,6 +10,16 @@
 @theme inline {
   --font-sans: var(--font-jost);
   --font-mono: var(--font-plex-mono);
+
+  /**
+   * The one breakpoint this design has, and it is 960px because DESIGN.md §5
+   * says 960px — not Tailwind's `md` (768) or `lg` (1024), neither of which
+   * is the number the spec names. Below it the rail becomes a sheet over the
+   * board; above it they are two columns.
+   *
+   * Named `rail` rather than a size, because that is what it decides.
+   */
+  --breakpoint-rail: 60rem;
 }
 
 :root {
@@ -302,6 +312,28 @@ button.swatch:hover:not(:disabled),
   .clock {
     font-size: 34px;
   }
+}
+
+/**
+ * The rail as a sheet, below 960px (DESIGN.md §5).
+ *
+ * **The board's size is never the thing that gives** — that sentence is the
+ * whole rule, and the previous layout broke it: the rail stacked ABOVE the
+ * board in a column, so on a phone the clock, the scoreboard, the token list
+ * and the palette took whatever height they wanted and the board got the
+ * remainder. On the device most of a viral canvas's traffic arrives on, the
+ * canvas was the smallest thing on screen.
+ *
+ * Positioned over the board rather than beside it, so the board's box is
+ * identical whether the sheet is open or shut. It does not slide: DESIGN.md
+ * §6 rules out translation entirely, so it is simply there or not there.
+ */
+.rail-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  background: var(--chrome-panel);
 }
 
 /**
