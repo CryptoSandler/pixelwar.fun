@@ -55,6 +55,39 @@ export async function setup(): Promise<() => Promise<void>> {
   const client = new Client({ connectionString: directUrl(test) });
   await client.connect();
 
+  /**
+   * THE DATABASE ITSELF SAYS WHETHER IT MAY BE TRUNCATED.
+   *
+   * `vitest.setup.ts` asks whether TEST_DATABASE_URL differs from
+   * DATABASE_URL, and that question has a hole in it: with DATABASE_URL unset
+   * the comparison passes and the suite proceeds to truncate whatever
+   * TEST_DATABASE_URL points at. A relative check cannot answer an absolute
+   * question.
+   *
+   * This one can. `disposable_database` is written only by
+   * `npm run db:migrate:test` and by nothing else — not by a migration, which
+   * would put it in production too — so a database that does not carry it is
+   * either production or something nobody prepared, and neither may be
+   * truncated. No combination of environment variables fakes it.
+   *
+   * The relative check in `vitest.setup.ts` stays as well. Two guards asking
+   * different questions is the point: this one catches "wrong database", that
+   * one catches "same database twice".
+   */
+  const stamped = await client.query(
+    `SELECT to_regclass('public.disposable_database') IS NOT NULL AS ok`,
+  );
+  if (!stamped.rows[0]?.ok) {
+    await client.end().catch(() => {});
+    throw new Error(
+      "TEST_DATABASE_URL points at a database that is not stamped disposable. " +
+        "The suite truncates every table, so it refuses to run against one nobody " +
+        "prepared. Run `npm run db:migrate:test` against the database you intend " +
+        "to use — that is what writes the stamp, and it is deliberately NOT a " +
+        "migration so production can never carry it.",
+    );
+  }
+
   // Blocking, with a ceiling, and the message names which situation this is:
   // "another run is going" and "a run died holding it" need different
   // responses from whoever is reading the terminal.

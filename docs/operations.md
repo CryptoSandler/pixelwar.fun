@@ -277,3 +277,28 @@ then, expect false alarms and treat each one as data rather than as a defect.
 an automatic response becomes a future round WITH THAT DATA.** Not before —
 the argument above says any brake built today would fire on the good case,
 and only real numbers can show whether a brake exists that does not.
+
+## Test fixtures once reached production
+
+**Two wars titled "Fixture war" were found in the production database**,
+created 2026-08-25 at 05:28 and 21:37 — after the `sameTarget` guard in
+`vitest.setup.ts` already existed. They were removed on 2026-08-27 in one
+transaction, with the endpoint asserted by id and the row count asserted
+before and after: 2 wars, 1 war_token, 1 pixel, 1 pixel_event, 1
+token_pixel_count.
+
+**Which path wrote them cannot be determined from the data.** A test run
+outside vitest, or an ad-hoc script reading `DATABASE_URL` from `.env.local`,
+would both produce exactly this and leave the same trace, which is none.
+
+**What WAS determined is that a hole was open**, and it is closed: the guard
+asked whether the test database differed from the app database, which passes
+when `DATABASE_URL` is unset. The suite now requires the target to carry a
+`disposable_database` stamp that only `db:migrate:test` writes and that
+production cannot have. See CLAUDE.md.
+
+**The remaining exposure is ad-hoc scripts**, which nothing can guard against
+from inside the repository — a script that reads `DATABASE_URL` and writes is
+indistinguishable from the application doing its job. The discipline that
+covers it is the one used for every destructive operation in this project:
+assert the endpoint by id before writing, and count rows before and after.

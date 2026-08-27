@@ -340,6 +340,38 @@ migrations merges first; the one with them rebases on top and re-runs. The
 reverse puts the migration-free branch on a `main` whose database has already
 moved, which is the same failure with more steps.
 
+## The test database proves it is disposable
+
+**The suite refuses to run against a database that does not carry the
+`disposable_database` stamp.** The stamp is written only by
+`npm run db:migrate:test`, and deliberately **not** by a migration — a
+migration runs everywhere, production included, which is exactly backwards.
+It marks an ENVIRONMENT, not a schema.
+
+**Why a second guard.** `vitest.setup.ts` asks whether `TEST_DATABASE_URL`
+differs from `DATABASE_URL`, and that is a relative question with a hole in
+it: with `DATABASE_URL` unset the comparison passes and the suite truncates
+whatever `TEST_DATABASE_URL` happens to point at. A relative check cannot
+answer an absolute question.
+
+This is not theoretical. Two wars titled "Fixture war" were found sitting in
+this project's production database, created hours and days AFTER the relative
+guard already existed. They were invisible until the home page started
+reading finished wars, at which point production's front page said
+"Result — Fixture war".
+
+**Both guards stay, because they answer different questions:** the stamp
+catches "wrong database", the comparison catches "same database twice".
+
+**Verify it by behaviour.** Point `TEST_DATABASE_URL` at production with
+`DATABASE_URL` unset and confirm the suite refuses — that is the exact
+scenario the old guard let through, and a check that only confirms the happy
+path confirms nothing.
+
+**If somebody moves the stamp into `migrations/`** because it looks untidy
+outside, the guarantee is gone the moment production migrates: every database
+carries it and the guard passes everywhere. That is the one edit to refuse.
+
 ## Concurrent runs against the shared database
 
 `fileParallelism: false` in `vitest.config.mts` stops files inside ONE run

@@ -64,5 +64,40 @@ for (const file of files) {
   }
 }
 
+/**
+ * The disposable stamp, written ONLY on the --test path.
+ *
+ * WHY IT IS NOT A MIGRATION, and this is the point: a migration runs against
+ * every database, production included, which is exactly backwards. This is a
+ * mark of ENVIRONMENT, not of schema — it says "this database is meant to be
+ * truncated" — and the whole value of it is that production can never carry
+ * it. Moving it into `migrations/` would look tidier and would silently
+ * destroy the guarantee.
+ *
+ * WHAT IT REPLACES. `vitest.setup.ts` asked "is TEST the same as APP", which
+ * is a relative question with a hole in it: with DATABASE_URL unset the
+ * comparison passes and the suite truncates whatever TEST_DATABASE_URL
+ * happens to be — production included. Two wars titled "Fixture war" were
+ * found sitting in this project's production database, created after that
+ * guard already existed, which is what sent somebody looking.
+ *
+ * The stamp makes the question absolute: the database itself says whether it
+ * is disposable, and no combination of environment variables can fake it.
+ */
+if (useTest) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS disposable_database (
+      stamped_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      note       TEXT        NOT NULL
+    )
+  `);
+  await pool.query(
+    `INSERT INTO disposable_database (note)
+     SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM disposable_database)`,
+    ["Truncated between tests. Never point this at a database with real data."],
+  );
+  console.log("stamped as disposable");
+}
+
 console.log(count === 0 ? "nothing to apply" : `applied ${count} migration(s)`);
 await pool.end();
