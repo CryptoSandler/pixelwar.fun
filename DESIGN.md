@@ -20,8 +20,9 @@ introduced.
 ## 1. Vision
 
 A war is 48 to 72 hours long, and for all of it the board is the only thing
-that matters. Twenty-four communities each hold one colour; painting is free;
-the leaderboard moves while you watch. Everything the interface does is in
+that matters. Communities compete for territory; anyone may paint in any of
+the twenty-four colours; painting is free; the scoreboard moves while you
+watch. Everything the interface does is in
 service of two questions a visitor asks in the first three seconds: *what is
 happening on this board*, and *how do I add to it*.
 
@@ -42,16 +43,25 @@ in direct competition with twenty-four saturated colours and lose.
 
 Two separate colour systems share one screen and must never be confused.
 
-**The canvas palette** — twenty-four colours, one per token, plus the ground.
-Defined in [palette.ts](src/lib/wars/palette.ts). These are the r/place 2022
-values, which every clone converged on because they stay distinguishable at
-one-pixel size. **They belong to tokens.** A community's colour is its identity
-and its scoreboard.
+**The canvas palette** — twenty-four colours anyone may paint in, plus the
+ground. Defined in [palette.ts](src/lib/wars/palette.ts). These are the
+r/place 2022 values, which every clone converged on because they stay
+distinguishable at one-pixel size.
+
+**They no longer belong to tokens, and that changed after this document was
+first written.** A colour was a token's identity when a canvas byte was a
+palette slot and a palette slot was a token. Painting is free of that now:
+attribution rides on `pixels.war_token_id` and the colour on the board says
+nothing about who owns a pixel (migration 007). What a token keeps is a
+FLAG — its slot in this list, which stands for it on the scoreboard and in
+the territory view, and which is the only place a token's colour still
+appears at size.
 
 | Role | Value | Note |
 | --- | --- | --- |
-| Token slots 1–24 | see `PALETTE` | Never used by chrome |
-| Empty pixel (slot 0) | `#2E2E38` | A desaturated slate. No token is grey, so grey can only mean unpainted. |
+| Palette slots 1–24 | see `PALETTE` | Free to paint with. Never used by chrome. |
+| Token flag | `flagColourForSlot` | The same list, wrapped: past 24 tokens two flags repeat. See [operations.md](docs/operations.md). |
+| Empty pixel (slot 0) | `#2E2E38` | A desaturated slate. No token is grey, so grey can only mean unpainted. It is also the one slot `paintPixel` refuses, so nobody can blank a pixel by painting the ground. |
 
 **The chrome palette** — everything the application paints for itself. Defined
 in [chrome.ts](src/lib/wars/chrome.ts).
@@ -148,17 +158,28 @@ updates reads as unstable, and this board updates every 1.5 seconds.
 ┌──────────────────────────────────────────────────────────────┐
 │  HEADER — wordmark · war status                              │
 ├───────────────┬──────────────────────────────────────────────┤
-│  LEADERBOARD  │           READOUT — coords · countdown       │
+│  CLOCK        │           READOUT — coords · zoom            │
+│  SCOREBOARD   │                                              │
 │               │  ┌────────────────────────────────────────┐  │
 │  chip ticker  │  │                                        │  │
-│       count   │  │              THE BOARD                  │  │
-│       bar     │  │              200 × 200                  │  │
+│       bar     │  │              THE BOARD                  │  │
+│       share%  │  │              200 × 200                  │  │
 │               │  │                                        │  │
 │               │  └────────────────────────────────────────┘  │
-│               │   PAINT BAR — token swatches      [ PAINT ]  │
+│  PAINTING FOR │                                              │
+│  COLOUR       │              [ PAINT — cooldown inside ]     │
 │  footnote     │                                              │
 └───────────────┴──────────────────────────────────────────────┘
 ```
+
+The war clock sits at the top of the rail, not in the readout strip: a war is
+a thing with an ending and the ending is most of why anybody is watching, so
+it is set at 28–34px in tabular mono rather than filed next to the zoom
+level. The scoreboard below it is a bar per token, scaled to the leader
+rather than to the board — early in a war every share is a fraction of a
+percent and bars drawn against 40,000 cells are all zero width, which would
+leave the scoreboard blank for the hours when watching it is most
+interesting. The percentage beside each bar carries the absolute truth.
 
 Fixed 280px rail, board centred in the remaining space. The board never
 reflows: it is a fixed-ratio square and everything else yields to it. Below
@@ -239,12 +260,15 @@ A chip is the small filled square standing for a token. On each surface in
 `CHIP_SURFACES` — every surface a chip is drawn on, of either polarity — the
 chip's outline must clear `OUTLINE_SURFACE_DISTANCE` (60) from that surface.
 
-**This asks a wider list than the other invariants do, and that is the point.**
-`CHIP_SURFACES` is `CHROME_SURFACES` plus `BOARD_SURFACES`, the Batch A dark
-faces the board still renders on. Those faces are rightly exempt from §4's
-chroma ceiling and I1's distance rule — the design did not choose them, so
-holding them to rules about what the design may choose is meaningless. Chip
-visibility is a different question. A token that vanishes into the surface
+**This used to ask a wider list than the other invariants did.** `CHIP_SURFACES`
+was `CHROME_SURFACES` plus `BOARD_SURFACES` — three dark faces the board
+screen had picked before this document existed, rightly exempt from §4's
+chroma ceiling and I1's distance rule because the design had not chosen them,
+and rightly included here because chip visibility is a different question.
+That gap is closed: the board screen was restyled onto chrome surfaces, the
+extra list is gone, and every surface a chip lands on is now one the design
+chose and the other invariants police. The reasoning is kept because it is
+what the rule is for. A token that vanishes into the surface
 behind it has vanished whether or not anybody designed that surface, and for
 as long as this invariant asked only `CHROME_SURFACES` the leaderboard rail
 drew all twenty-four tokens on `#09090B` with no outline, no declared outline
@@ -313,10 +337,11 @@ tests, and a colour must pass both.
 > and the surround are absent from that list and would indeed fail it, and
 > that ink composited at 80% — the way the first checkout expressed quiet
 > text — falls under the floor it claimed to meet. `MUTED_INK_INVERSE` is
-> measured the same way against every surface in `BOARD_SURFACES`, with the
-> whole dark scale asserted in order and a control proving `MUTED_INK` could
-> not have been used there instead — so the second quiet ink has to justify
-> its own existence — plus the six composited board sites it replaced. `DISABLED_INK` is measured
+> measured the same way against every surface in `MUTED_INK_INVERSE_SURFACES`,
+> with the whole dark scale asserted in order, a control proving `MUTED_INK`
+> could not have been used there instead — so the second quiet ink has to
+> justify its own existence — and a case pinning the board ground's **6.54:1**
+> as the reason it is absent from that list. `DISABLED_INK` is measured
 > the same way, against `DISABLED_TEXT_CONTRAST` and against `MUTED_INK`, so
 > the quiet end of the scale keeps its order; `DISABLED_FACE` against
 > `AA_NORMAL_TEXT` and against `ACCENT`, so a dead key is legible and never
@@ -331,6 +356,25 @@ was hard to read. No amount of colour-distance work would have found that; it
 took building the button. The replacement reads 5.19:1 and is *further* from
 the palette, at 100.
 
+> **Settled: the accent is `#B1923B`, and `#B87A1E` does not come back.**
+>
+> This is recorded as closed rather than merely explained, because it has
+> already been reopened once. A later brief specified the Cabinet direction as
+> "latón `#B87A1E`" — quoting the superseded value in good faith, from notes
+> written before the button existed to fail on. The batch that received it
+> built with `#B1923B` and said why.
+>
+> The rule that decides it is the one this whole section exists to serve:
+> **every rendered colour is measured, and a measurement beats a citation.**
+> `#B87A1E` is not a matter of taste that a brief may set — it is a value with
+> a number attached, and the number is below the floor. A future brief naming
+> it is quoting history, not making a decision, and the answer is this
+> paragraph rather than a fresh argument.
+>
+> If the accent is ever genuinely re-chosen, it is re-chosen the way this one
+> was: swept against the palette for distance, measured against its own label
+> for contrast, and only then written down.
+
 The same class of defect came back one layer out, in the checkout: de-emphasis
 written as `opacity` on text, which turns a measured contrast into an
 unmeasured one and does it invisibly at review time. Hence `MUTED_INK` — a
@@ -342,9 +386,17 @@ too late to catch.** All six were in the board UI, and measuring them is what
 found the more interesting half: they were on `zinc-950` and `zinc-800`, not
 on the surround, so four of the six cleared 7:1 by accident and the batch that
 recorded them had them wrong by up to 5 points in both directions. A number
-nobody measured is not safe merely because it turns out to be fine — which is
-what `BOARD_SURFACES` is: the three dark faces written down, so the text drawn
-on them can be measured at all.
+nobody measured is not safe merely because it turns out to be fine.
+
+Those faces were written down as `BOARD_SURFACES` so the text on them could be
+measured at all, and they are gone now — the board screen was restyled onto
+chrome surfaces, which is the condition that constant said would retire it.
+What replaced it is `MUTED_INK_INVERSE_SURFACES`: the dark faces that may
+carry quiet text, which is `header` and deliberately **not** the board ground,
+where the muted ink reads 6.54:1 against a floor of 7. The restyle's own first
+draft put the canvas loading line there, and the invariant is what caught it —
+the fourth time this class of defect has come back, and the first time it was
+caught by a test instead of by a person.
 
 **Partially enforced, in the same way and for the same reason as I5.** The
 tests measure the *colours*: `MUTED_INK` against every surface in

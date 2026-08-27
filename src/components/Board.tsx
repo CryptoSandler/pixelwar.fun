@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { activityBounds, openingViewport } from "../lib/canvas/activity";
 import type { BoardImage } from "../lib/canvas/board-image";
+import { CHROME_SURFACES } from "../lib/wars/chrome";
 import {
   type Viewport,
   clampToBoard,
@@ -12,6 +14,13 @@ import {
 } from "../lib/canvas/viewport";
 
 const ZOOM_LIMITS = { min: 1, max: 48 };
+
+/**
+ * Zoom at which the pixel grid appears. DESIGN.md §4: below this the grid is
+ * noise drawn on top of art, above it the grid is what makes a board legible
+ * as a surface you can address one cell at a time.
+ */
+const GRID_FROM_SCALE = 8;
 
 export function Board({
   image,
@@ -25,11 +34,15 @@ export function Board({
   onHover: (point: { x: number; y: number } | null, scale: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // The opening viewport is decided once, from the first board that arrives,
+  // and never again — see the effect below. This initialiser is only the
+  // placeholder it runs before that board exists.
   const [viewport, setViewport] = useState<Viewport>({
     centreX: image.width / 2,
     centreY: image.height / 2,
     scale: 3,
   });
+  const framed = useRef(false);
   const drag = useRef<{ x: number; y: number; travelled: number } | null>(null);
   // Every pointer currently down, by id. One entry: a mouse drag or a single
   // finger. Two: a pinch. `drag` above tracks only the single-pointer case;
@@ -58,6 +71,34 @@ export function Board({
     observer.observe(canvas);
     return () => observer.disconnect();
   }, []);
+
+  /**
+   * Frame the opening view on the activity, once.
+   *
+   * Deliberately guarded by a ref rather than by a dependency list. The board
+   * updates every 1.5 seconds, and re-framing on each of those would yank the
+   * viewport out from under anybody who had panned or zoomed — the view would
+   * drift every time somebody else painted. It runs on the first board that
+   * has real dimensions and then never again for the life of the component.
+   */
+  useEffect(() => {
+    if (framed.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas || canvas.clientWidth === 0) return;
+    framed.current = true;
+    setViewport(
+      clampToBoard(
+        openingViewport({
+          bounds: activityBounds(image.slots, image.width, image.height),
+          board: image,
+          screen: { width: canvas.clientWidth, height: canvas.clientHeight },
+        }),
+        image,
+      ),
+    );
+    // `version` is in the deps so this retries once the first real board
+    // lands: the very first render can happen before the canvas has a box.
+  }, [image, version, resizeTick]);
 
   // Redraw whenever the board changes, the viewport moves, or the element's
   // own box is resized. `version` is the signal for the board: BoardImage
@@ -91,13 +132,41 @@ export function Board({
     bitmapCanvas.getContext("2d")!.putImageData(source, 0, 0);
 
     const scale = viewport.scale * ratio;
-    ctx.drawImage(
-      bitmapCanvas,
-      canvas.width / 2 - viewport.centreX * scale,
-      canvas.height / 2 - viewport.centreY * scale,
-      image.width * scale,
-      image.height * scale,
-    );
+    const originX = canvas.width / 2 - viewport.centreX * scale;
+    const originY = canvas.height / 2 - viewport.centreY * scale;
+
+    ctx.drawImage(bitmapCanvas, originX, originY, image.width * scale, image.height * scale);
+
+    // DESIGN.md §4: 1px grid at 8x and above, and nothing below it.
+    //
+    // Drawn at exactly one device pixel regardless of zoom or DPR — a grid
+    // that thickens as you zoom stops being a reference and starts being
+    // content, which on an almost-empty board is the difference between "a
+    // surface" and "a plaid". The half-pixel offset is what keeps a 1px line
+    // on a pixel boundary instead of smeared across two.
+    if (viewport.scale >= GRID_FROM_SCALE) {
+      ctx.strokeStyle = CHROME_SURFACES.header;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+
+      const firstX = Math.max(0, Math.floor((0 - originX) / scale));
+      const lastX = Math.min(image.width, Math.ceil((canvas.width - originX) / scale));
+      for (let x = firstX; x <= lastX; x++) {
+        const px = Math.round(originX + x * scale) + 0.5;
+        ctx.moveTo(px, Math.max(0, originY));
+        ctx.lineTo(px, Math.min(canvas.height, originY + image.height * scale));
+      }
+
+      const firstY = Math.max(0, Math.floor((0 - originY) / scale));
+      const lastY = Math.min(image.height, Math.ceil((canvas.height - originY) / scale));
+      for (let y = firstY; y <= lastY; y++) {
+        const py = Math.round(originY + y * scale) + 0.5;
+        ctx.moveTo(Math.max(0, originX), py);
+        ctx.lineTo(Math.min(canvas.width, originX + image.width * scale), py);
+      }
+
+      ctx.stroke();
+    }
   }, [image, version, viewport, resizeTick]);
 
   function screen() {

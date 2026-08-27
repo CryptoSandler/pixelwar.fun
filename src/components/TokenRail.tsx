@@ -49,17 +49,18 @@ export function TokenRail({
               className="flex items-center gap-2 rounded px-2 py-1"
             >
               {/* Every chip carries its outline, keyed by the surface it is
-                  drawn on (DESIGN.md I2). This one sits on the board's own
-                  shell, and without the outline the #000000 token was a black
-                  square on a #09090B ground — invisible, in the leaderboard,
-                  for any war that had one. The fill cannot fix it: the fill is
-                  the token's colour and is not ours to change. */}
+                  drawn on (DESIGN.md I2). This rail moved onto a PANEL when
+                  the board screen was restyled, so the key moved with it —
+                  an outline chosen for a dark shell is the wrong colour on a
+                  light one, and #FFFFFF would vanish here exactly as #000000
+                  vanished there. The fill cannot fix it: the fill is the
+                  token's colour and is not ours to change. */}
               <span
                 aria-hidden
                 className="h-4 w-4 rounded-sm"
                 style={{
                   background: colour,
-                  outline: `1px solid ${CHIP_OUTLINE.shell}`,
+                  outline: `1px solid ${CHIP_OUTLINE.panel}`,
                   outlineOffset: "-1px",
                 }}
               />

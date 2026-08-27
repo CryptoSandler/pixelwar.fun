@@ -126,27 +126,25 @@ export const DISABLED_INK = "#6B7285";
 export const MUTED_INK_INVERSE = "#B0B5C2";
 
 /**
- * The dark surfaces the board UI draws on today.
+ * Which dark faces may carry quiet text.
  *
- * These are **Batch A Tailwind values**, not design decisions: `zinc-950` on
- * the shell, `zinc-800` in the board well, and black at 80% over `zinc-800`
- * for the two overlays — the last one derived, since the compositor is what
- * produces it and `#080808` is what it measures. They are recorded here for
- * one purpose only: text drawn on a surface nobody wrote down is text nobody
- * can measure, and this batch is replacing six composited opacities on
- * exactly these three.
+ * The mirror of `MUTED_INK_SURFACES`, one polarity over, and it exists for
+ * the same reason: a quiet colour is only quiet where it was measured. This
+ * list replaced `BOARD_SURFACES`, three zinc values Batch A picked before
+ * DESIGN.md existed and whose own comment promised they would go when the
+ * board was restyled. The board screen has been restyled and draws on chrome
+ * surfaces now, so they are gone.
  *
- * Deliberately NOT in `CHROME_SURFACES`. That list is the design's own
- * surfaces and everything in it owes I2 an outline and I4 a chroma ceiling;
- * these were chosen by a batch that predates DESIGN.md and claiming them
- * would say the design picked them. They go away when the board is restyled,
- * and so does this constant.
+ * `header` only, and the omission is the point. `MUTED_INK_INVERSE` reads
+ * 7.55:1 on the header and **6.54:1 on the board ground** — under DESIGN.md
+ * §9's body floor of 7. The board surface therefore carries full ink or
+ * nothing, exactly as the readout and the surround do on the light side.
+ * That was found by measuring rather than by eye: the restyle's first draft
+ * put the canvas's loading line on the board ground in muted ink, which is
+ * the defect this file exists to catch, committed by the batch that wrote
+ * the rule.
  */
-export const BOARD_SURFACES = {
-  shell: "#09090B",
-  well: "#27272A",
-  overlay: "#080808",
-} as const;
+export const MUTED_INK_INVERSE_SURFACES = ["header"] as const satisfies readonly (keyof typeof CHROME_SURFACES)[];
 
 /**
  * The primary button when it cannot be pressed.
@@ -181,25 +179,21 @@ export const BODY_TEXT_CONTRAST = 7;
 export const DISABLED_TEXT_CONTRAST = 3;
 
 /**
- * Every surface a token chip is drawn on, of either polarity.
+ * Every surface a token chip is drawn on.
  *
- * `CHROME_SURFACES` and `BOARD_SURFACES` are kept apart for the rules that
- * genuinely differ — a Batch A dark face has no business answering §4's
- * chroma ceiling or I1's distance rule, because the design did not choose it.
- * **Chip visibility is not one of those rules.** A token that vanishes into
- * the surface behind it vanishes just as completely on a surface nobody
- * designed, and the leaderboard rail draws all twenty-four on `zinc-950`
- * today. So I2 asks this list, not `CHROME_SURFACES`, and the hole that let a
- * chip be drawn with no outline at all closes.
+ * This used to be a spread of `CHROME_SURFACES` and a second list of dark
+ * faces the board screen had picked before DESIGN.md existed, kept apart
+ * because those faces had no business answering §4's chroma ceiling or I1's
+ * distance rule — the design had not chosen them. The board screen now draws
+ * on chrome surfaces, so there is one list again and every surface a chip
+ * lands on is a surface the design chose and the invariants police.
  *
- * The spread is only safe while the two key sets are disjoint, and nothing in
- * the language enforces that: a future `BOARD_SURFACES.header` would shadow
- * the chrome one here and nowhere else, so I2 would measure the board value
- * while I1 and I4 kept measuring the chrome value, with no test firing on
- * either side. `chrome.test.ts` asserts the disjointness rather than trusting
- * it.
+ * It stays a named alias rather than collapsing into `CHROME_SURFACES` at
+ * every call site: the two answer different questions ("what does the app
+ * paint" and "what does a chip land on"), and they are only the same list
+ * for as long as that stays true.
  */
-export const CHIP_SURFACES = { ...CHROME_SURFACES, ...BOARD_SURFACES } as const;
+export const CHIP_SURFACES = CHROME_SURFACES;
 
 /**
  * The outline every token chip carries, per surface it is drawn on.
@@ -220,17 +214,11 @@ export const CHIP_OUTLINE: Record<keyof typeof CHIP_SURFACES, string> = {
   panel: "#21242E",
   control: "#21242E",
   readout: "#21242E",
+  // The two dark faces take the light outline: on either of them #000000 is
+  // a black square on a near-black ground, which is the exact failure this
+  // constant exists for.
   header: "#F2F3F7",
   board: "#F2F3F7",
-  // The board's own three, all dark, so all take the light outline the header
-  // takes. The rail draws every token in the war on `shell`; without an entry
-  // here #000000 was a black square on a #09090B ground — the exact failure
-  // this constant exists for, one surface further out than anybody had
-  // looked, and invisible to I2 for as long as I2 only asked
-  // `CHROME_SURFACES`.
-  shell: "#F2F3F7",
-  well: "#F2F3F7",
-  overlay: "#F2F3F7",
 };
 
 /**
