@@ -1,9 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Board } from "./Board";
 import { PaintButton } from "./PaintButton";
 import { TokenRail, type RailToken } from "./TokenRail";
+import { Scoreboard } from "./Scoreboard";
+import { WarClock } from "./WarClock";
 import { WarHud } from "./WarHud";
 import { useCanvasStream } from "../hooks/useCanvasStream";
 import { PaintPalette } from "./PaintPalette";
@@ -205,104 +208,138 @@ export function WarView({ war, tokens: initialTokens }: { war: WarSummary; token
   }, []);
 
   return (
-    <main className="relative flex h-screen flex-col bg-zinc-950 text-zinc-50 md:flex-row">
-      <aside className="flex shrink-0 gap-3 overflow-x-auto border-b border-zinc-800 p-3 md:h-full md:w-56 md:flex-col md:overflow-x-visible md:overflow-y-auto md:border-b-0 md:border-r">
-        <div className="flex w-full flex-col gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-wide text-[var(--chrome-ink-muted-inverse)]">
-              Painting for
-            </p>
-            <TokenRail tokens={tokens} selectedId={selectedId} onSelect={setSelectedId} />
-          </div>
+    /**
+     * THE CABINET. A header carrying the wordmark, a rail that is now a
+     * scoreboard, and the board mounted in a single frame.
+     *
+     * This screen used to be `bg-zinc-950` with a rounded well and zinc
+     * borders — the design system existed in globals.css and chrome.ts and
+     * simply was not on the one page anybody looks at. Nothing here is a new
+     * decision; it is DESIGN.md applied.
+     */
+    <main className="flex h-screen flex-col" style={{ background: "var(--chrome-surround)" }}>
+      <header className="header-bar bevel flex shrink-0 items-baseline justify-between gap-4 px-4 py-2.5">
+        {/* Brass, and one of exactly three places the accent is allowed
+            (DESIGN.md I5). A visitor who lands here with no context reads the
+            name of the thing before anything else. */}
+        <span
+          className="text-[16px] font-medium tracking-[0.14em]"
+          style={{ color: "var(--chrome-accent)" }}
+        >
+          PIXELWAR
+        </span>
+        <span className="section-label truncate">{war.title}</span>
+      </header>
 
-          <div>
-            <p className="text-[11px] uppercase tracking-wide text-[var(--chrome-ink-muted-inverse)]">
-              Colour
-            </p>
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <aside className="panel bevel flex shrink-0 flex-col gap-3 overflow-y-auto p-3 md:w-[280px]">
+          {/* THE CLOCK, and it is the event. It used to be six words of
+              unstyled mono in a corner strip above the canvas, which is where
+              a page puts a build number. A war is a thing with an ending, and
+              the ending is most of why anybody is watching. */}
+          <WarClock
+            startsAt={war.startsAt}
+            endsAt={war.endsAt}
+            notStarted={warNotStarted}
+            ended={warEnded}
+            onStart={() => setWarNotStarted(false)}
+          />
+
+          <section className="flex flex-col gap-1">
+            <h2 className="section-label">Board</h2>
+            <Scoreboard
+              tokens={tokens}
+              boardPixels={war.width * war.height}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+            />
+          </section>
+
+          <section className="flex flex-col gap-1">
+            <h2 className="section-label">Painting for</h2>
+            <TokenRail tokens={tokens} selectedId={selectedId} onSelect={setSelectedId} />
+          </section>
+
+          <section className="flex flex-col gap-1">
+            <h2 className="section-label">Colour</h2>
             <PaintPalette
               selected={colourSlot}
               onSelect={setColourSlot}
               disabled={warEnded || warNotStarted}
             />
-          </div>
+          </section>
 
           <button
             type="button"
             aria-pressed={layer === "token"}
             onClick={() => setLayer((l) => (l === "token" ? "colour" : "token"))}
-            className="px-2 py-1 text-left text-[12px]"
-            style={{
-              background: "var(--chrome-control)",
-              border:
-                layer === "token"
-                  ? "2px solid var(--chrome-accent)"
-                  : "2px solid transparent",
-            }}
+            className="btn-secondary bevel px-3 py-1.5 text-left"
+            style={layer === "token" ? { outline: "2px solid var(--chrome-accent)" } : undefined}
           >
             {layer === "token" ? "Showing territory" : "Show territory"}
           </button>
-        </div>
-      </aside>
 
-      <div className="relative flex flex-1 flex-col gap-3 p-3">
-        <WarHud
-          hovered={hovered}
-          scale={scale}
-          startsAt={war.startsAt}
-          endsAt={war.endsAt}
-          notStarted={warNotStarted}
-          onStart={() => setWarNotStarted(false)}
-        />
+          <Link className="muted mt-auto text-[13px] underline" href="/join">
+            Add your token
+          </Link>
+        </aside>
 
-        <div className="relative flex-1 overflow-hidden rounded-lg bg-zinc-800">
-          {image ? (
-            <Board image={image} version={version} onPaint={paintAt} onHover={handleHover} />
-          ) : (
-            // Quiet text is a named colour, never `opacity` (DESIGN.md §9).
-            // MUTED_INK_INVERSE reads 7.26:1 in this well; the `opacity-70`
-            // it replaced rendered 7.76:1 and recorded that nowhere.
-            <div className="grid h-full place-items-center text-sm text-[var(--chrome-ink-muted-inverse)]">
-              Loading the canvas...
-            </div>
-          )}
+        {/* Margins in service of the canvas: the board takes every pixel the
+            rail does not, and is the only thing that grows. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 p-3">
+          <WarHud hovered={hovered} scale={scale} />
 
-          {warNotStarted ? (
-            <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
-              <div>
-                <h2 className="text-xl font-semibold">This war has not started yet.</h2>
-                <p className="text-[var(--chrome-ink-muted-inverse)]">
-                  Painting opens for {war.title} soon.
-                </p>
+          <div className="board-frame relative min-h-0 flex-1">
+            {image ? (
+              <Board image={image} version={version} onPaint={paintAt} onHover={handleHover} />
+            ) : (
+              /* Full ink, not muted. The board ground carries MUTED_INK_INVERSE
+                 at 6.54:1, under DESIGN.md §9's body floor of 7 — see
+                 MUTED_INK_INVERSE_SURFACES, which deliberately omits it. This
+                 line was muted in the restyle's first draft and the invariant
+                 caught it. */
+              <div className="grid h-full place-items-center text-[13px] text-[var(--chrome-ink-inverse)]">
+                Loading the canvas...
               </div>
-            </div>
-          ) : warEnded ? (
-            <div className="absolute inset-0 grid place-items-center bg-black/80 text-center">
-              <div>
-                <h2 className="text-xl font-semibold">This war has ended.</h2>
-                <p className="text-[var(--chrome-ink-muted-inverse)]">
-                  Painting is closed for {war.title}.
-                </p>
-              </div>
-            </div>
-          ) : null}
-        </div>
+            )}
 
-        <div className="flex flex-col items-center gap-2">
-          <PaintButton
-            cooldownUntil={cooldownUntil}
-            disabled={warEnded || warNotStarted || !selectedId || !target || inFlight}
-            label="Paint"
-            onPaint={() => target && paintAt(target.x, target.y)}
-          />
-          {error ? (
-            <p
-              role="status"
-              aria-live="polite"
-              className="rounded-md bg-red-950 px-3 py-1.5 text-sm text-red-200"
-            >
-              {error}
-            </p>
-          ) : null}
+            {warNotStarted || warEnded ? (
+              /* A SOLID face, not a translucent scrim. An overlay at 88% over
+                 the board composites to a colour nobody measured, which is the
+                 same defect as quieting text with opacity one layer out. The
+                 header ground is a declared surface, carries full ink at
+                 11.51:1 and muted at 7.55:1, and is on the list that says so. */
+              <div
+                className="absolute inset-0 grid place-items-center text-center"
+                style={{ background: "var(--chrome-header)" }}
+              >
+                <div className="flex flex-col gap-1 px-4">
+                  <h2 className="text-[20px] font-medium text-[var(--chrome-ink-inverse)]">
+                    {warNotStarted ? "This war has not started yet." : "This war has ended."}
+                  </h2>
+                  <p className="text-[13px] text-[var(--chrome-ink-muted-inverse)]">
+                    {warNotStarted
+                      ? `Painting opens for ${war.title} soon.`
+                      : `Painting is closed for ${war.title}.`}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex shrink-0 flex-col gap-2">
+            <PaintButton
+              cooldownUntil={cooldownUntil}
+              disabled={warEnded || warNotStarted || !selectedId || !target || inFlight}
+              label="Paint"
+              onPaint={() => target && paintAt(target.x, target.y)}
+            />
+            {error ? (
+              <p role="status" aria-live="polite" className="readout bevel-in px-3 py-1.5 text-[13px]">
+                {error}
+              </p>
+            ) : null}
+          </div>
         </div>
       </div>
     </main>

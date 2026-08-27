@@ -14,7 +14,7 @@ import { PALETTE, CANVAS_GROUND, rgbDistance } from "../palette";
 import {
   AA_NORMAL_TEXT,
   ACCENT,
-  BOARD_SURFACES,
+  MUTED_INK_INVERSE_SURFACES,
   BODY_TEXT_CONTRAST,
   CHIP_OUTLINE,
   CHIP_SURFACES,
@@ -100,17 +100,14 @@ describe("every token chip is visible on every surface chrome draws it on", () =
     expect(Object.keys(CHIP_OUTLINE).sort()).toEqual(surfaces.slice().sort());
   });
 
-  it("keeps the two surface lists disjoint, so the union cannot hide a collision", () => {
-    // `CHIP_SURFACES` is a spread, and a spread resolves a duplicate key
-    // silently. A `BOARD_SURFACES` key that shadowed a chrome one would leave
-    // I2 measuring the board value here while I1 and I4 went on measuring the
-    // chrome value there — two invariants disagreeing about what a surface is,
-    // and nothing red anywhere. Disjoint is the property that makes the union
-    // mean what it reads as.
-    const chrome = Object.keys(CHROME_SURFACES);
-    const board = Object.keys(BOARD_SURFACES);
-    expect(chrome.filter((key) => board.includes(key))).toEqual([]);
-    expect(Object.keys(CHIP_SURFACES)).toHaveLength(chrome.length + board.length);
+  it("draws chips only on surfaces the design chose", () => {
+    // This used to assert that two surface lists were disjoint, because
+    // `CHIP_SURFACES` spread a second list of dark faces the board screen had
+    // picked before DESIGN.md existed. The board screen draws on chrome
+    // surfaces now and that list is gone, so the property worth holding is
+    // the stronger one it was standing in for: every surface a chip lands on
+    // is a surface I1 and I4 already police.
+    expect(Object.keys(CHIP_SURFACES).sort()).toEqual(Object.keys(CHROME_SURFACES).sort());
   });
 });
 
@@ -245,14 +242,31 @@ describe("a chrome colour is legible under the text it carries", () => {
   // for light faces and reads 1.89:1 on the board's own chrome — not a quieter
   // colour, an invisible one — so a dark surface needs its own, and it is
   // measured exactly the way the light one is.
-  it("carries body text at the floor on every dark surface the board draws on", () => {
-    const surfaces = Object.entries(BOARD_SURFACES);
-    expect(surfaces.length).toBeGreaterThan(0);
-    for (const [name, face] of surfaces) {
+  it("carries body text at the floor on every dark face declared for it", () => {
+    expect(MUTED_INK_INVERSE_SURFACES.length).toBeGreaterThan(0);
+    for (const name of MUTED_INK_INVERSE_SURFACES) {
+      const face = CHROME_SURFACES[name];
       expect(contrastRatio(MUTED_INK_INVERSE, face), `${name} (${face})`).toBeGreaterThanOrEqual(
         BODY_TEXT_CONTRAST,
       );
     }
+  });
+
+  it("keeps the board ground off that list, because it does not clear the floor", () => {
+    // The omission is the invariant, not an oversight. MUTED_INK_INVERSE
+    // reads 6.54:1 on the board ground — under §9's body floor — so the
+    // board carries full ink or nothing, exactly as the readout and the
+    // surround do on the light side. The restyle's first draft put the
+    // canvas's loading line here in muted ink; this case is what a repeat
+    // costs.
+    expect(MUTED_INK_INVERSE_SURFACES).not.toContain("board");
+    expect(contrastRatio(MUTED_INK_INVERSE, CHROME_SURFACES.board)).toBeLessThan(
+      BODY_TEXT_CONTRAST,
+    );
+    // And the colour the board must use instead does clear it.
+    expect(contrastRatio(INK_INVERSE, CHROME_SURFACES.board)).toBeGreaterThanOrEqual(
+      BODY_TEXT_CONTRAST,
+    );
   });
 
   // The scale, not the usage. `DISABLED_INK` is not drawn on a board surface
@@ -263,7 +277,8 @@ describe("a chrome colour is legible under the text it carries", () => {
   // appears on a dark face there is already a measured step below muted for
   // it to use, instead of an `opacity` invented on the spot.
   it("keeps the dark scale in order: full ink, muted, disabled", () => {
-    for (const [name, face] of Object.entries(BOARD_SURFACES)) {
+    for (const name of MUTED_INK_INVERSE_SURFACES) {
+      const face = CHROME_SURFACES[name];
       const full = contrastRatio(INK_INVERSE, face);
       const muted = contrastRatio(MUTED_INK_INVERSE, face);
       const dead = contrastRatio(DISABLED_INK, face);
@@ -275,59 +290,31 @@ describe("a chrome colour is legible under the text it carries", () => {
 
   it("proves the light muted ink could not have been used there instead", () => {
     // The control that makes the second colour a necessity rather than a
-    // preference: if MUTED_INK ever clears the body floor on a board surface,
+    // preference: if MUTED_INK ever clears the body floor on a dark face,
     // MUTED_INK_INVERSE is redundant and should go.
-    for (const [name, face] of Object.entries(BOARD_SURFACES)) {
+    for (const name of MUTED_INK_INVERSE_SURFACES) {
+      const face = CHROME_SURFACES[name];
       expect(contrastRatio(MUTED_INK, face), `${name} (${face})`).toBeLessThan(BODY_TEXT_CONTRAST);
     }
   });
 
-  it("records what the six opacities the board replaced actually rendered", () => {
-    // The figures, not a relation. This case used to assert that each
-    // composited value was lower than its own full-strength value, which is
-    // true for every colour, every surface and every alpha below 1 by
-    // construction — compositing text toward its background cannot raise
-    // contrast. Four of six assertions could not fail for any input, so they
-    // recorded nothing at all while reading as though they did.
-    //
-    // These are the numbers measured in a real browser before the sites were
-    // replaced, reproduced from the same compositing the compositor does. They
-    // are pinned because the surfaces behind them are Batch A's and will move
-    // when the board is restyled: if `BOARD_SURFACES` changes, the record of
-    // what was wrong here has to be re-measured rather than quietly re-derived.
-    const ZINC_50 = "#FAFAFA";
+  it("records what the opacity the chrome replaced actually rendered", () => {
+    // This case used to pin six figures, five of them measured against three
+    // zinc faces the board screen had picked before DESIGN.md existed. Those
+    // faces are gone — the board screen draws on chrome surfaces now — and
+    // the constant's own note said the record had to be re-measured rather
+    // than quietly re-derived when they moved. Re-measuring a composite over
+    // a surface that no longer exists would be recording fiction, so what
+    // survives is the one figure whose surface is still on screen.
     const rendered = (over: string, base: string, alpha: number) =>
       contrastRatio(composite(over, base, alpha), base);
 
-    // page.tsx — the only one of the six that inherited the chrome rather than
-    // Tailwind, and the only one whose figure the previous batch had right.
+    // page.tsx — the only one of the six that inherited the chrome rather
+    // than Tailwind, and the only one whose figure the batch that found it
+    // had right. Still 3.85:1, still under the body floor, still the reason
+    // quiet text is a colour here and never an alpha.
     expect(rendered(INK, CHROME_SURFACES.surround, 0.7)).toBeCloseTo(3.85, 2);
-    // WarView, the loading line in the board well.
-    expect(rendered(ZINC_50, BOARD_SURFACES.well, 0.7)).toBeCloseTo(7.76, 2);
-    // WarView, both overlay paragraphs, on black-at-80%-over-zinc-800.
-    expect(rendered(ZINC_50, BOARD_SURFACES.overlay, 0.8)).toBeCloseTo(12.22, 2);
-    // TokenRail, the leaderboard count.
-    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.7)).toBeCloseTo(9.38, 2);
-    // TokenRail, the keyboard hint — reported as 2.04 for a week, and 3.63.
-    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.4)).toBeCloseTo(3.63, 2);
-    // PaintButton, the cooldown countdown on a disabled control.
-    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.6)).toBeCloseTo(7.07, 2);
-
-    // And the part that is a judgement rather than a measurement: two of the
-    // six were genuinely under §9's body floor, and four cleared it by
-    // accident on a surface nobody had written down. An unmeasured number that
-    // happens to be fine is still unmeasured, which is why all six were
-    // replaced and not just the two.
     expect(rendered(INK, CHROME_SURFACES.surround, 0.7)).toBeLessThan(BODY_TEXT_CONTRAST);
-    expect(rendered(ZINC_50, BOARD_SURFACES.shell, 0.4)).toBeLessThan(BODY_TEXT_CONTRAST);
-    for (const [base, alpha] of [
-      [BOARD_SURFACES.well, 0.7],
-      [BOARD_SURFACES.overlay, 0.8],
-      [BOARD_SURFACES.shell, 0.7],
-      [BOARD_SURFACES.shell, 0.6],
-    ] as const) {
-      expect(rendered(ZINC_50, base, alpha)).toBeGreaterThanOrEqual(BODY_TEXT_CONTRAST);
-    }
   });
 
   it("rejects opacity as a way to quiet text — the failure that added this rule", () => {

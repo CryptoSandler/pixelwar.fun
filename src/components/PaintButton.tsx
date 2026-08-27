@@ -44,14 +44,17 @@ export function PaintButton({
       type="button"
       disabled={disabled || waiting}
       onClick={onPaint}
-      // Quiet, not out of reach — and the distinction decides the colour.
-      // `DISABLED_INK` is right where "disabled" is the whole message, but
-      // this label is not saying that: while the cooldown runs it IS the
-      // countdown, which is the one thing a painter is waiting to read.
-      // Hiding it at 4.14:1 to signal a state the `disabled` attribute and
-      // the cursor already signal gets the trade backwards. MUTED_INK_INVERSE
-      // reads 9.70:1 on the shell behind this button.
-      className="rounded-full px-8 py-3 text-lg font-semibold disabled:cursor-not-allowed disabled:text-[var(--chrome-ink-muted-inverse)]"
+      // THE brass key. `btn-primary` is the accent, the bevel and the zero
+      // radius in one class (DESIGN.md I5, §4) — this button used to be
+      // `rounded-full` with no accent at all, which is to say the one control
+      // the whole screen exists to offer looked like a link.
+      //
+      // The disabled face is `btn-primary:disabled`'s named colour, not a
+      // filter: while the cooldown runs this label IS the countdown, the one
+      // thing a painter is waiting to read, and `DISABLED_FACE` carries the
+      // full ink at 4.85:1 rather than compositing it to a number nobody
+      // measured.
+      className="btn-primary w-full px-8 py-3"
     >
       {text}
     </button>

@@ -22,6 +22,15 @@
   --bevel-light: rgb(255 255 255 / 0.55);
   --bevel-dark: rgb(0 0 0 / 0.32);
   --bevel-light-hover: rgb(255 255 255 / 0.85);
+
+  /**
+   * The board frame's inner line (DESIGN.md §4). A chrome value, so it owes
+   * I1 a distance from every token — 60/61/156 sits well clear, and it is
+   * the one blue in the chrome that is darker than the readout, which is
+   * what lets it read as a shadow line inside the frame rather than as a
+   * second border.
+   */
+  --board-inset: #60619C;
 }
 
 body {
@@ -190,6 +199,109 @@ button.swatch:hover:not(:disabled),
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+/**
+ * The board is mounted, not embedded (DESIGN.md §4): a 3px frame in the
+ * header's ink with a 2px inset line inside it. One frame and one only — the
+ * board used to sit in a rounded well inside a padded column inside a dark
+ * shell, which is three nested boxes competing to be the edge of the
+ * artwork.
+ */
+.board-frame {
+  background: var(--chrome-board);
+  border: 3px solid var(--chrome-header);
+  /* The inner line drawn as an outline pulled inside the border box, not as
+     an inset box-shadow. DESIGN.md §4 rules shadows out entirely, and while
+     an inset shadow at zero blur is a line rather than a shadow, "it is not
+     really a shadow" is the argument every shadow makes. An outline is a
+     line by definition. -5px is the 3px border plus the 2px outline, which
+     lands it exactly inside the frame. */
+  outline: 2px solid var(--board-inset);
+  outline-offset: -5px;
+}
+
+/**
+ * One row of the scoreboard. A button because selecting a token is what it
+ * does; laid out on a grid so the tickers, bars and percentages line up into
+ * three columns that can be scanned vertically instead of read row by row.
+ */
+.score-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr 3.25rem;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+  background: transparent;
+  border: 2px solid transparent;
+}
+
+.score-row:hover:not(:disabled) {
+  background: var(--chrome-control);
+}
+
+/* Selection is brass on the CONTROL, never on the chip (DESIGN.md I5). */
+.score-row[aria-pressed="true"] {
+  background: var(--chrome-control);
+  border-color: var(--chrome-accent);
+}
+
+/* The track is a recessed channel, said with the bevel the design already
+   has rather than with a shadow invented for it. `bevel-in` on the element
+   itself would cost 2px on all four sides of a 0.6rem bar; these are the same
+   two tones, one pixel, on the two sides that read as depth. */
+.score-track {
+  display: block;
+  height: 0.6rem;
+  background: var(--chrome-readout);
+  border-top: 1px solid var(--bevel-dark);
+  border-left: 1px solid var(--bevel-dark);
+  border-bottom: 1px solid var(--bevel-light);
+  border-right: 1px solid var(--bevel-light);
+}
+
+/**
+ * The fill is a step, not a slide. DESIGN.md §6: a leaderboard reorder is a
+ * 2-frame step at ~120ms, and `steps(2)` is that rule expressed rather than
+ * described. Under reduced motion the guarded block at the foot of this file
+ * collapses the duration and the bar simply appears at its new width — the
+ * information is identical, only the travel is gone.
+ */
+.score-fill {
+  display: block;
+  height: 100%;
+  transition: width 120ms steps(2, end);
+}
+
+.ticker {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/**
+ * The war clock, which is the event rather than a metadatum in a corner.
+ * Mono and tabular so the seconds cannot make the layout twitch once a
+ * second for two days.
+ */
+.clock {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+@media (min-width: 768px) {
+  .clock {
+    font-size: 34px;
+  }
 }
 
 /**

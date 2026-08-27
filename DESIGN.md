@@ -20,8 +20,9 @@ introduced.
 ## 1. Vision
 
 A war is 48 to 72 hours long, and for all of it the board is the only thing
-that matters. Twenty-four communities each hold one colour; painting is free;
-the leaderboard moves while you watch. Everything the interface does is in
+that matters. Communities compete for territory; anyone may paint in any of
+the twenty-four colours; painting is free; the scoreboard moves while you
+watch. Everything the interface does is in
 service of two questions a visitor asks in the first three seconds: *what is
 happening on this board*, and *how do I add to it*.
 
@@ -42,16 +43,25 @@ in direct competition with twenty-four saturated colours and lose.
 
 Two separate colour systems share one screen and must never be confused.
 
-**The canvas palette** — twenty-four colours, one per token, plus the ground.
-Defined in [palette.ts](src/lib/wars/palette.ts). These are the r/place 2022
-values, which every clone converged on because they stay distinguishable at
-one-pixel size. **They belong to tokens.** A community's colour is its identity
-and its scoreboard.
+**The canvas palette** — twenty-four colours anyone may paint in, plus the
+ground. Defined in [palette.ts](src/lib/wars/palette.ts). These are the
+r/place 2022 values, which every clone converged on because they stay
+distinguishable at one-pixel size.
+
+**They no longer belong to tokens, and that changed after this document was
+first written.** A colour was a token's identity when a canvas byte was a
+palette slot and a palette slot was a token. Painting is free of that now:
+attribution rides on `pixels.war_token_id` and the colour on the board says
+nothing about who owns a pixel (migration 007). What a token keeps is a
+FLAG — its slot in this list, which stands for it on the scoreboard and in
+the territory view, and which is the only place a token's colour still
+appears at size.
 
 | Role | Value | Note |
 | --- | --- | --- |
-| Token slots 1–24 | see `PALETTE` | Never used by chrome |
-| Empty pixel (slot 0) | `#2E2E38` | A desaturated slate. No token is grey, so grey can only mean unpainted. |
+| Palette slots 1–24 | see `PALETTE` | Free to paint with. Never used by chrome. |
+| Token flag | `flagColourForSlot` | The same list, wrapped: past 24 tokens two flags repeat. See [operations.md](docs/operations.md). |
+| Empty pixel (slot 0) | `#2E2E38` | A desaturated slate. No token is grey, so grey can only mean unpainted. It is also the one slot `paintPixel` refuses, so nobody can blank a pixel by painting the ground. |
 
 **The chrome palette** — everything the application paints for itself. Defined
 in [chrome.ts](src/lib/wars/chrome.ts).
@@ -148,17 +158,28 @@ updates reads as unstable, and this board updates every 1.5 seconds.
 ┌──────────────────────────────────────────────────────────────┐
 │  HEADER — wordmark · war status                              │
 ├───────────────┬──────────────────────────────────────────────┤
-│  LEADERBOARD  │           READOUT — coords · countdown       │
+│  CLOCK        │           READOUT — coords · zoom            │
+│  SCOREBOARD   │                                              │
 │               │  ┌────────────────────────────────────────┐  │
 │  chip ticker  │  │                                        │  │
-│       count   │  │              THE BOARD                  │  │
-│       bar     │  │              200 × 200                  │  │
+│       bar     │  │              THE BOARD                  │  │
+│       share%  │  │              200 × 200                  │  │
 │               │  │                                        │  │
 │               │  └────────────────────────────────────────┘  │
-│               │   PAINT BAR — token swatches      [ PAINT ]  │
+│  PAINTING FOR │                                              │
+│  COLOUR       │              [ PAINT — cooldown inside ]     │
 │  footnote     │                                              │
 └───────────────┴──────────────────────────────────────────────┘
 ```
+
+The war clock sits at the top of the rail, not in the readout strip: a war is
+a thing with an ending and the ending is most of why anybody is watching, so
+it is set at 28–34px in tabular mono rather than filed next to the zoom
+level. The scoreboard below it is a bar per token, scaled to the leader
+rather than to the board — early in a war every share is a fraction of a
+percent and bars drawn against 40,000 cells are all zero width, which would
+leave the scoreboard blank for the hours when watching it is most
+interesting. The percentage beside each bar carries the absolute truth.
 
 Fixed 280px rail, board centred in the remaining space. The board never
 reflows: it is a fixed-ratio square and everything else yields to it. Below
