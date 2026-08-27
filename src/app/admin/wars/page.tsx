@@ -64,6 +64,14 @@ export default async function AdminWarsPage() {
           because that was the size of the palette, back when a token was a colour. It is a
           judgement now.
         </p>
+        {/* An operating rule, not a constraint — see docs/operations.md for why
+            this is not a CHECK. Said here because this is where somebody is
+            about to type the number. */}
+        <p className="text-[13px]">
+          Keep wars at <span className="numeric">24</span> or fewer until the palette has more
+          than 24 colours. Above that, two tokens fly the same flag and the territory view stops
+          answering the question it exists for.
+        </p>
 
         {wars.length === 0 ? (
           <p className="muted text-[13px]">No wars yet.</p>

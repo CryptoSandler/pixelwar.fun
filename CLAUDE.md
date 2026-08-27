@@ -63,6 +63,52 @@ Two habits follow:
 2. **"Who calls this?" is a review question**, asked of every new module, and
    answered with a file and a line rather than an intention.
 
+# Test databases: one per branch that migrates
+
+**A branch that adds a migration runs against its OWN Neon test branch — a
+child of `production`, migrated to that branch's level, deleted when the
+branch merges. Branches that add no migration share `tests`.**
+
+This is not tidiness. Two unmerged branches sharing one test database means
+the one that migrates decides the schema for the one that does not, and the
+second branch fails on a column its code predates. That happened here:
+`paleta-libre` added `pixels.colour_slot NOT NULL`, and
+`reconciliacion-sin-scheduler` — correct, unchanged, already green — started
+failing seventeen tests whose fixtures had never heard of the column. Nothing
+was wrong with the branch. The close would have reported a defect that did
+not exist, or worse, reported "it passed earlier" and been believed.
+
+The fix took one Neon branch off `production` and a `TEST_DATABASE_URL`
+override for one run: 538/538, green, in fifteen minutes. The habit is
+cheaper than the diagnosis every time.
+
+**Merge order follows from this and is not optional.** The branch without
+migrations merges first; the one with them rebases on top and re-runs. The
+reverse puts the migration-free branch on a `main` whose database has already
+moved, which is the same failure with more steps.
+
+## Concurrent runs against the shared database
+
+`fileParallelism: false` in `vitest.config.mts` stops files inside ONE run
+from racing. It does nothing about two runs — two sessions, two terminals,
+two repos — and those truncate each other's fixtures mid-assertion.
+`vitest.setup.ts` takes a Postgres advisory lock for the length of a run, so
+the second run waits instead of interleaving.
+
+Two things about that lock are load-bearing:
+
+- **It is taken on a DIRECT connection, not the pooled one.** Neon's pooled
+  endpoint is PgBouncer in transaction mode, which hands one server connection
+  to a different client between transactions — a session-level lock taken
+  through it is released at a moment nobody controls. It would appear to work
+  and protect nothing. `directUrl()` strips `-pooler` for exactly this.
+- **It waits with a ceiling, and says which situation it is.** A run that hung
+  and a run that is genuinely still going need different responses from
+  whoever is reading the terminal.
+
+**Never `pkill -f vitest`.** It matches every repo on the machine. Doing it
+here killed two other projects' suites mid-run. Kill by PID.
+
 # Migrations
 
 **Never change the SQL of a migration that has already been applied. Add the
