@@ -171,6 +171,36 @@ export async function reviveWar(warId: string, endsAt: Date): Promise<ReviveResu
 }
 
 /**
+ * The most recently finished war, for the screen shown between wars.
+ *
+ * A finished board with a winner on it is the best piece of marketing this
+ * product generates on its own, and until now it was thrown away: the moment
+ * a war ended, the home page stopped showing anything at all. This is what
+ * the intermission renders.
+ *
+ * Ordered by `ended_at` and not by `ends_at`, because a war can be ended
+ * early by the kill switch or revived and re-ended — `ends_at` is the
+ * deadline it was aiming at, and `ended_at` is when it actually stopped.
+ */
+export async function lastFinishedWar(): Promise<War | null> {
+  // ONLY A WAR WITH SOMETHING ON IT. A finished board with no pixels is not
+  // a result — it is an empty grid under a heading that claims to be one,
+  // which is worse than showing nothing. This also keeps a war that never
+  // really ran (a test fixture, an aborted schedule, a board that was
+  // cleared) from becoming the site's front page by being the most recent
+  // thing to end.
+  const row = await queryOne<WarRow>(
+    `SELECT ${WAR_COLUMNS.split(", ").map((c) => `w.${c}`).join(", ")} FROM wars w
+      WHERE w.status = 'ended'
+        AND w.ended_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM pixels p WHERE p.war_id = w.id)
+      ORDER BY w.ended_at DESC
+      LIMIT 1`,
+  );
+  return row ? toWar(row) : null;
+}
+
+/**
  * The war the home page shows: the one that is running, or the one about to.
  *
  * Advancing happens here rather than in the caller so that no route can forget

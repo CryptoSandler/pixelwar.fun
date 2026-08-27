@@ -244,6 +244,37 @@ not built.
 
 ---
 
+## 5a. Between wars: a result, not an invitation
+
+**A board nobody can paint on reads as broken unless the screen says plainly
+that it is a result. Every element of the intermission serves that sentence.**
+
+`/` is the board in all three states and there is never a landing in front of
+it. The recruitment channel these communities use is a raid link, and a page
+between that link and the first pixel charges a click to everyone in order to
+serve the few who came to read.
+
+| State | What it shows |
+| --- | --- |
+| Live | The war. |
+| Between | The countdown to the next war DOMINATES; the finished board sits behind it as context, under a heading that names it a result and names the winner. |
+| None scheduled | The same screen without the countdown. |
+| Nothing ever finished | The same screen with a sentence where the board would be. |
+
+**The countdown outranks the result when both are present.** The result is
+context; the countdown is imminent and actionable. *"This happened, and the
+next one starts in 02:14:33"* is a better screen than either half alone.
+
+**The wordmark appears in every state, including the empty one.** Its absence
+was the defect this section exists to prevent: a deployment between wars
+showed a stranger three sentences on a bare background with no way to learn
+what the site is — and that was the launch-day first impression.
+
+**The finished board is `Board` with its callbacks made no-ops**, not a second
+renderer. The zoom, pan, pinch and device-pixel grid all live there already
+and a copy would drift. The server refuses paints on an ended war regardless;
+this only stops the click being offered.
+
 ## 6. Motion
 
 Motion is a sprite, not an animation. Steps, not curves.

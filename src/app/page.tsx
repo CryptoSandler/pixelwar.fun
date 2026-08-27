@@ -1,64 +1,106 @@
-import Link from "next/link";
 import { armyCounts } from "../lib/paint/allegiance";
-import { activeTokens, currentWar } from "../lib/wars/lifecycle";
+import { queryOne } from "../lib/db";
+import { activeTokens, currentWar, lastFinishedWar } from "../lib/wars/lifecycle";
+import { Intermission, type FinishedWar } from "../components/Intermission";
 import { WarView } from "../components/WarView";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The home page, in its three states.
+ *
+ * `/` IS THE BOARD AND THERE IS NO LANDING IN FRONT OF IT. The recruitment
+ * channel these communities actually use is a raid link from Telegram or X,
+ * and a page between that link and the first pixel charges a click to
+ * everyone in order to serve the few who arrived to read. So the board is
+ * what `/` renders whenever there is a board to render.
+ *
+ * The three states, and what each is FOR:
+ *
+ *   LIVE       the war. `WarView`, unchanged.
+ *   BETWEEN    a war is scheduled and the last one has finished. The
+ *              countdown dominates — it is imminent and actionable — and the
+ *              finished board sits behind it as context. "This happened, and
+ *              the next one starts in 02:14:33" beats either half alone.
+ *   NONE       nothing scheduled. Same screen without the countdown, and if
+ *              no war has EVER finished, the same screen with a sentence
+ *              instead of a board.
+ *
+ * All three carry the wordmark. Its absence in the old empty state was the
+ * whole defect: on a deployment between wars a stranger got three sentences
+ * on a bare background and no way to learn what this site is — which was
+ * literally the launch-day first impression.
+ */
 export default async function Page() {
   const war = await currentWar();
-  if (!war) {
+
+  // A scheduled war that has not opened yet is NOT the live board. Rendering
+  // WarView for it showed an empty canvas under a "has not started" overlay,
+  // which throws away the one thing worth showing between wars: the war that
+  // just ended.
+  if (war && war.status === "live") {
+    const tokens = await activeTokens(war.id);
+    const armies = await armyCounts(war.id);
+
     return (
-      <main className="grid min-h-screen place-items-center p-8 text-center">
-        <div>
-          <h1 className="text-2xl font-semibold">No war is running.</h1>
-          {/* Full-strength ink, not a quiet one. This sits on the surround,
-              where DESIGN.md §9 leaves no headroom at all — INK itself reaches
-              only 7.20:1 against a body floor of 7 — so quiet text does not
-              belong here and the fix is to stop quieting it. It was
-              `opacity-70`, which rendered 3.85:1. */}
-          <p>The next one will appear here when it opens.</p>
-          {/* The other half of "nothing links to /join". The HUD link only
-              exists inside `WarView`, which is exactly what this branch
-              renders instead of — so between wars the checkout was reachable
-              by typing the path and no other way, which is the state somebody
-              arriving early is most likely to be in. */}
-          <p className="mt-4">
-            <Link className="underline" href="/join">
-              Add your token to the next war
-            </Link>
-          </p>
-        </div>
-      </main>
+      <WarView
+        war={{
+          slug: war.slug,
+          title: war.title,
+          status: war.status,
+          width: war.width,
+          height: war.height,
+          startsAt: war.startsAt.toISOString(),
+          endsAt: war.endsAt.toISOString(),
+        }}
+        tokens={tokens.map((token) => ({
+          id: token.id,
+          ticker: token.ticker,
+          name: token.name,
+          colourSlot: token.colourSlot,
+          owned: 0,
+          painters: armies.get(token.id)?.painters ?? 0,
+          sworn: armies.get(token.id)?.sworn ?? 0,
+        }))}
+      />
     );
   }
 
-  const tokens = await activeTokens(war.id);
-  // Read here rather than left at zero for a poll cycle: the sworn mark is a
-  // recruiting signal, and a scoreboard whose badges appear two seconds after
-  // the page does looks like a glitch on the first paint everybody sees.
-  const armies = await armyCounts(war.id);
+  const finished = await lastFinishedWar();
+  let result: FinishedWar | null = null;
+
+  if (finished) {
+    // The winner is whoever holds the most pixels at the end. Read from
+    // `token_pixel_counts`, which counts by ATTRIBUTED token — the colour on
+    // the board says nothing about who owns a pixel since the palette was
+    // freed.
+    const winner = await queryOne<{ ticker: string; colour_slot: number; owned: number }>(
+      `SELECT t.ticker, t.colour_slot, c.owned
+         FROM token_pixel_counts c
+         JOIN war_tokens t ON t.id = c.war_token_id
+        WHERE c.war_id = $1 AND c.owned > 0
+        ORDER BY c.owned DESC
+        LIMIT 1`,
+      [finished.id],
+    );
+
+    result = {
+      slug: finished.slug,
+      title: finished.title,
+      width: finished.width,
+      height: finished.height,
+      endedAt: (finished.endedAt ?? finished.endsAt).toISOString(),
+      winner: winner
+        ? { ticker: winner.ticker, colourSlot: winner.colour_slot, owned: winner.owned }
+        : null,
+    };
+  }
 
   return (
-    <WarView
-      war={{
-        slug: war.slug,
-        title: war.title,
-        status: war.status,
-        width: war.width,
-        height: war.height,
-        startsAt: war.startsAt.toISOString(),
-        endsAt: war.endsAt.toISOString(),
-      }}
-      tokens={tokens.map((token) => ({
-        id: token.id,
-        ticker: token.ticker,
-        name: token.name,
-        colourSlot: token.colourSlot,
-        owned: 0,
-        painters: armies.get(token.id)?.painters ?? 0,
-        sworn: armies.get(token.id)?.sworn ?? 0,
-      }))}
+    <Intermission
+      finished={result}
+      nextOpensAt={war ? war.startsAt.toISOString() : null}
+      nextTitle={war ? war.title : null}
     />
   );
 }
