@@ -17,7 +17,15 @@ import { execute, query, queryOne, transaction } from "./db";
  * mechanism. What was missing was any way to write a row.
  */
 
-export type BanKeyType = "painter" | "ip" | "subnet";
+/**
+ * The four things a ban can name.
+ *
+ * `wallet` is the only one that cannot be shed: a painter key is a cookie, an
+ * address rotates, a subnet is shared — and a sworn wallet is bound for the
+ * war and replacing it costs another token purchase. It is the primitive
+ * moderation should reach for first when the offender has sworn.
+ */
+export type BanKeyType = "painter" | "ip" | "subnet" | "wallet";
 
 export type Ban = {
   id: string;
@@ -130,9 +138,17 @@ export type PixelInspection = {
     ticker: string | null;
     colourSlot: number;
     paintedAt: Date;
-    /** The keys a ban can name. Hashed already — see `client-ip.ts`. */
+    /** The keys a ban can name. The first two are hashed already — see `client-ip.ts`. */
     painterKey: string | null;
     ipHash: string | null;
+    /**
+     * The wallet this painter swore with, if they swore.
+     *
+     * The only bannable key that cannot be shed, which makes it the one an
+     * operator should reach for when it exists. Null for a recruit, and that
+     * is most painters — the recruit army is the volume, not a lesser state.
+     */
+    wallet: string | null;
   } | null;
   /** Oldest first. */
   timeline: PixelEvent[];
@@ -172,10 +188,16 @@ export async function inspectPixel(
     painted_at: Date;
     painter_key: string | null;
     ip_hash: string | null;
+    wallet: string | null;
   }>(
-    `SELECT p.war_token_id, t.ticker, p.colour_slot, p.painted_at, p.painter_key, p.ip_hash
+    // The wallet joins on (war, painter_key) rather than being stored on the
+    // pixel: a painter swears once per war and may swear AFTER painting, so
+    // the pixel cannot carry an answer that was not true when it was painted.
+    `SELECT p.war_token_id, t.ticker, p.colour_slot, p.painted_at,
+            p.painter_key, p.ip_hash, w.wallet
        FROM pixels p
        LEFT JOIN war_tokens t ON t.id = p.war_token_id
+       LEFT JOIN war_painters w ON w.war_id = p.war_id AND w.painter_key = p.painter_key
       WHERE p.war_id = $1 AND p.idx = $2`,
     [warId, idx],
   );
@@ -216,6 +238,7 @@ export async function inspectPixel(
           paintedAt: current.painted_at,
           painterKey: current.painter_key,
           ipHash: current.ip_hash,
+          wallet: current.wallet,
         }
       : null,
     timeline,

@@ -206,7 +206,7 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
       };
     }
 
-    if (await isBanned(client, { painterKey, ipHash, subnetKey })) {
+    if (await isBanned(client, { warId: war.id, painterKey, ipHash, subnetKey })) {
       return {
         ok: false as const,
         reason: "banned" as const,

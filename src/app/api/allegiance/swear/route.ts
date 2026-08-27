@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 /** Which failures are the caller's fault and which are ours. */
 const STATUS: Record<string, number> = {
+  banned: 403,
   unknown_nonce: 400,
   nonce_spent: 409,
   nonce_expired: 410,

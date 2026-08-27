@@ -65,6 +65,25 @@ cluster on the same key, which is the only evidence that a longer term would
 do anything. `listBans` keeps expired rows for exactly that reason — a list
 that dropped them would make a second offence look like a first one.
 
+## The sybil price is the token, not a fee
+
+**Painting is not charged for, and the identity that is expensive to replace
+is the sworn wallet.** A proposal to charge a small registration fee as an
+anti-sybil measure was weighed and refused on this ground: the expensive
+identity already exists, thirty sworn identities cost thirty token purchases,
+and that money goes to the community rather than to us — which is DESIGN.md
+§1a working as written rather than an exception to it.
+
+What was missing was that moderation could not name a wallet. `bans` accepted
+`painter`, `ip` and `subnet`, and every one of those is shed by clearing a
+cookie or changing network. Migration 011 adds `wallet`, and a banned wallet
+cannot swear itself back in — without that the ban would be a ceremony, since
+the offender re-swears the same wallet and recovers the badge.
+
+**Reach for the wallet key first when it exists.** It is the only one that
+costs something to replace. Most painters are recruits with no wallet, and
+that is the volume rather than a lesser state.
+
 ## Sworn holdings: verified once, at the oath
 
 **A wallet's holding is checked when it swears and never again. Selling

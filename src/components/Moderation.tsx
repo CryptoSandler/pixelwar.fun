@@ -26,6 +26,7 @@ type Inspection = {
     paintedAt: string;
     painterKey: string | null;
     ipHash: string | null;
+    wallet: string | null;
   } | null;
   timeline: Array<{ seq: number; colourSlot: number; ticker: string | null; paintedAt: string }>;
   earlierPaintersUnavailable: boolean;
@@ -102,7 +103,7 @@ export function Moderation({
     if (body) setInspection(body);
   }
 
-  async function ban(keyType: "painter" | "ip", key: string) {
+  async function ban(keyType: "painter" | "ip" | "wallet", key: string) {
     const done = await send("/api/admin/bans", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -193,6 +194,20 @@ export function Moderation({
                       onClick={() => ban("ip", inspection.current!.ipHash!)}
                     >
                       Ban this address
+                    </button>
+                  ) : null}
+                  {/* The only key that cannot be shed. A painter key is a
+                      cookie and an address rotates; a sworn wallet is bound
+                      for the war and replacing it costs another token
+                      purchase. Reach for this one first when it is there. */}
+                  {inspection.current.wallet ? (
+                    <button
+                      type="button"
+                      className="btn-primary px-3 py-1.5"
+                      disabled={busy}
+                      onClick={() => ban("wallet", inspection.current!.wallet!)}
+                    >
+                      Ban this wallet
                     </button>
                   ) : null}
                 </div>

@@ -55,6 +55,7 @@ describe("bans", () => {
   });
 
   it("expires, rather than lasting forever by default", { timeout: 30_000 }, async () => {
+    const war = await makeWar({ width: 8, height: 8 });
     await banKey({
       keyType: "ip",
       key: "ip-expired",
@@ -66,7 +67,12 @@ describe("bans", () => {
     const client = await pool().connect();
     try {
       expect(
-        await isBanned(client, { painterKey: "x", ipHash: "ip-expired", subnetKey: "y" }),
+        await isBanned(client, {
+          warId: war.id,
+          painterKey: "x",
+          ipHash: "ip-expired",
+          subnetKey: "y",
+        }),
       ).toBe(false);
     } finally {
       client.release();

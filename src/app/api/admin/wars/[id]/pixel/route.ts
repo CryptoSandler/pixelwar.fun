@@ -61,6 +61,10 @@ export async function GET(
             // anything reaches the database, so no raw address exists to leak.
             painterKey: pixel.current.painterKey,
             ipHash: pixel.current.ipHash,
+            // Not hashed, because it is a public key: it is on chain, it is
+            // in every transaction this painter signed, and hashing it would
+            // make the one key that can be banned unbannable.
+            wallet: pixel.current.wallet,
           }
         : null,
       timeline: pixel.timeline.map((event) => ({

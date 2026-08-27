@@ -93,6 +93,7 @@ export async function issueOathChallenge(input: {
 }
 
 export type OathFailure =
+  | "banned"
   | "unknown_nonce"
   | "nonce_spent"
   | "nonce_expired"
@@ -280,6 +281,30 @@ export async function swearOath(input: {
     return { ok: false, reason: "bad_wallet", message: "That is not a Solana address." };
   }
   const wallet = checked.canonical;
+
+  // A BANNED WALLET CANNOT SWEAR ITSELF BACK IN. Without this, banning a
+  // wallet removes the badge and the offender re-swears with the same wallet
+  // and gets it back — the ban would be a ceremony rather than a boundary.
+  //
+  // Checked BEFORE the nonce is spent, unlike the signature: a banned caller
+  // should not be able to burn other people's challenges, and there is
+  // nothing to learn from the timing here because the answer does not depend
+  // on any secret.
+  const banned = await queryOne<{ hit: number }>(
+    `SELECT 1 AS hit FROM bans
+      WHERE key_type = 'wallet' AND key = $1
+        AND (expires_at IS NULL OR expires_at > now())`,
+    [wallet],
+  );
+  if (banned) {
+    return {
+      ok: false,
+      reason: "banned",
+      // Says nothing about why or for how long. The operator sees the reason
+      // in /admin; the banned wallet learns only that it cannot.
+      message: "This wallet cannot swear in this war.",
+    };
+  }
 
   const spent = await spendNonce(input.nonce, input.warId);
   if (!spent.ok) {
