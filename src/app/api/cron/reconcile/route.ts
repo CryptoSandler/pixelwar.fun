@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { json, NO_STORE } from "../../../../lib/http";
 import { expireStaleOrders } from "../../../../lib/payments/orders";
 import { currentAbuseSignal } from "../../../../lib/paint/abuse";
+import { pruneOathNonces } from "../../../../lib/paint/oath";
 import { unmatchedBacklog } from "../../../../lib/payments/orphans";
 import { recoverUnclaimedOrders } from "../../../../lib/payments/recover";
 
@@ -152,6 +153,14 @@ async function reconcile(request: Request): Promise<Response> {
   // lets the scheduled caller shout about it — see reconcile.yml, which
   // fails the job rather than warning, because a warning in a log nobody
   // opens is not an alert.
+  // Housekeeping, hung here because this is the one thing in the project
+  // that already runs on a schedule. Migration 010 said expired nonces were
+  // swept and nothing swept them; a table that only grows is a slow leak
+  // rather than a breach, which is precisely why it needed an owner rather
+  // than an intention. The count is reported for the same reason every other
+  // number here is: work nobody can see is work nobody notices stopping.
+  const noncesSwept = await pruneOathNonces();
+
   const backlog = await unmatchedBacklog();
 
   // "Something odd is happening on the board", carried on the same request
@@ -168,6 +177,7 @@ async function reconcile(request: Request): Promise<Response> {
     {
       recovered: recovered.length,
       filed: filed.length,
+      noncesSwept,
       // Counts and an age, never ids — this body reaches a CI log retained
       // for ninety days and world-readable on a public repository, and an
       // order id is the handle on somebody's payment.

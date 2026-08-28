@@ -30,6 +30,15 @@ import { WalletConnect, useInBrowser } from "./WalletProvider";
  * server and arrives as a name — never a URL — and a signing chain that
  * disagrees with it, or either being unknown, blocks the button. A payer who
  * cannot pay asks. A payer who paid on the wrong chain does not know to.
+ * Since the audit the server refuses the same case on its own, so this is
+ * the courtesy and no longer the control.
+ *
+ * TWO STEPS, AND THE SECOND ONE IS NOT CEREMONY. Paying registers the
+ * WALLET; signing links THIS BROWSER to it. They are separate because a
+ * transfer to our address is public the moment it lands, so a signature
+ * anybody can copy off a block explorer must not be able to decide who
+ * paints. The screen says this in as many words rather than making somebody
+ * wonder why their wallet is asking twice.
  */
 
 type Phase =
@@ -37,6 +46,8 @@ type Phase =
   | { kind: "signing" }
   | { kind: "confirming"; signature: string }
   | { kind: "claiming"; signature: string }
+  /** Paid and registered; this browser still has to prove it holds the wallet. */
+  | { kind: "linking" }
   | { kind: "done"; wallet: string }
   | { kind: "error"; message: string; signature?: string };
 
@@ -112,10 +123,13 @@ export function Register({
         return;
       }
 
-      setPhase({ kind: "done", wallet: body.wallet });
-      onRegistered(body.wallet);
+      // Registered — the WALLET is. This browser is not linked to it yet and
+      // the response deliberately does not say whose wallet it was, so there
+      // is nothing to hand `onRegistered` here. The signature below is what
+      // decides who paints.
+      setPhase({ kind: "linking" });
     },
-    [onRegistered],
+    [],
   );
 
   const pay = useCallback(async () => {
@@ -231,6 +245,8 @@ export function Register({
     }
   }, [onRegistered, publicKey, signMessage]);
 
+  const linking = phase.kind === "linking";
+
   if (phase.kind === "done") {
     return (
       <p role="status" aria-live="polite" className="text-[12px]">
@@ -248,7 +264,8 @@ export function Register({
         {free
           ? "Painting needs a wallet. Registering is free on this deployment and lasts for every war."
           : `Painting needs a one-time registration of ${formatSol(lamports)} SOL. It is paid once, ` +
-            "to pixelwar, and it covers every war from now on."}
+            "to pixelwar, and it covers every war from now on. Your wallet will ask twice: " +
+            "once to pay, once to sign — the signature moves no funds and is what links this browser."}
       </p>
 
       {!payTo ? (
@@ -270,12 +287,12 @@ export function Register({
           <button
             type="button"
             className="btn-primary bevel px-3 py-1.5"
-            disabled={(free ? !signMessage : blocked) || busy}
+            disabled={(free || linking ? !signMessage : blocked) || busy}
             // With the fee switched off, registering IS the signature: there
             // is no transfer to build, and asking a wallet to approve a
             // zero-SOL transaction would be a ceremony that still costs the
             // network fee.
-            onClick={() => void (free ? link() : pay())}
+            onClick={() => void (free || linking ? link() : pay())}
           >
             {phase.kind === "signing"
               ? "Check your wallet"
@@ -283,21 +300,27 @@ export function Register({
                 ? "Confirming"
                 : phase.kind === "claiming"
                   ? "Finishing"
-                  : free
-                    ? "Register"
-                    : `Register — ${formatSol(lamports)} SOL`}
+                  : linking
+                    ? "Sign to finish"
+                    : free
+                      ? "Register"
+                      : `Register — ${formatSol(lamports)} SOL`}
           </button>
           <p className="muted text-[12px]">
-            {free
-              ? `Signing as ${shortenAddress(publicKey.toBase58())}. It moves no funds.`
-              : `Paying from ${shortenAddress(publicKey.toBase58())} on ${clusterLabel(proxyCluster)}.`}
+            {linking
+              ? // The plain-language version of why a wallet is asked twice.
+                "Paid. One signature left, so this browser can prove the wallet is " +
+                "yours — it moves no funds and pays for nothing."
+              : free
+                ? `Signing as ${shortenAddress(publicKey.toBase58())}. It moves no funds.`
+                : `Paying from ${shortenAddress(publicKey.toBase58())} on ${clusterLabel(proxyCluster)}.`}
           </p>
 
           {/* The other door, and it is not the same as the button above: a
               wallet that ALREADY paid, on a browser that has never seen it.
               Hidden when the fee is off, where the button above is already
               this exact flow. */}
-          {signMessage && !free ? (
+          {signMessage && !free && !linking ? (
             <button
               type="button"
               className="btn-secondary bevel px-3 py-1.5"

@@ -1,4 +1,4 @@
-import { identify, json, NO_STORE } from "../../../../lib/http";
+import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../../lib/http";
 import { linkWallet, type LinkFailure } from "../../../../lib/paint/registration";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +26,9 @@ const STATUS: Record<LinkFailure, number> = {
  * second device.
  */
 export async function POST(request: Request): Promise<Response> {
+  const foreign = refuseForeignOrigin(request);
+  if (foreign) return foreign;
+
   let body: unknown;
   try {
     body = await request.json();

@@ -353,3 +353,27 @@ and a registration is the numerator); how many register but never paint; and
 whether `verification_attempts` shows callers hammering `/api/register` with
 signatures that verify to nothing — that counter is shared with the checkout,
 so an attack on one spends the other's allowance.
+
+
+## The build cache is never a published artifact
+
+**`.next/cache` carries secrets. Do not upload it anywhere, ever — not as a CI
+artifact, not in a debug bundle, not to a support ticket.**
+
+The security audit grepped a real build and found `RATE_LIMIT_SALT`,
+`PAINTER_COOKIE_SECRET` and `VERCEL_TOKEN` in eleven files each under
+`.next/cache/turbopack/*.sst`. The build reads them from the environment and
+the bundler's cache keeps what it saw.
+
+**Nothing is wrong with the deployment.** The client bundle is clean — zero
+matches across all 43 files in `.next/static`, against a control that proves
+the search worked (`"PIXELWAR"` hit 3 client files, `"Show territory"` 1).
+`.next/` is gitignored and Vercel does not serve `.next/cache`. The risk is
+entirely in copying that directory somewhere else.
+
+**So the rule is about what a person does next**, which is why it is written
+here rather than fixed in code: if a build ever needs to be shipped for
+diagnosis, ship `.next/static` and the server output, never `.next/cache`. And
+if a cache directory has been shared, treat those three variables as disclosed
+and rotate them — `PAINTER_COOKIE_SECRET` in particular, since forging painter
+cookies is what it prevents.

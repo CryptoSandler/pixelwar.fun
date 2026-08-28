@@ -1,7 +1,7 @@
 import { webcrypto } from "node:crypto";
 import { base58Encode } from "../../../lib/base58";
 import { queryOne } from "../../../lib/db";
-import { identify, json, NO_STORE } from "../../../lib/http";
+import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../lib/http";
 import type { CreateOrderFailureReason } from "../../../lib/payments/orders";
 import { createOrder } from "../../../lib/payments/orders";
 import { USDC_MINT, paymentWallet } from "../../../lib/payments/config";
@@ -100,6 +100,9 @@ async function generateReference(): Promise<string> {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const foreign = refuseForeignOrigin(request);
+  if (foreign) return foreign;
+
   let body: unknown;
   try {
     body = await request.json();

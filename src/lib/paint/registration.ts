@@ -25,12 +25,21 @@ import { OATH_NONCE_TTL_MS, spendNonce, verifyWalletSignature } from "./oath";
  * registered wallet must be able to claim one WITHOUT paying again. The fee
  * buys the identity, not the session.
  *
- * THE PAYMENT IS THE PROOF OF OWNERSHIP. Sending a transfer requires signing
- * it, so nothing separate is needed to establish that the payer controls the
- * wallet — and the payer is read off the chain rather than claimed in the
- * request, so submitting somebody else's signature registers them, not you.
- * Re-linking later is where a signature IS needed, because no payment happens
- * then; that reuses the oath machinery.
+ * THE PAYMENT PROVES THE PAYER. IT PROVES NOTHING ABOUT THE PRESENTER, and
+ * that distinction is the whole shape of this module. Signing a transfer does
+ * establish that the payer controls the wallet — but a transfer to
+ * PAYMENT_WALLET is PUBLIC the moment it lands, so the signature is a string
+ * anybody watching that address can copy. An earlier version of this file
+ * linked the caller's browser on the strength of holding one, which meant
+ * lifting a signature off a block explorer was enough to paint on somebody
+ * else's paid identity — and to get them banned for it.
+ *
+ * SO REGISTERING AND LINKING ARE TWO STEPS, ALWAYS, AND ONLY THE SECOND ONE
+ * DECIDES WHO PAINTS. The payment creates the registration, at wallet level,
+ * derived from the chain. The link is proved by a wallet signature over a
+ * server-issued challenge — the machinery `oath.ts` already had — and there
+ * is no path to `painter_wallets` that skips it. `register` does not call
+ * `linkPainter`, and that is not an omission: it is the fix.
  */
 
 export type RegistrationFailure =
@@ -40,7 +49,12 @@ export type RegistrationFailure =
   | "verification_failed";
 
 export type RegistrationResult =
-  | { ok: true; wallet: string; lamports: bigint; alreadyRegistered: boolean }
+  /**
+   * Deliberately says nothing about WHO. `alreadyRegistered` distinguishes
+   * "this payment just registered a wallet" from "that signature had already
+   * been used", which is all a client needs to know what to say next.
+   */
+  | { ok: true; alreadyRegistered: boolean }
   | { ok: false; reason: RegistrationFailure; message: string };
 
 /** Whether this wallet has ever registered. Permanent; nothing expires it. */
@@ -64,6 +78,12 @@ export async function linkedWallet(painterKey: string): Promise<string | null> {
 /**
  * Points this browser at an already-registered wallet.
  *
+ * NOT EXPORTED, and that is load-bearing rather than tidy. `linkWallet` below
+ * is the only caller, and it gets here only after a wallet signature over a
+ * server-issued challenge has been verified. Exporting this would put a
+ * second door next to the one with the lock on it, and the bug this file was
+ * rewritten for was exactly a caller walking through such a door.
+ *
  * ON CONFLICT DO UPDATE rather than refusing a second call: a person who
  * re-links after clearing cookies, or who links a second device, is doing the
  * ordinary thing. The painter key is the key, so one browser is one wallet at
@@ -71,7 +91,7 @@ export async function linkedWallet(painterKey: string): Promise<string | null> {
  * one registration and two browsers, and charging twice for that would be a
  * toll on being the same person.
  */
-export async function linkPainter(painterKey: string, wallet: string): Promise<void> {
+async function linkPainter(painterKey: string, wallet: string): Promise<void> {
   await execute(
     `INSERT INTO painter_wallets (painter_key, wallet)
      VALUES ($1, $2)
@@ -97,6 +117,11 @@ async function defaultFetchTransaction(signature: string): Promise<SolanaTransac
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        // Bounded and uncached, like `solana.ts`'s fetcher: attempts are
+        // sequential, so this is not about concurrency — it is about how long
+        // one hung provider can hold a worker open.
+        signal: AbortSignal.timeout(12_000),
+        cache: "no-store",
         body: JSON.stringify({
           jsonrpc: "2.0",
           id: 1,
@@ -104,9 +129,14 @@ async function defaultFetchTransaction(signature: string): Promise<SolanaTransac
           params: [signature, { encoding: "json", maxSupportedTransactionVersion: 0 }],
         }),
       });
-      if (!response.ok) throw new Error(`RPC ${response.status}`);
+      if (!response.ok) throw new Error(`RPC responded ${response.status}`);
       const body = await response.json();
-      if (body?.error) throw new Error(String(body.error?.message ?? "RPC error"));
+      // The provider's own error TEXT is deliberately dropped rather than
+      // wrapped: `SOLANA_RPC_URL` carries an api-key in its query string on
+      // every paid provider, and provider errors routinely echo the request
+      // they were given. This is the same refusal `/api/rpc` makes on the way
+      // out, made here on the way in.
+      if (body?.error) throw new Error("RPC returned an error");
       return body?.result ?? null;
     } catch (error) {
       lastError = error;
@@ -121,15 +151,24 @@ async function defaultFetchTransaction(signature: string): Promise<SolanaTransac
 }
 
 /**
- * Registers the wallet that paid, and links this browser to it.
+ * Records that the wallet which paid is registered. LINKS NOTHING.
+ *
+ * There is no `painterKey` parameter, and the absence is the point: this
+ * function cannot bind a browser to a wallet because it has no browser to
+ * bind. Whoever presents the signature — the payer, a bot watching the
+ * receiving address, anybody — moves the same wallet from unregistered to
+ * registered and gains nothing else by it.
+ *
+ * IT ALSO RETURNS NO WALLET. The payer already knows which wallet they paid
+ * from; a caller holding only a public signature does not need to be told
+ * whose money it was, and an endpoint that answers that question is one more
+ * way to turn a block explorer into a directory.
  *
  * IDEMPOTENT IN TWO DIRECTIONS, which are different situations:
  *
  *   The same SIGNATURE twice — a dropped response, a double click. The
- *   signature is UNIQUE in `registrations`, so the second call finds the
- *   existing row and reports success rather than charging anybody twice or
- *   failing on a constraint. It still links, because the second call is
- *   usually a browser that never got the first answer.
+ *   signature is UNIQUE, so the second call reports success rather than
+ *   charging anybody twice or failing on a constraint.
  *
  *   An already-registered WALLET paying again — somebody who forgot. Refused
  *   with its own reason, because taking a second fee for a permanent thing
@@ -138,7 +177,6 @@ async function defaultFetchTransaction(signature: string): Promise<SolanaTransac
  */
 export async function register(input: {
   signature: string;
-  painterKey: string;
   fetchTransaction?: TransactionFetcher;
 }): Promise<RegistrationResult> {
   const recipient = paymentWallet();
@@ -154,18 +192,15 @@ export async function register(input: {
   // A signature already spent is answered BEFORE the chain is asked: it costs
   // an RPC call to learn nothing, and a retry after a dropped response is the
   // common case rather than an attack.
-  const existing = await queryOne<{ wallet: string; lamports: string }>(
-    `SELECT wallet, lamports FROM registrations WHERE signature = $1`,
+  const existing = await queryOne<{ wallet: string }>(
+    `SELECT wallet FROM registrations WHERE signature = $1`,
     [input.signature],
   );
   if (existing) {
-    await linkPainter(input.painterKey, existing.wallet);
-    return {
-      ok: true,
-      wallet: existing.wallet,
-      lamports: BigInt(existing.lamports),
-      alreadyRegistered: true,
-    };
+    // Answered before the chain is asked: an RPC call would learn nothing,
+    // and a retry after a dropped response is the common case rather than an
+    // attack. Nothing is linked here — it never was the caller's to claim.
+    return { ok: true, alreadyRegistered: true };
   }
 
   const verified = await verifySolTransfer({
@@ -236,19 +271,7 @@ export async function register(input: {
       }
     }
 
-    await client.query(
-      `INSERT INTO painter_wallets (painter_key, wallet)
-       VALUES ($1, $2)
-       ON CONFLICT (painter_key) DO UPDATE SET wallet = EXCLUDED.wallet, linked_at = now()`,
-      [input.painterKey, wallet],
-    );
-
-    return {
-      ok: true as const,
-      wallet,
-      lamports: verified.lamports,
-      alreadyRegistered: inserted.rowCount === 0,
-    };
+    return { ok: true as const, alreadyRegistered: inserted.rowCount === 0 };
   });
 }
 
@@ -305,7 +328,7 @@ export function registrationCost(): { lamports: bigint; free: boolean } {
  * do, every link fails with no way to tell drift from forgery. It is also
  * written to be read in a wallet dialog by the person approving it.
  */
-export async function issueLinkChallenge(): Promise<{
+export async function issueLinkChallenge(ipHash?: string | null): Promise<{
   nonce: string;
   message: string;
   expiresAt: Date;
@@ -323,8 +346,9 @@ export async function issueLinkChallenge(): Promise<{
   ].join("\n");
 
   await execute(
-    `INSERT INTO oath_nonces (nonce, war_id, message, expires_at) VALUES ($1, NULL, $2, $3)`,
-    [nonce, message, expiresAt],
+    `INSERT INTO oath_nonces (nonce, war_id, message, expires_at, ip_hash)
+     VALUES ($1, NULL, $2, $3, $4)`,
+    [nonce, message, expiresAt, ipHash ?? null],
   );
 
   return { nonce, message, expiresAt };

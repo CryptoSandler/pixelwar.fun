@@ -64,28 +64,29 @@ function keypair() {
 }
 
 describe("registering", () => {
-  it("registers the wallet the chain says paid, not one the caller names", async () => {
+  it("registers the wallet the chain says paid, and links nobody", async () => {
     // The request carries a signature and nothing else. Everything about who
-    // paid comes off the transaction.
-    const result = await register({
-      signature: `sig-${randomUUID()}`,
-      painterKey: "reg-1",
-      fetchTransaction: paid(transfer()),
-    });
+    // paid comes off the transaction — and paying decides only that the
+    // WALLET is registered, never which browser acts as it.
+    const result = await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(transfer()) });
 
-    expect(result).toMatchObject({ ok: true, wallet: PAYER, alreadyRegistered: false });
+    expect(result).toEqual({ ok: true, alreadyRegistered: false });
     expect(await isRegistered(PAYER)).toBe(true);
-    expect(await linkedWallet("reg-1")).toBe(PAYER);
+    expect((await query(`SELECT 1 FROM painter_wallets`)).length).toBe(0);
+  });
+
+  it("does not say whose wallet paid", async () => {
+    // The result is exhaustive on purpose. A caller holding a signature —
+    // which is public the moment the transfer lands — must not be able to
+    // turn this endpoint into a lookup from payment to address.
+    const result = await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(transfer()) });
+    expect(Object.keys(result).sort()).toEqual(["alreadyRegistered", "ok"]);
   });
 
   it("stores what was actually paid, not what the fee currently is", async () => {
     // The fee is configuration and it will move. A row has to say what THIS
     // registration paid, or a change to the setting rewrites history.
-    await register({
-      signature: `sig-${randomUUID()}`,
-      painterKey: "reg-2",
-      fetchTransaction: paid(transfer(9_000_000)),
-    });
+    await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(transfer(9_000_000)) });
 
     const [row] = await query<{ lamports: string }>(`SELECT lamports FROM registrations`);
     expect(row.lamports).toBe("9000000");
@@ -93,27 +94,21 @@ describe("registering", () => {
 
   it("answers the same signature twice without registering twice", async () => {
     // A dropped response, a double click. The second call must not fail and
-    // must not charge anything — and it still links, because the browser that
-    // retries is usually the one that never got the first answer.
+    // must not charge anything.
     const signature = `sig-${randomUUID()}`;
-    const first = await register({ signature, painterKey: "reg-3", fetchTransaction: paid(transfer()) });
-    const second = await register({ signature, painterKey: "reg-3b", fetchTransaction: paid(transfer()) });
+    const first = await register({ signature, fetchTransaction: paid(transfer()) });
+    const second = await register({ signature, fetchTransaction: paid(transfer()) });
 
-    expect(first).toMatchObject({ ok: true, alreadyRegistered: false });
-    expect(second).toMatchObject({ ok: true, wallet: PAYER, alreadyRegistered: true });
+    expect(first).toEqual({ ok: true, alreadyRegistered: false });
+    expect(second).toEqual({ ok: true, alreadyRegistered: true });
     expect((await query(`SELECT 1 FROM registrations`)).length).toBe(1);
-    expect(await linkedWallet("reg-3b")).toBe(PAYER);
   });
 
   it("refuses a second payment from a wallet that already registered", async () => {
     // Permanent means permanent. Taking a second fee for it would be taking
     // money for nothing, so the answer says the transfer was not needed.
-    await register({ signature: `sig-${randomUUID()}`, painterKey: "reg-4", fetchTransaction: paid(transfer()) });
-    const again = await register({
-      signature: `sig-${randomUUID()}`,
-      painterKey: "reg-4",
-      fetchTransaction: paid(transfer()),
-    });
+    await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(transfer()) });
+    const again = await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(transfer()) });
 
     expect(again).toMatchObject({ ok: false, reason: "already_registered" });
     if (again.ok) throw new Error("unreachable");
@@ -133,7 +128,7 @@ describe("registering", () => {
       },
     };
 
-    expect(await register({ signature: "sig-x", painterKey: "reg-5", fetchTransaction: paid(elsewhere) })).toMatchObject({
+    expect(await register({ signature: "sig-x", fetchTransaction: paid(elsewhere) })).toMatchObject({
       ok: false,
       reason: "verification_failed",
     });
@@ -142,9 +137,9 @@ describe("registering", () => {
 
   it("registers nobody when the transfer was short", async () => {
     expect(
-      await register({ signature: "sig-y", painterKey: "reg-6", fetchTransaction: paid(transfer(1_000)) }),
+      await register({ signature: "sig-y", fetchTransaction: paid(transfer(1_000)) }),
     ).toMatchObject({ ok: false, reason: "verification_failed" });
-    expect(await linkedWallet("reg-6")).toBeNull();
+    expect(await isRegistered(PAYER)).toBe(false);
   });
 
   it("refuses on a deployment with no receiving wallet rather than registering for free", async () => {
@@ -152,11 +147,78 @@ describe("registering", () => {
     delete process.env.PAYMENT_WALLET;
     try {
       expect(
-        await register({ signature: "sig-z", painterKey: "reg-7", fetchTransaction: paid(transfer()) }),
+        await register({ signature: "sig-z", fetchTransaction: paid(transfer()) }),
       ).toMatchObject({ ok: false, reason: "not_configured" });
     } finally {
       process.env.PAYMENT_WALLET = previous;
     }
+  });
+});
+
+describe("a payment signature is not a credential", () => {
+  /**
+   * THE AUDIT'S FINDING C-1, kept as a test so it cannot come back.
+   *
+   * Every transfer to PAYMENT_WALLET is public the moment it lands, so the
+   * signature is a string anybody can lift off a block explorer. It used to
+   * be enough to bind the presenter's browser to the payer's wallet: paint on
+   * somebody else's paid identity, and get them banned for it.
+   */
+  it("does not link the browser that presents somebody else's signature", async () => {
+    const signature = `sig-${randomUUID()}`;
+
+    // The victim pays. Their own browser is not linked by this either — it
+    // links in the next step, by signing.
+    expect(await register({ signature, fetchTransaction: paid(transfer()) })).toMatchObject({
+      ok: true,
+    });
+
+    // The attacker holds only the public signature.
+    const attacker = await register({ signature, fetchTransaction: paid(transfer()) });
+
+    expect(attacker).toEqual({ ok: true, alreadyRegistered: true });
+    expect((await query(`SELECT 1 FROM painter_wallets`)).length).toBe(0);
+    expect(await linkedWallet("attacker-browser")).toBeNull();
+  });
+
+  it("does not link on a fresh signature either", { timeout: 20_000 }, async () => {
+    // The variant that needs no explorer: watch the chain and present the
+    // transfer BEFORE the payer's own browser does. The winner of that race
+    // used to be the one who got linked.
+    const signature = `sig-${randomUUID()}`;
+    await register({ signature, fetchTransaction: paid(transfer()) });
+
+    expect((await query(`SELECT 1 FROM painter_wallets`)).length).toBe(0);
+
+    // And the attacker cannot paint with it.
+    const war = await makeWar({ width: 8, height: 8 });
+    const token = await makeToken(war.id, 5);
+    expect(
+      await paintPixel({
+        war, x: 1, y: 1, tokenId: token, colourSlot: 9,
+        painterKey: "attacker-browser", ipHash: "ip-att", subnetKey: "sub-att",
+      }),
+    ).toMatchObject({ ok: false, reason: "not_registered" });
+  });
+
+  it("leaves the wallet claimable by whoever can sign for it", async () => {
+    // The other half, and the reason the refusals above are not just a wall:
+    // the real payer still gets in, with the signature they can produce and
+    // the attacker cannot.
+    const key = keypair();
+    const signature = `sig-${randomUUID()}`;
+    await register({ signature, fetchTransaction: paid(transfer(3_000_000, key.address)) });
+
+    const challenge = await issueLinkChallenge();
+    expect(
+      await linkWallet({
+        painterKey: "the-payer",
+        wallet: key.address,
+        nonce: challenge.nonce,
+        signatureBase58: key.sign(challenge.message),
+      }),
+    ).toMatchObject({ ok: true, wallet: key.address });
+    expect(await linkedWallet("the-payer")).toBe(key.address);
   });
 });
 
@@ -216,10 +278,17 @@ describe("linking an existing registration to another browser", () => {
     // is not, and getting a new browser onto an old registration must cost
     // nothing. This is that path, end to end, with a real signature.
     const key = keypair();
-    await register({
-      signature: `sig-${randomUUID()}`,
+    await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(transfer(3_000_000, key.address)) });
+
+    // Two browsers, two signatures, one payment. The FIRST is not special
+    // either: since the audit every link is proved the same way, including
+    // the payer's own.
+    const firstChallenge = await issueLinkChallenge();
+    await linkWallet({
       painterKey: "first-browser",
-      fetchTransaction: paid(transfer(3_000_000, key.address)),
+      wallet: key.address,
+      nonce: firstChallenge.nonce,
+      signatureBase58: key.sign(firstChallenge.message),
     });
 
     const challenge = await issueLinkChallenge();

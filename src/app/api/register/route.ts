@@ -1,16 +1,11 @@
-import { identify, json, NO_STORE } from "../../../lib/http";
-import { register, registrationCost } from "../../../lib/paint/registration";
+import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../lib/http";
+import { register } from "../../../lib/paint/registration";
+import { classifyEndpoints } from "../../../lib/payments/cluster";
+import { solanaRpcUrls } from "../../../lib/payments/config";
+import { isSignatureShaped } from "../../../lib/payments/signature";
 import { recordVerificationAttempt, verifyRateLimited } from "../../../lib/payments/settle";
 
 export const dynamic = "force-dynamic";
-
-/**
- * A defensive bound on the submitted signature, checked before it is decoded.
- * A real Solana signature is 64 bytes of base58 — 87 or 88 characters. Same
- * reasoning as the confirm route: this stops an oversized string reaching a
- * decoder at all.
- */
-const MAX_SIGNATURE_LENGTH = 128;
 
 const STATUS: Record<string, number> = {
   not_configured: 503,
@@ -20,15 +15,23 @@ const STATUS: Record<string, number> = {
 };
 
 /**
- * Registering to paint: one transfer, verified here, once per wallet.
+ * Records a paid registration. DOES NOT DECIDE WHO PAINTS.
  *
- * THE BROWSER SENDS A SIGNATURE AND NOTHING ELSE. Not the wallet, not the
- * amount. Both are read off the chain by `verifySolTransfer`, so a caller who
- * submits somebody else's transfer registers THEM — which is a strange
- * favour to do a stranger and not an attack. A caller who claims a wallet
- * they did not pay from gets nothing, because nothing they send is believed.
+ * THE SIGNATURE IS NOT A CREDENTIAL, and this route is written around that.
+ * Every transfer to PAYMENT_WALLET is public, so the string in this body is
+ * one anybody can copy off a block explorer. What it can do is move a wallet
+ * from unregistered to registered — a state that helps only the wallet's own
+ * owner. What it cannot do is bind a browser to that wallet: that is
+ * `POST /api/register/link`, and it costs a wallet signature.
+ *
+ * The response says whether a registration now exists and nothing else. It
+ * does not name the wallet: the payer already knows, and a caller holding
+ * only a signature has no business being told whose money it was.
  */
 export async function POST(request: Request): Promise<Response> {
+  const foreign = refuseForeignOrigin(request);
+  if (foreign) return foreign;
+
   let body: unknown;
   try {
     body = await request.json();
@@ -40,10 +43,39 @@ export async function POST(request: Request): Promise<Response> {
   if (typeof signature !== "string" || signature.trim() === "") {
     return json({ error: "signature must be a non-empty string." }, { status: 400, headers: NO_STORE });
   }
-  if (signature.length > MAX_SIGNATURE_LENGTH) {
+
+  // Shape first, and BEFORE the rate limiter, so a string that cannot be a
+  // signature costs nothing at all: not an RPC call against the same quota
+  // every live checkout shares, and not one of the attempts a real payer's
+  // retry needs. The USDC path has always checked this; the SOL path did not,
+  // which is what the audit found.
+  if (!isSignatureShaped(signature)) {
     return json(
-      { error: `signature must be at most ${MAX_SIGNATURE_LENGTH} characters.` },
+      { error: "That does not look like a Solana transaction signature." },
       { status: 400, headers: NO_STORE },
+    );
+  }
+
+  /**
+   * The chain this deployment settles on, decided HERE and not in the
+   * browser.
+   *
+   * The payment screen already refuses to open a wallet when the cluster
+   * cannot be identified as mainnet — but that is a courtesy the browser
+   * performs, and a caller posting straight at this route never sees it. With
+   * SOLANA_RPC_URL pointed anywhere else, a transfer of play money on that
+   * chain would verify perfectly and register somebody for free.
+   *
+   * 503 rather than 400: nothing about the caller's request is wrong. The
+   * deployment is not in a state where it can take money, and that is an
+   * operator's problem, which is why it is also logged.
+   */
+  const cluster = classifyEndpoints(solanaRpcUrls());
+  if (cluster !== "solana:mainnet") {
+    console.error(`POST /api/register: refusing, upstream cluster is ${cluster}, not solana:mainnet.`);
+    return json(
+      { error: "Registration is not available on this deployment right now." },
+      { status: 503, headers: NO_STORE },
     );
   }
 
@@ -71,7 +103,7 @@ export async function POST(request: Request): Promise<Response> {
   }
   await recordVerificationAttempt(key, caller.ipHash);
 
-  const result = await register({ signature, painterKey: caller.painterKey });
+  const result = await register({ signature });
 
   if (!result.ok) {
     return json(
@@ -82,10 +114,11 @@ export async function POST(request: Request): Promise<Response> {
 
   return json(
     {
-      wallet: result.wallet,
-      lamports: result.lamports.toString(),
+      registered: true,
       alreadyRegistered: result.alreadyRegistered,
-      feeLamports: registrationCost().lamports.toString(),
+      // What the screen does next, said by the server so the client is not
+      // the only place that knows this is a two-step flow.
+      next: "link",
     },
     { headers: { ...NO_STORE, ...cookie } },
   );

@@ -114,6 +114,11 @@ describe("POST /api/cron/reconcile", () => {
     expect(JSON.parse(body)).toEqual({
       recovered: 2,
       filed: 1,
+      // Housekeeping the audit gave an owner: expired signature challenges
+      // used to accumulate forever behind a migration comment claiming they
+      // were swept. A count rather than silence, so a sweeper that stops
+      // working is visible in the same log that watches everything else.
+      noncesSwept: 0,
       backlog: { open: 0, oldestAgeHours: 0, stale: false },
       // Null because no war is live in this test. That it is PRESENT and null
       // rather than absent is the contract reconcile.yml checks with

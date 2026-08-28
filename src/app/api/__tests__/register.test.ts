@@ -53,6 +53,51 @@ describe("POST /api/register", () => {
     // allowance.
     expect((await query(`SELECT 1 FROM verification_attempts`)).length).toBe(0);
   });
+
+  it("rejects a string that cannot be a signature before touching the network", async () => {
+    // Audit finding A-1. The shape check is what the USDC path always had:
+    // 87 or 88 base58 characters, 64 bytes decoded. Anything else costs no
+    // RPC call and no rate-limit attempt — and there is no fetcher injected
+    // here, so a request that DID reach the network would fail differently.
+    const response = await registerRoute(
+      post("/api/register", { signature: "not-a-signature-but-the-right-sort-of-length" }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("does not look like");
+    expect((await query(`SELECT 1 FROM verification_attempts`)).length).toBe(0);
+  });
+
+  it("refuses when the deployment is not settling on mainnet", async () => {
+    // Audit finding M-1. The payment screen already declines to open a wallet
+    // in this case, but that is the browser being careful; this is the server
+    // refusing. A well-shaped signature gets past the check above and stops
+    // here, before any RPC call.
+    const previous = process.env.SOLANA_RPC_URL;
+    process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+    try {
+      const response = await registerRoute(
+        post("/api/register", { signature: "5".repeat(88) }),
+      );
+      expect(response.status).toBe(503);
+      expect((await query(`SELECT 1 FROM verification_attempts`)).length).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env.SOLANA_RPC_URL;
+      else process.env.SOLANA_RPC_URL = previous;
+    }
+  });
+
+  it("refuses a cross-site POST", async () => {
+    // Audit finding M-2. SameSite=Lax already strips the cookie from such a
+    // request, but a forged write still issues challenges and spends budget.
+    const response = await registerRoute(
+      new Request("https://pixelwar.fun/api/register", {
+        method: "POST",
+        headers: { ...HEADERS, origin: "https://evil.example" },
+        body: JSON.stringify({ signature: "5".repeat(88) }),
+      }),
+    );
+    expect(response.status).toBe(403);
+  });
 });
 
 describe("POST /api/register/link", () => {
@@ -65,7 +110,7 @@ describe("POST /api/register/link", () => {
       [key.address],
     );
 
-    const challenge = await (await challengeRoute()).json();
+    const challenge = await (await challengeRoute(post("/api/register/challenge", {}))).json();
     const response = await linkRoute(
       post("/api/register/link", {
         wallet: key.address,
@@ -84,7 +129,7 @@ describe("POST /api/register/link", () => {
 
   it("answers 402 for a wallet nobody registered", async () => {
     const key = keypair();
-    const challenge = await (await challengeRoute()).json();
+    const challenge = await (await challengeRoute(post("/api/register/challenge", {}))).json();
     const response = await linkRoute(
       post("/api/register/link", {
         wallet: key.address,

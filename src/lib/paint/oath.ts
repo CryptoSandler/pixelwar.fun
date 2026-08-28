@@ -55,6 +55,73 @@ const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 export type OathChallenge = { nonce: string; message: string; expiresAt: Date };
 
 /**
+ * Challenges one caller may take inside the window.
+ *
+ * A function rather than a constant, for the reason every setting in
+ * `lib/config.ts` is one: a module-level constant freezes at import time and
+ * a test cannot dial it down without restarting the process.
+ *
+ * A SEPARATE BUDGET FROM THE PAYMENT VERIFIER'S. `verification_attempts`
+ * meters calls against a rate-limited RPC endpoint, and issuing a challenge
+ * spends none — it is a local INSERT. Sharing that counter would let somebody
+ * asking to sign exhaust the allowance a payer needs to confirm real money.
+ *
+ * Twenty is generous for a person: a wallet dialog dismissed and retried a
+ * dozen times still fits, and a script minting rows does not.
+ */
+export function nonceRateLimit(): { max: number; windowMinutes: number } {
+  const max = Number.parseInt(process.env.NONCE_RATE_LIMIT_MAX ?? "", 10);
+  const windowMinutes = Number.parseInt(process.env.NONCE_RATE_LIMIT_WINDOW_MINUTES ?? "", 10);
+  return {
+    max: Number.isInteger(max) && max > 0 ? max : 20,
+    windowMinutes: Number.isInteger(windowMinutes) && windowMinutes > 0 ? windowMinutes : 10,
+  };
+}
+
+/**
+ * Whether this caller has taken too many challenges recently.
+ *
+ * Counts straight off `oath_nonces.ip_hash`, the column migration 014 added
+ * for it — the same shape as `tooManyOrders`, including its honest limit: two
+ * requests in the same instant can both read the same under-the-limit total
+ * and both pass. This is a cap on sustained issuance, not a mutex, and
+ * nothing scarce hangs on it.
+ *
+ * A caller with no address hash is not counted and not limited. That is not
+ * a hole so much as the consequence of one: a deployment where `identify()`
+ * yields no address is one running with ALLOW_UNTRUSTED_CLIENT_IP, which
+ * production refuses to do.
+ */
+export async function tooManyNonces(ipHash: string | null): Promise<boolean> {
+  if (!ipHash) return false;
+  const { max, windowMinutes } = nonceRateLimit();
+  const row = await queryOne<{ count: string }>(
+    `SELECT count(*) AS count FROM oath_nonces
+      WHERE ip_hash = $1 AND issued_at > now() - ($2 || ' minutes')::interval`,
+    [ipHash, String(windowMinutes)],
+  );
+  return Number(row?.count ?? 0) >= max;
+}
+
+/**
+ * Deletes nonces nobody can use any more.
+ *
+ * Migration 010's index comment said "sweeping expired nonces is a
+ * housekeeping query" and nothing swept: the table grew forever behind a
+ * sentence describing work that did not exist. This is that work, hung off
+ * the daily reconcile pass, and it returns its count so the pass can report
+ * what it did rather than claim it silently.
+ *
+ * A DAY PAST EXPIRY, not at expiry. A nonce is dead to the verifier the
+ * moment `expires_at` passes — `spendNonce` checks the clock, not this
+ * function — so the extra day costs nothing and leaves an operator looking at
+ * a replay attempt something to look at.
+ */
+export async function pruneOathNonces(): Promise<number> {
+  return execute(`DELETE FROM oath_nonces WHERE expires_at <= now() - interval '1 day'`);
+}
+
+/**
  * Issues a challenge for one war.
  *
  * The message is stored, not reconstructed later. Rebuilding it at
@@ -70,6 +137,8 @@ export async function issueOathChallenge(input: {
   warId: string;
   warSlug: string;
   ticker: string;
+  /** The caller, for the issuance limit. Null only where none can be derived. */
+  ipHash?: string | null;
 }): Promise<OathChallenge> {
   const nonce = randomBytes(24).toString("base64url");
   const expiresAt = new Date(Date.now() + OATH_NONCE_TTL_MS);
@@ -85,8 +154,9 @@ export async function issueOathChallenge(input: {
   ].join("\n");
 
   await execute(
-    `INSERT INTO oath_nonces (nonce, war_id, message, expires_at) VALUES ($1, $2, $3, $4)`,
-    [nonce, input.warId, message, expiresAt],
+    `INSERT INTO oath_nonces (nonce, war_id, message, expires_at, ip_hash)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [nonce, input.warId, message, expiresAt, input.ipHash ?? null],
   );
 
   return { nonce, message, expiresAt };

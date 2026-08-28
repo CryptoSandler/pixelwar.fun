@@ -1,4 +1,4 @@
-import { identify, json, NO_STORE } from "../../../lib/http";
+import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../lib/http";
 import { solanaRpcUrls } from "../../../lib/payments/config";
 
 export const dynamic = "force-dynamic";
@@ -322,6 +322,22 @@ async function forward(payload: unknown): Promise<{ status: number; body: unknow
 }
 
 export async function POST(request: Request): Promise<Response> {
+  /**
+   * NOT ON THE AUDIT'S LIST, and added anyway — same class, same money.
+   *
+   * This proxy exists so OUR pages can reach a paid provider without the key
+   * leaving the server. Nothing else legitimately calls it: the browser talks
+   * to it same-origin, and no server-side code goes through it. Without this,
+   * any page on the internet can point a `Connection` at
+   * `https://pixelwar.fun/api/rpc` and spend our provider quota — metered per
+   * caller, allowlisted by method, and still ours to pay for.
+   *
+   * A request with no Origin is still allowed, like everywhere else this
+   * guard is used.
+   */
+  const foreign = refuseForeignOrigin(request);
+  if (foreign) return foreign;
+
   const caller = identify(request);
   if (!caller.ok) return json({ error: caller.message }, { status: 400, headers: NO_STORE });
 

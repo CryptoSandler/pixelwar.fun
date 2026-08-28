@@ -1,5 +1,6 @@
-import { identify, json, NO_STORE } from "../../../../../lib/http";
-import { paymentWallet, usdToBaseUnits } from "../../../../../lib/payments/config";
+import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../../../lib/http";
+import { classifyEndpoints } from "../../../../../lib/payments/cluster";
+import { paymentWallet, solanaRpcUrls, usdToBaseUnits } from "../../../../../lib/payments/config";
 import { orderById } from "../../../../../lib/payments/orders";
 import type { SettleFailureReason } from "../../../../../lib/payments/settle";
 import { recordVerificationAttempt, settlePayment, verifyRateLimited } from "../../../../../lib/payments/settle";
@@ -38,6 +39,9 @@ export async function POST(
 ): Promise<Response> {
   const { id } = await params;
 
+  const foreign = refuseForeignOrigin(request);
+  if (foreign) return foreign;
+
   let body: unknown;
   try {
     body = await request.json();
@@ -68,6 +72,30 @@ export async function POST(
     return json(
       { error: "Payments are not available on this deployment right now." },
       { status: 500, headers: NO_STORE },
+    );
+  }
+
+  /**
+   * The chain this deployment settles on, decided HERE and not in the
+   * browser.
+   *
+   * `PayWithWallet` already refuses to open a wallet when the cluster is not
+   * mainnet, and that refusal is real — but it is the BROWSER refusing, and a
+   * caller posting straight at this route never runs it. With SOLANA_RPC_URL
+   * pointed at devnet, play-money USDC would verify here exactly like the
+   * real thing and settle an order for a colour somebody else paid for.
+   *
+   * 503, not 400: the request is fine and the deployment is not, which is why
+   * this is also in the log where an operator will find it.
+   */
+  const cluster = classifyEndpoints(solanaRpcUrls());
+  if (cluster !== "solana:mainnet") {
+    console.error(
+      `POST /api/orders/${id}/confirm: refusing, upstream cluster is ${cluster}, not solana:mainnet.`,
+    );
+    return json(
+      { error: "Payments are not available on this deployment right now." },
+      { status: 503, headers: NO_STORE },
     );
   }
 

@@ -1,5 +1,5 @@
-import { identify, json, NO_STORE } from "../../../../lib/http";
-import { issueOathChallenge } from "../../../../lib/paint/oath";
+import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../../lib/http";
+import { issueOathChallenge, tooManyNonces } from "../../../../lib/paint/oath";
 import { queryOne } from "../../../../lib/db";
 import { advanceWar, warBySlug } from "../../../../lib/wars/lifecycle";
 
@@ -12,12 +12,18 @@ export const dynamic = "force-dynamic";
  * asks the wallet to sign. Never earlier — a nonce has a five-minute life and
  * fetching one on page load spends most of it before anybody clicks.
  *
- * Rate limited by the same `identify()` every write path uses, because
- * issuing nonces writes rows and an unbounded caller is a table that grows
- * for free. The limit is the caller's own; nothing about the wallet is known
- * yet at this point, and that is the whole reason the challenge exists.
+ * RATE LIMITED FOR REAL, since the audit. This comment used to say the route
+ * was "rate limited by the same identify() every write path uses" —
+ * `identify()` identifies and fails closed on the address; it has never
+ * limited anything. Issuing a nonce writes a row, so an unbounded caller was
+ * a table growing for free behind a sentence that stopped anybody looking.
+ * The count is per `ip_hash` off `oath_nonces` itself (migration 014), on its
+ * own budget rather than the payment verifier's — see `tooManyNonces`.
  */
 export async function POST(request: Request): Promise<Response> {
+  const foreign = refuseForeignOrigin(request);
+  if (foreign) return foreign;
+
   const caller = identify(request);
   if (!caller.ok) return json({ error: caller.message }, { status: 400, headers: NO_STORE });
 
@@ -33,6 +39,13 @@ export async function POST(request: Request): Promise<Response> {
     return json(
       { error: "warSlug and warTokenId must be strings." },
       { status: 400, headers: NO_STORE },
+    );
+  }
+
+  if (await tooManyNonces(caller.ipHash)) {
+    return json(
+      { error: "Too many signature requests from here recently. Wait a few minutes." },
+      { status: 429, headers: { ...NO_STORE, ...(caller.setCookie ? { "set-cookie": caller.setCookie } : {}) } },
     );
   }
 
@@ -52,6 +65,7 @@ export async function POST(request: Request): Promise<Response> {
     warId: war.id,
     warSlug: war.slug,
     ticker: token.ticker,
+    ipHash: caller.ipHash,
   });
 
   return json(

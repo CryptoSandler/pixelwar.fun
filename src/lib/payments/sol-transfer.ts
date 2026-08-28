@@ -118,7 +118,12 @@ export async function verifySolTransfer(input: {
   try {
     transaction = await input.fetchTransaction(input.signature);
   } catch (error) {
-    console.error("verifySolTransfer: fetch failed", error);
+    // THE NAME, NEVER THE OBJECT. A rejected `fetch` carries the URL it was
+    // given — and on any paid provider that URL has an api-key in its query
+    // string, so logging the error would put the key into the deployment's
+    // logs. `solana.ts` avoids this by not logging at all; this path wants
+    // the signal, so it takes the one field that cannot carry a secret.
+    console.error(`verifySolTransfer: fetch failed (${error instanceof Error ? error.name : "unknown"})`);
     return {
       ok: false,
       reason: "rpc_unavailable",

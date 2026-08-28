@@ -1,5 +1,5 @@
 import { queryOne } from "../../../../lib/db";
-import { identify, json, NO_STORE } from "../../../../lib/http";
+import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../../lib/http";
 import { swearOath } from "../../../../lib/paint/oath";
 import { advanceWar, warBySlug } from "../../../../lib/wars/lifecycle";
 
@@ -35,6 +35,9 @@ const STATUS: Record<string, number> = {
  * real, because it is what a visible badge rests on.
  */
 export async function POST(request: Request): Promise<Response> {
+  const foreign = refuseForeignOrigin(request);
+  if (foreign) return foreign;
+
   const caller = identify(request);
   if (!caller.ok) return json({ error: caller.message }, { status: 400, headers: NO_STORE });
 
