@@ -11,7 +11,7 @@ import { shortenAddress } from "../lib/tokens/addresses";
  *
  * A phone wallet that opened its own in-app browser, a hardware wallet driven
  * from a desktop app, a withdrawal from an exchange — in every one of those
- * the USDC moves and no wallet ever connects here, so the flow on this page
+ * the SOL moves and no wallet ever connects here, so the flow on this page
  * above has nothing to sign with and no signature to post. The transfer is
  * real either way; what is missing is only the string that identifies it. So
  * the string can be typed.
@@ -144,7 +144,7 @@ export function PasteSignature({
 
         <div className="mt-3 flex flex-col gap-3">
           <p className="muted text-[13px]">
-            If the USDC was sent from a phone, a hardware wallet or an exchange, no wallet ever
+            If the SOL was sent from a phone, a hardware wallet or an exchange, no wallet ever
             reaches this page — but the transfer is still on Solana. Paste its transaction signature
             and it is checked against this order. Nothing is sent or signed from here.
           </p>

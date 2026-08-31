@@ -133,7 +133,8 @@ describe("a wallet's failure, as a sentence", () => {
     const message = walletErrorMessage(
       new Error("Transaction simulation failed: custom program error: 0x1"),
     );
-    expect(message).toMatch(/USDC/);
+    // Names the asset the payer actually needs since admission moved to SOL.
+    expect(message).toMatch(/SOL/);
     expect(message).not.toMatch(/0x1|simulation|Instruction/);
   });
 

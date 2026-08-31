@@ -11,10 +11,13 @@ export const dynamic = "force-dynamic";
 /**
  * The entry screen.
  *
- * The war and its free colours are read here rather than fetched by the
- * client, so the picker is right on the first paint instead of empty for a
- * round trip. `GET /api/colours` then keeps it right, because free is a
- * fact with a very short shelf life.
+ * The free list is still read here, but no longer to fill a picker — nobody
+ * chooses a flag any more. It answers one question: is there a seat left at
+ * all. `freeColours` is the same query capacity is judged by, so asking it
+ * here means the screen and the INSERT agree about "full".
+ *
+ * NO PRICE ON THIS PAGE. The amount is named once, on the confirmation
+ * screen, immediately before the wallet dialog.
  */
 export default async function JoinPage() {
   const war = await currentWar();
@@ -66,34 +69,25 @@ export default async function JoinPage() {
     <Cabinet label="Entry">
       <section className="panel bevel flex flex-col gap-1 p-4">
         <h1 className="text-[20px] font-medium">Enter {war.title}</h1>
-        {/* Rewritten after the palette was freed. This used to say "one
-            token, one colour, for the length of the war", which stopped being
-            true the moment colours stopped belonging to tokens: what a token
-            gets is a SLOT and a flag, and the paint on the board can be any
-            of the twenty-four. */}
+        {/* Rewritten twice, and both times for the same reason: the sentence
+            kept describing a colour as the thing being bought. It said "one
+            token, one colour, for the whole war" until the palette was freed,
+            then "a slot and a flag colour" until the flag stopped being
+            chosen. What a token gets is a SEAT; the flag is assigned and the
+            logo is the identity anybody actually recognises. */}
         <p className="muted text-[13px]">
-          Your token takes a slot in this war and a flag colour on the scoreboard. Anyone can
-          paint, in any colour, and any pixel can be painted over — the scoreboard counts the
+          Your token takes a seat in this war, with its logo and a flag on the scoreboard. Anyone
+          can paint, in any colour, and any pixel can be painted over — the scoreboard counts the
           pixels your token holds right now, whatever colour they are.
         </p>
       </section>
 
       {free.length === 0 ? (
         <section className="panel bevel p-4">
-          <p className="text-[13px]">
-            Every colour in this war is taken. Nothing more can enter it.
-          </p>
+          <p className="text-[13px]">This war is full. Nothing more can enter it.</p>
         </section>
       ) : (
-        <JoinFlow
-          war={{
-            slug: war.slug,
-            title: war.title,
-            maxTokens: war.maxTokens,
-            entryPriceUsd: war.entryPriceUsd,
-          }}
-          initialFree={free}
-        />
+        <JoinFlow war={{ slug: war.slug, title: war.title, maxTokens: war.maxTokens }} />
       )}
     </Cabinet>
   );

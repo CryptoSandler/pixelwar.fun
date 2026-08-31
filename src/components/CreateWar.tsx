@@ -21,7 +21,7 @@ export function CreateWar() {
   const [form, setForm] = useState({
     slug: "",
     title: "",
-    entryPriceUsd: "25",
+    entryPriceSol: "0.05",
     cooldownSeconds: "30",
     maxTokens: "24",
     startsAt: "",
@@ -53,7 +53,7 @@ export function CreateWar() {
             body: JSON.stringify({
               slug: form.slug,
               title: form.title,
-              entryPriceUsd: Number(form.entryPriceUsd),
+              entryPriceSol: Number(form.entryPriceSol),
               cooldownSeconds: Number(form.cooldownSeconds),
               maxTokens: Number(form.maxTokens),
               startsAt: new Date(form.startsAt).toISOString(),
@@ -89,8 +89,8 @@ export function CreateWar() {
 
       <div className="flex flex-wrap gap-2">
         <label className="flex flex-col text-[12px]">
-          Entry price (USD)
-          <input className="field numeric w-24 px-2 py-1" type="number" min={1} step={1} required value={form.entryPriceUsd} onChange={set("entryPriceUsd")} />
+          Entry price (SOL)
+          <input className="field numeric w-24 px-2 py-1" type="number" min={0.0001} step={0.0001} required value={form.entryPriceSol} onChange={set("entryPriceSol")} />
         </label>
         <label className="flex flex-col text-[12px]">
           Cooldown (seconds)

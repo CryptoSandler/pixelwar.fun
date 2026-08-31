@@ -1,3 +1,4 @@
+import { LAMPORTS_PER_SOL } from "../../../../../lib/payments/config";
 import { requireAdmin } from "../../../../../lib/admin-guard";
 import { json, NO_STORE } from "../../../../../lib/http";
 import { createWar } from "../../../../../lib/wars/operate";
@@ -25,13 +26,15 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: "Body must be JSON" }, { status: 400, headers: NO_STORE });
   }
 
-  const { slug, title, entryPriceUsd, cooldownSeconds, startsAt, endsAt, maxTokens } =
+  const { slug, title, entryPriceSol, cooldownSeconds, startsAt, endsAt, maxTokens } =
     (body ?? {}) as Record<string, unknown>;
 
   if (
     typeof slug !== "string" ||
     typeof title !== "string" ||
-    typeof entryPriceUsd !== "number" ||
+    typeof entryPriceSol !== "number" ||
+    !Number.isFinite(entryPriceSol) ||
+    entryPriceSol <= 0 ||
     typeof cooldownSeconds !== "number" ||
     typeof startsAt !== "string" ||
     typeof endsAt !== "string"
@@ -39,7 +42,7 @@ export async function POST(request: Request): Promise<Response> {
     return json(
       {
         error:
-          "slug, title, startsAt and endsAt are strings; entryPriceUsd and cooldownSeconds are numbers.",
+          "slug, title, startsAt and endsAt are strings; entryPriceSol and cooldownSeconds are numbers.",
       },
       { status: 400, headers: NO_STORE },
     );
@@ -57,7 +60,9 @@ export async function POST(request: Request): Promise<Response> {
   const result = await createWar({
     slug,
     title,
-    entryPriceUsd,
+    // SOL in, lamports stored. Rounded to whole lamports here, at the one
+    // place an operator's decimal becomes a number the chain can move.
+    entryPriceLamports: BigInt(Math.round(entryPriceSol * Number(LAMPORTS_PER_SOL))),
     cooldownSeconds,
     startsAt: opens,
     endsAt: closes,

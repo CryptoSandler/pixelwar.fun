@@ -4,16 +4,11 @@ import { validateAddress } from "../tokens/addresses";
  * Payment configuration. We only ever RECEIVE: there is no private key, no
  * signing and no withdrawal path anywhere in this project. The wallet is
  * operated entirely outside it, and is supplied by environment.
+ *
+ * EVERYTHING HERE IS DENOMINATED IN SOL. `USDC_MINT`, `USDC_DECIMALS`,
+ * `usdToBaseUnits` and `formatUsdc` lived here until admission moved to SOL
+ * and left them without a caller — see DECISIONES.md.
  */
-
-/**
- * The real USDC mint on Solana mainnet. Hardcoded on purpose: the whole point
- * of checking it is that anyone can deploy a token called "USDC", and a config
- * value for this would just move the attack one level out.
- */
-export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
-export const USDC_DECIMALS = 6;
 
 /** How long an order's reservation holds its colour before it expires and has to be started again. */
 export const PAYMENT_WINDOW_MINUTES = 30;
@@ -112,45 +107,6 @@ export function paymentWallet(): PaymentWalletResult {
   }
 
   return { ok: true, address: checked.canonical };
-}
-
-/**
- * Whole dollars to USDC base units.
- *
- * Entry prices are whole dollars. A fractional amount here means a caller is
- * inventing a price, and rounding it silently would take the wrong sum, so
- * anything that is not a non-negative whole dollar amount throws rather than
- * being coerced.
- *
- * The guard is Number.isSafeInteger, not Number.isInteger: past 2**53 a
- * float no longer has a neighbour (2**60 === 2**60 + 1), so two different
- * intended dollar amounts would arrive as the same number and nothing
- * downstream could tell which was meant. Number.isSafeInteger already rejects
- * Infinity and NaN, since neither is an integer; -0 needs an explicit check,
- * since it IS a safe integer and `-0 < 0` is false, and a zero-dollar entry
- * is not a thing.
- */
-export function usdToBaseUnits(amountUsd: number): bigint {
-  if (!Number.isSafeInteger(amountUsd) || amountUsd < 0 || Object.is(amountUsd, -0)) {
-    throw new RangeError(
-      `usdToBaseUnits expects a non-negative, whole-dollar amount that a JS number can hold exactly, got ${amountUsd}.`,
-    );
-  }
-  return BigInt(amountUsd) * 10n ** BigInt(USDC_DECIMALS);
-}
-
-/**
- * Renders USDC base units as a decimal string, always at least two decimal
- * places — this reads like a dollar amount. Precision above two decimals is
- * kept rather than rounded away: this is used to tell a payer what actually
- * arrived, and a mismatched payment is exactly the case where the real amount
- * matters.
- */
-export function formatUsdc(baseUnits: bigint): string {
-  const whole = baseUnits / 1_000_000n;
-  const fraction = (baseUnits % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
-  const decimals = fraction.length < 2 ? fraction.padEnd(2, "0") : fraction;
-  return `${whole}.${decimals}`;
 }
 
 /**

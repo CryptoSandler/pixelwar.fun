@@ -379,6 +379,28 @@ and rotate them — `PAINTER_COOKIE_SECRET` in particular, since forging painter
 cookies is what it prevents.
 
 
+## Pixelwar charges in SOL, on every surface
+
+**Since 2026-08-31 there is no USDC anywhere in this product.** Admission is
+SOL (migration 015, `wars.entry_price_sol`, in lamports) and the painter's
+registration always was. The USDC verifier and transfer builder were deleted
+rather than left dormant — see DECISIONES.md.
+
+**THIS IS WHAT SEPARATES US FROM BIDOOR ON A SHARED WALLET.** Both products
+receive at the same address, and they are now separated by denomination: a
+bidoor bid is an SPL transfer that moves no native lamports to the wallet, and
+a pixelwar payment is a native transfer that moves no USDC. Each side's
+verifier reads the other's payments as nothing at all — tested from our side
+in `registration.test.ts`, where a transaction crediting 500 USDC to the
+wallet is refused.
+
+**The consequence to keep in view:** that separation is a property of the two
+denominations, not of anything either codebase enforces. If pixelwar ever
+takes USDC again, or bidoor ever takes SOL bids, they collide the same day and
+nothing in either repo will complain. That is the trigger for giving
+registration a reference key of its own — the mechanism that would separate
+them by construction instead.
+
 ## One receiving wallet, two products
 
 **`PAYMENT_WALLET` is the same address bidoor.lol collects on. The owner's

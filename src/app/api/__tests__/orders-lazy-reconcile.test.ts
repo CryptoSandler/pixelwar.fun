@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { base58Encode } from "../../../lib/base58";
 import { execute } from "../../../lib/db";
-import { USDC_MINT } from "../../../lib/payments/config";
 import { orderById } from "../../../lib/payments/orders";
 import type { SolanaTransaction } from "../../../lib/payments/solana";
 
@@ -89,17 +88,21 @@ function fixtureTransaction(): SolanaTransaction {
   return {
     slot: 1,
     blockTime: Math.floor((Date.now() - 30 * 60_000) / 1000),
-    transaction: { message: { accountKeys: [{ pubkey: payer, signer: true }] } },
+    transaction: {
+      message: {
+        accountKeys: [
+          { pubkey: payer, signer: true },
+          { pubkey: PAYMENT_WALLET, signer: false },
+        ],
+      },
+    },
     meta: {
       err: null,
-      preTokenBalances: [
-        { accountIndex: 0, owner: PAYMENT_WALLET, mint: USDC_MINT, uiTokenAmount: { amount: "0" } },
-        { accountIndex: 1, owner: payer, mint: USDC_MINT, uiTokenAmount: { amount: "500000000" } },
-      ],
-      postTokenBalances: [
-        { accountIndex: 0, owner: PAYMENT_WALLET, mint: USDC_MINT, uiTokenAmount: { amount: "25000000" } },
-        { accountIndex: 1, owner: payer, mint: USDC_MINT, uiTokenAmount: { amount: "475000000" } },
-      ],
+      // Native and positional: entry N belongs to accountKeys[N]. The payer's
+      // own drop is the amount plus the network fee, which is why the
+      // verifier reads the recipient's rise instead.
+      preBalances: [500_000_000, 0],
+      postBalances: [Number(500_000_000n - BigInt("25000000") - 5_000n), Number("25000000")],
     },
   };
 }
@@ -108,8 +111,8 @@ async function abandonedPayment(): Promise<{ orderId: string; reference: string 
   const warId = randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                       entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 30, $2, $3)`,
+                       entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 25000000, 30, $2, $3)`,
     [warId, new Date(Date.now() - 3_600_000), new Date(Date.now() + 3_600_000)],
   );
   const tokenId = randomUUID();
@@ -124,9 +127,9 @@ async function abandonedPayment(): Promise<{ orderId: string; reference: string 
   const reference = randomUUID();
   await execute(
     `INSERT INTO entry_orders
-       (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
+       (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey, reference_pubkey, status,
         created_at, expires_at)
-     VALUES ($1, $2, $3, 25, NULL, $4, 'expired', $5, $6)`,
+     VALUES ($1, $2, $3, 25, 25000000, NULL, $4, 'expired', $5, $6)`,
     [orderId, warId, tokenId, reference, new Date(Date.now() - 3_600_000), new Date(Date.now() - 120_000)],
   );
   return { orderId, reference };

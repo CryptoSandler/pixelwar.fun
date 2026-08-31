@@ -4,10 +4,9 @@ import { queryOne } from "../../../lib/db";
 import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../lib/http";
 import type { CreateOrderFailureReason } from "../../../lib/payments/orders";
 import { createOrder } from "../../../lib/payments/orders";
-import { USDC_MINT, paymentWallet } from "../../../lib/payments/config";
+import { paymentWallet } from "../../../lib/payments/config";
 import { validateAddress } from "../../../lib/tokens/addresses";
 import { resolveToken } from "../../../lib/tokens/dexscreener";
-import { PALETTE_SIZE } from "../../../lib/wars/palette";
 import { warBySlug } from "../../../lib/wars/lifecycle";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +16,9 @@ const FAILURE_STATUS: Record<CreateOrderFailureReason, number> = {
   already_entered: 409,
   war_full: 409,
   war_closed: 409,
+  // The deployment cannot price this war, which is an operator's problem and
+  // not the caller's. 503 for the same reason the cluster check uses it.
+  no_price: 503,
 };
 
 /**
@@ -110,26 +112,23 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: "Body must be JSON" }, { status: 400, headers: NO_STORE });
   }
 
-  const { warSlug, chainId, contract, colourSlot, payerPubkey } = (body ?? {}) as Record<
-    string,
-    unknown
-  >;
+  // NO `colourSlot`. The flag is assigned by `createOrder` — the lowest free
+  // one — so there is nothing here for a caller to send. A body that still
+  // carries the old field is simply ignored rather than refused: the field
+  // never granted anything, and an error would only punish a stale tab.
+  const { warSlug, chainId, contract, payerPubkey } = (body ?? {}) as Record<string, unknown>;
 
   if (
     typeof warSlug !== "string" ||
     typeof chainId !== "string" ||
     typeof contract !== "string" ||
-    typeof colourSlot !== "number" ||
-    !Number.isInteger(colourSlot) ||
-    colourSlot < 1 ||
-    colourSlot > PALETTE_SIZE ||
     (payerPubkey !== undefined && typeof payerPubkey !== "string")
   ) {
     return json(
       {
         error:
-          "warSlug, chainId and contract must be strings, colourSlot must be a whole " +
-          `number between 1 and ${PALETTE_SIZE}, and payerPubkey, if present, must be a string.`,
+          "warSlug, chainId and contract must be strings, and payerPubkey, if present, " +
+          "must be a string.",
       },
       { status: 400, headers: NO_STORE },
     );
@@ -175,7 +174,7 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: checkedContract.reason }, { status: 400, headers: NO_STORE });
   }
 
-  // Payment always moves as USDC on Solana regardless of which chain the
+  // Payment always moves as SOL on Solana regardless of which chain the
   // token itself lives on, so a connected wallet is checked against the
   // Solana address family specifically, not against `chainId`.
   let checkedPayer: string | undefined;
@@ -213,7 +212,6 @@ export async function POST(request: Request): Promise<Response> {
     chainId,
     contract: checkedContract.display,
     contractKey: checkedContract.canonical,
-    colourSlot,
     name: resolved.metadata.name,
     ticker: resolved.metadata.ticker,
     logoUrl: resolved.metadata.logoUrl ?? null,
@@ -237,9 +235,11 @@ export async function POST(request: Request): Promise<Response> {
   return json(
     {
       orderId: result.order.id,
-      amountUsd: result.order.amountUsd,
+      // Lamports as a string: a bigint does not survive JSON, and a Number
+      // would be a float pretending to be an exact count of the smallest unit
+      // this product moves.
+      amountLamports: result.order.amountLamports.toString(),
       payTo: wallet.address,
-      mint: USDC_MINT,
       expiresAt: result.order.expiresAt.toISOString(),
       reference: result.order.referencePubkey,
     },

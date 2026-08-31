@@ -30,14 +30,14 @@ export async function GET(request: Request): Promise<Response> {
 
   return json(
     {
-      // Amounts are USDC strings, never base units: this is read by a human
+      // Amounts are SOL strings, never lamports: this is read by a human
       // deciding whether to refund real money.
       orphans: orphans.map((orphan) => ({
         id: orphan.id,
         signature: orphan.signature,
         orderId: orphan.orderId,
-        receivedUsdc: orphan.receivedUsdc,
-        expectedUsdc: orphan.expectedUsdc,
+        receivedSol: orphan.receivedSol,
+        expectedSol: orphan.expectedSol,
         reason: orphan.reason,
         createdAt: orphan.createdAt.toISOString(),
         status: orphan.status,

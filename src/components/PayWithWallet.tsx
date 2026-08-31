@@ -6,8 +6,8 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { getChainForEndpoint } from "@solana/wallet-standard-util";
 import { WalletConnect, useInBrowser } from "./WalletProvider";
-import { buildPaymentTransaction } from "../lib/payments/transfer";
-import { formatUsdc, usdToBaseUnits } from "../lib/payments/config";
+import { buildSolTransfer } from "../lib/payments/transfer";
+import { formatSol } from "../lib/payments/config";
 import {
   checkoutOutcome,
   isRetryableConfirmReason,
@@ -40,11 +40,10 @@ import { shortenAddress } from "../lib/tokens/addresses";
 export type PaymentOrder = {
   id: string;
   status: "pending" | "paid" | "expired" | "failed";
-  amountUsd: number;
+  /** What this order costs, in lamports, as a decimal string. */
+  amountLamports: string;
   /** The receiving wallet's owner address. */
   payTo: string;
-  mint: string;
-  decimals: number;
   reference: string;
   expiresAt: string;
   /** Set when the order was started from a connected wallet; only it can pay. */
@@ -222,27 +221,22 @@ export function PayWithWallet({
     setPhase({ kind: "building" });
 
     let recipient: PublicKey;
-    let mint: PublicKey;
     let reference: PublicKey;
     try {
       recipient = new PublicKey(order.payTo);
-      mint = new PublicKey(order.mint);
       reference = new PublicKey(order.reference);
     } catch {
       setPhase({ kind: "error", message: "This order's payment details are unreadable." });
       return;
     }
 
-    const built = await buildPaymentTransaction(connection, {
+    const built = await buildSolTransfer(connection, {
       payer: publicKey,
       recipient,
-      mint,
-      decimals: order.decimals,
-      // The server's own helper, not the same arithmetic written again: it
-      // carries a whole-dollar guard this component would otherwise be
-      // missing, and a client and a server that compute a price differently
-      // is a class of bug worth spending an import to make impossible.
-      amountBaseUnits: usdToBaseUnits(order.amountUsd),
+      // Straight from the order, never recomputed here. The server decided
+      // what this order costs and wrote it down; a client that did its own
+      // arithmetic would be a second opinion about a price.
+      lamports: BigInt(order.amountLamports),
       reference,
     });
     if (!built.ok) {
@@ -364,7 +358,19 @@ export function PayWithWallet({
       })
     : null;
   const blocked = safety === null || !safety.ok;
-  const amount = `$${formatUsdc(usdToBaseUnits(order.amountUsd))} USDC`;
+  /**
+   * THE ONE PLACE THE PRICE IS SAID.
+   *
+   * The entry form deliberately carries no amount — the owner's instruction
+   * was not to advertise it — and this screen is where it appears, in the
+   * readout immediately above the button that opens a wallet. The reasoning
+   * is that the wallet dialog is about to show the number anyway: a payer who
+   * meets it there for the first time learns the price from a system dialog
+   * rather than from us, which reads as a surprise no matter how fair the
+   * number is. Named once, at the last moment where it can still be declined
+   * for free. Same shape as the registration panel.
+   */
+  const amount = `${formatSol(BigInt(order.amountLamports))} SOL`;
   const wrongWallet =
     order.payerPubkey !== null && publicKey !== null && publicKey.toBase58() !== order.payerPubkey;
   // Browser-only, like every other clock-dependent fact here: on the server

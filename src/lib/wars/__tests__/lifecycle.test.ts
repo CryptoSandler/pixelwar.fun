@@ -9,8 +9,8 @@ async function insertWar(overrides: {
   endsAt: Date;
 }): Promise<void> {
   await execute(
-    `INSERT INTO wars (id, slug, title, status, entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Test war', $2, 25, 30, $3, $4)`,
+    `INSERT INTO wars (id, slug, title, status, entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Test war', $2, 25, 25000000, 30, $3, $4)`,
     [overrides.slug, overrides.status, overrides.startsAt, overrides.endsAt],
   );
 }

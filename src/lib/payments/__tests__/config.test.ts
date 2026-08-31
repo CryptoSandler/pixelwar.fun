@@ -1,41 +1,49 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { USDC_DECIMALS, USDC_MINT, formatUsdc, paymentWallet, usdToBaseUnits } from "../config";
+import {
+  formatSol,
+  paymentWallet,
+  registrationFeeLamports,
+  registrationIsFree,
+} from "../config";
 
-describe("USDC amounts", () => {
-  it("converts whole dollars to base units at six decimals", () => {
-    expect(usdToBaseUnits(1)).toBe(1_000_000n);
-    expect(usdToBaseUnits(99)).toBe(99_000_000n);
+describe("SOL amounts", () => {
+  /**
+   * `formatSol` replaced `formatUsdc` when admission moved to SOL, and its
+   * job is the same: turn the smallest unit into something a person reads
+   * next to a wallet dialog. The USDC helpers this file used to test —
+   * `usdToBaseUnits`, `formatUsdc`, and the mint constants — went with the
+   * verifier that used them. See DECISIONES.md.
+   */
+  it("reads like a price, never like a float", () => {
+    expect(formatSol(3_000_000n)).toBe("0.003");
+    expect(formatSol(10_000_000n)).toBe("0.01");
+    expect(formatSol(1_000_000_000n)).toBe("1.00");
+    // Two decimals is a floor, not a ceiling: "1.50" reads as a price where
+    // "1.5" reads as a float somebody forgot to format.
+    expect(formatSol(1_500_000_000n)).toBe("1.50");
+    expect(formatSol(0n)).toBe("0.00");
   });
 
-  it("refuses an amount it cannot represent exactly", () => {
-    // Entry prices are whole dollars. A fractional amount here means a caller
-    // is inventing a price, and rounding it silently would take the wrong sum.
-    expect(() => usdToBaseUnits(1.005)).toThrow();
-    expect(() => usdToBaseUnits(-1)).toThrow();
-    expect(() => usdToBaseUnits(Number.NaN)).toThrow();
-    expect(() => usdToBaseUnits(-0)).toThrow();
-    expect(() => usdToBaseUnits(Number.POSITIVE_INFINITY)).toThrow();
+  it("keeps every lamport rather than rounding to something tidier", () => {
+    // This quotes what a wallet is about to be asked for. A rounded quote
+    // beside an unrounded wallet dialog is a disagreement a payer notices.
+    expect(formatSol(1_234_567_891n)).toBe("1.234567891");
+    expect(formatSol(1n)).toBe("0.000000001");
   });
 
-  it("refuses an amount too large for a JS number to hold exactly", () => {
-    // The guard must be Number.isSafeInteger, not Number.isInteger. Past 2^53
-    // a float no longer has a neighbour: 2**60 and 2**60 + 1 are the SAME
-    // value, so two different intended amounts arrive as one and neither the
-    // caller nor we can tell which was meant. Refusing is the only honest
-    // answer a money function has there.
-    expect(() => usdToBaseUnits(2 ** 60)).toThrow();
-    expect(() => usdToBaseUnits(Number.MAX_SAFE_INTEGER + 2)).toThrow();
-    expect(usdToBaseUnits(Number.MAX_SAFE_INTEGER - 1)).toBeTypeOf("bigint");
-  });
+  it("carries the fee's default and its off switch", () => {
+    delete process.env.REGISTRATION_FEE_SOL;
+    expect(registrationFeeLamports()).toBe(3_000_000n);
+    expect(registrationIsFree()).toBe(false);
 
-  it("round-trips through formatUsdc", () => {
-    expect(formatUsdc(usdToBaseUnits(25))).toBe("25.00");
-  });
+    process.env.REGISTRATION_FEE_SOL = "0";
+    expect(registrationFeeLamports()).toBe(0n);
+    expect(registrationIsFree()).toBe(true);
 
-  it("pins the mint and the decimals", () => {
-    // Getting either wrong means verifying a payment in the wrong asset.
-    expect(USDC_MINT).toBe("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-    expect(USDC_DECIMALS).toBe(6);
+    // A typo must not switch the fee off quietly, and must not raise it.
+    process.env.REGISTRATION_FEE_SOL = "not-a-number";
+    expect(registrationFeeLamports()).toBe(3_000_000n);
+    delete process.env.REGISTRATION_FEE_SOL;
   });
 });
 

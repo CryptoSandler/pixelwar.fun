@@ -1,10 +1,10 @@
 import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../../../lib/http";
 import { classifyEndpoints } from "../../../../../lib/payments/cluster";
-import { paymentWallet, solanaRpcUrls, usdToBaseUnits } from "../../../../../lib/payments/config";
+import { paymentWallet, solanaRpcUrls } from "../../../../../lib/payments/config";
 import { orderById } from "../../../../../lib/payments/orders";
 import type { SettleFailureReason } from "../../../../../lib/payments/settle";
 import { recordVerificationAttempt, settlePayment, verifyRateLimited } from "../../../../../lib/payments/settle";
-import { verifyPayment } from "../../../../../lib/payments/solana";
+import { verifySolPayment } from "../../../../../lib/payments/sol-transfer";
 
 export const dynamic = "force-dynamic";
 
@@ -82,7 +82,7 @@ export async function POST(
    * `PayWithWallet` already refuses to open a wallet when the cluster is not
    * mainnet, and that refusal is real — but it is the BROWSER refusing, and a
    * caller posting straight at this route never runs it. With SOLANA_RPC_URL
-   * pointed at devnet, play-money USDC would verify here exactly like the
+   * pointed at devnet, play-money SOL would verify here exactly like the
    * real thing and settle an order for a colour somebody else paid for.
    *
    * 503, not 400: the request is fine and the deployment is not, which is why
@@ -121,9 +121,9 @@ export async function POST(
   }
   await recordVerificationAttempt(order.id, caller.ipHash);
 
-  const verified = await verifyPayment({
+  const verified = await verifySolPayment({
     signature,
-    expectedBaseUnits: usdToBaseUnits(order.amountUsd),
+    expectedLamports: order.amountLamports,
     wallet: wallet.address,
     expectedPayer: order.payerPubkey ?? undefined,
     createdAtMs: order.createdAt.getTime(),
@@ -147,7 +147,7 @@ export async function POST(
   return json(
     {
       status: "paid",
-      amountUsd: order.amountUsd,
+      amountLamports: order.amountLamports.toString(),
       amountReceivedBaseUnits: result.amountBaseUnits.toString(),
     },
     { headers: { ...NO_STORE, ...cookie } },

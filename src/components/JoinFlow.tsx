@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { ColourPicker } from "./ColourPicker";
 import { WalletConnect } from "./WalletProvider";
 import { CHAINS, getChain } from "../lib/tokens/chains";
 // Type-only, and it has to stay that way: `orders.ts` is server code (node
@@ -14,15 +13,29 @@ import { CHAINS, getChain } from "../lib/tokens/chains";
 import type { CreateOrderFailureReason } from "../lib/payments/orders";
 
 /**
- * Entry, in four steps that can each be corrected before any of them costs
- * anything: which token, which colour, which wallet, then an order.
+ * Entry, in two steps that can each be corrected before either costs
+ * anything: which token, which wallet, then an order.
  *
- * The order is created last on purpose. Creating one reserves a colour under
- * a partial unique index, and a payer who mistyped an address would be
- * holding a seat for a token that is not theirs until the window lapsed. So
- * the address is resolved and SHOWN first — name, ticker and logo, read from
- * DexScreener rather than typed by whoever is paying — and the reservation
- * happens only once somebody has looked at what they are about to buy.
+ * THE COLOUR STEP IS GONE, and it is the interesting half of this file's
+ * history. A payer used to choose their community's flag from the free
+ * twenty-four, which made the choice the loudest thing on the screen and the
+ * likeliest way to fail an order — the picker refreshed every twenty seconds
+ * because somebody else could take what you were looking at. The flag is now
+ * assigned (the lowest free slot, in `createOrder`'s own INSERT) and the
+ * token's identity on screen is its LOGO, which is the thing people already
+ * recognise and the thing the search already fetched. A colour was never what
+ * anybody was buying.
+ *
+ * The order is created last on purpose. Creating one takes a seat under a
+ * partial unique index, and a payer who mistyped an address would hold it for
+ * a token that is not theirs until the window lapsed. So the address is
+ * resolved and SHOWN first — name, ticker and logo, read from DexScreener
+ * rather than typed by whoever is paying — and the reservation happens only
+ * once somebody has looked at what they are about to enter.
+ *
+ * NO PRICE ON THIS SCREEN. The amount appears once, on the confirmation
+ * screen, immediately before the wallet dialog — the same place and the same
+ * moment the registration flow names its fee. See DESIGN.md §8.
  */
 
 type ResolvedToken = {
@@ -38,7 +51,6 @@ export type JoinWar = {
   slug: string;
   title: string;
   maxTokens: number;
-  entryPriceUsd: number;
 };
 
 /**
@@ -56,20 +68,20 @@ export type JoinWar = {
  * came.
  */
 const REFUSAL_COPY: Record<CreateOrderFailureReason, string> = {
-  // The likeliest failure in the whole flow, and the one the picker recovers
-  // from by itself: the list is refreshed on this reason, so the second
-  // sentence is a description of what just happened, not a suggestion.
-  colour_taken:
-    "That colour was taken while you were choosing. The picker now shows what is still open.",
-  already_entered: "This token is already in this war. A token can hold one colour, once.",
-  war_full: "This war is full. Every colour has been claimed.",
+  // Was the likeliest failure in the flow when a payer picked their own flag.
+  // Now it can only mean two orders raced for the same assigned slot, which
+  // the war row's lock makes vanishingly unlikely — so the sentence says what
+  // to do rather than describing a picker that is no longer on screen.
+  colour_taken: "Two entries collided. Try again — it will pick the next free flag.",
+  already_entered: "This token is already in this war. A token enters once.",
+  war_full: "This war is full.",
   war_closed: "This war is not open for entry any more.",
+  // The operator has not priced this war. Nothing the payer can fix, and it
+  // must not read as their mistake.
+  no_price: "Entry is not open on this deployment yet.",
 };
 
-/** How often the free list is refreshed while somebody is looking at it. */
-const COLOUR_REFRESH_MS = 20_000;
-
-export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: number[] }) {
+export function JoinFlow({ war }: { war: JoinWar }) {
   const router = useRouter();
   const { publicKey } = useWallet();
 
@@ -77,40 +89,10 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
   const [contract, setContract] = useState("");
   const [token, setToken] = useState<ResolvedToken | null>(null);
   const [resolving, setResolving] = useState(false);
-  const [free, setFree] = useState<number[]>(initialFree);
-  const [selected, setSelected] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const chain = getChain(chainId);
-
-  const refreshColours = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/colours?war=${encodeURIComponent(war.slug)}`);
-      if (!response.ok) return;
-      const body = (await response.json()) as { free?: number[] };
-      if (Array.isArray(body.free)) setFree(body.free);
-    } catch {
-      // A failed refresh is not worth an error pill: the list on screen is
-      // simply a little older, and the real authority on who gets a colour
-      // is the index behind order creation, not this list.
-    }
-  }, [war.slug]);
-
-  // Kept fresh while the picker is on screen. Somebody choosing a colour is
-  // choosing from twenty-four possibilities that other people are taking at
-  // the same time, and a stale list turns that into a failed order.
-  useEffect(() => {
-    if (!token) return;
-    const timer = setInterval(() => void refreshColours(), COLOUR_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [token, refreshColours]);
-
-  // A colour taken while it was selected stops counting as selected, derived
-  // rather than reconciled in an effect: the button would fail on it, and the
-  // failure would be a surprise. `chosen` is what the rest of this component
-  // reads, so a stale `selected` can never reach the order.
-  const chosen = selected !== null && free.includes(selected) ? selected : null;
 
   async function resolve() {
     const trimmed = contract.trim();
@@ -131,7 +113,6 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
         return;
       }
       setToken(body as ResolvedToken);
-      void refreshColours();
     } catch {
       setError("The lookup did not come back. Try again in a moment.");
     } finally {
@@ -140,7 +121,7 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
   }
 
   async function startOrder() {
-    if (!token || chosen === null) return;
+    if (!token) return;
     setStarting(true);
     setError(null);
     try {
@@ -151,7 +132,6 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
           warSlug: war.slug,
           chainId: token.chainId,
           contract: token.contract,
-          colourSlot: chosen,
           // Sent only when a wallet is connected. An order that names its
           // payer can only be settled by that wallet, which is the stronger
           // position; an order without one is first-to-claim inside its
@@ -169,7 +149,6 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
           written ??
             (typeof body?.error === "string" ? body.error : "That order could not be started."),
         );
-        if (body?.reason === "colour_taken" || body?.reason === "war_full") void refreshColours();
         // Re-enabled here rather than in a `finally`: on the success path the
         // page is already navigating away, and a button that came back to
         // life for that moment is a second order waiting to happen.
@@ -257,27 +236,7 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
         ) : null}
       </Step>
 
-      <Step label="2 · Colour">
-        {token ? (
-          <>
-            <ColourPicker
-              total={war.maxTokens}
-              free={free}
-              selected={chosen}
-              onSelect={setSelected}
-              surface="control"
-            />
-            <p className="muted text-[12px]">
-              {free.length} of {war.maxTokens} colours are still open. A colour belongs to one
-              token for the whole war.
-            </p>
-          </>
-        ) : (
-          <p className="muted text-[13px]">Find your token first.</p>
-        )}
-      </Step>
-
-      <Step label="3 · Wallet">
+      <Step label="2 · Wallet">
         <WalletConnect />
         <p className="muted text-[12px]">
           {publicKey
@@ -301,14 +260,14 @@ export function JoinFlow({ war, initialFree }: { war: JoinWar; initialFree: numb
         <button
           type="button"
           className="btn-primary px-6 py-3"
-          disabled={!token || chosen === null || starting}
+          disabled={!token || starting}
           onClick={() => void startOrder()}
         >
-          {starting ? "Starting…" : `Continue — $${war.entryPriceUsd} USDC`}
+          {starting ? "Starting…" : "Continue"}
         </button>
         <p className="muted text-[12px]">
-          Payment is USDC on Solana, whichever chain the token itself lives on. The colour is held
-          for you while the order is open.
+          Your token&rsquo;s seat is held while the order is open. Nothing is charged until you
+          approve it in your wallet on the next screen.
         </p>
       </section>
     </div>

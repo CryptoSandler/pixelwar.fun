@@ -15,7 +15,6 @@ import { POST as confirmRoute } from "../orders/[id]/confirm/route";
  */
 
 const PAYMENT_WALLET = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 function randomSignature(): string {
   return base58Encode(new Uint8Array(randomBytes(64)));
@@ -30,9 +29,13 @@ function post(path: string, body: unknown, ip = "1.2.3.4"): Request {
 }
 
 /**
- * A `getTransaction`-shaped RPC result whose token balance deltas credit
- * `PAYMENT_WALLET` with `amount` USDC, made by `payer`, inside the supplied
- * order's window (the caller passes one that already is).
+ * A `getTransaction`-shaped RPC result whose NATIVE balances credit
+ * `PAYMENT_WALLET` with `amount` lamports, paid by `payer`, inside the
+ * supplied order's window (the caller passes one that already is).
+ *
+ * Positional, like the chain's own: entry N belongs to `accountKeys[N]`. The
+ * payer's own drop is the amount PLUS a network fee, which is exactly why the
+ * verifier reads the recipient's rise instead.
  */
 function fixtureTransaction(options: {
   amount: string;
@@ -40,30 +43,22 @@ function fixtureTransaction(options: {
   blockTimeMs: number;
   err?: unknown;
 }) {
+  const amount = BigInt(options.amount);
   return {
     slot: 1,
     blockTime: Math.floor(options.blockTimeMs / 1000),
-    transaction: { message: { accountKeys: [{ pubkey: options.payer, signer: true }] } },
+    transaction: {
+      message: {
+        accountKeys: [
+          { pubkey: options.payer, signer: true },
+          { pubkey: PAYMENT_WALLET, signer: false },
+        ],
+      },
+    },
     meta: {
       err: options.err ?? null,
-      preTokenBalances: [
-        { accountIndex: 0, owner: PAYMENT_WALLET, mint: USDC_MINT, uiTokenAmount: { amount: "0" } },
-        { accountIndex: 1, owner: options.payer, mint: USDC_MINT, uiTokenAmount: { amount: "500000000" } },
-      ],
-      postTokenBalances: [
-        {
-          accountIndex: 0,
-          owner: PAYMENT_WALLET,
-          mint: USDC_MINT,
-          uiTokenAmount: { amount: options.amount },
-        },
-        {
-          accountIndex: 1,
-          owner: options.payer,
-          mint: USDC_MINT,
-          uiTokenAmount: { amount: (500_000_000n - BigInt(options.amount)).toString() },
-        },
-      ],
+      preBalances: [500_000_000, 0],
+      postBalances: [Number(500_000_000n - amount - 5_000n), Number(amount)],
     },
   };
 }
@@ -86,24 +81,20 @@ async function makeWar(overrides: Partial<{ maxTokens: number; entryPriceUsd: nu
   const id = randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                        entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, $2, $3, 30,
+                        entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, $2, $3, 25000000, 30,
              now() - interval '1 hour', now() + interval '1 hour')`,
     [id, overrides.maxTokens ?? 24, overrides.entryPriceUsd ?? 25],
   );
   return { id, slug: id };
 }
 
-async function makeOrder(
-  warId: string,
-  overrides: Partial<{ colourSlot: number; payerPubkey: string }> = {},
-) {
+async function makeOrder(warId: string, overrides: Partial<{ payerPubkey: string }> = {}) {
   const result = await createOrder({
     warId,
     chainId: "solana",
     contract: randomUUID(),
     contractKey: randomUUID(),
-    colourSlot: overrides.colourSlot ?? 5,
     name: "Fixture Token",
     ticker: "FIX",
     referencePubkey: randomUUID(),
@@ -147,7 +138,7 @@ describe("POST /api/orders/:id/confirm", () => {
 
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body).toMatchObject({ status: "paid", amountUsd: 25, amountReceivedBaseUnits: "25000000" });
+      expect(body).toMatchObject({ status: "paid", amountLamports: "25000000", amountReceivedBaseUnits: "25000000" });
     },
   );
 

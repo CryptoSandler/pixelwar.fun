@@ -131,7 +131,7 @@ export default async function OrphansPage({
         <h1 className="text-[20px] font-medium">Payments with no seat</h1>
         <p className="muted text-[13px]">
           Money that reached the payment wallet and could not be applied to a colour. Newest first.
-          Amounts are USDC.
+          Amounts are SOL.
         </p>
         <p className="text-[13px]">
           Assigning one of these settles it against an order exactly as a payer&rsquo;s own payment
@@ -222,7 +222,7 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
         you.
       */}
       <Field label="Received">
-        <span className="numeric text-[13px]">{orphan.receivedUsdc} USDC</span>
+        <span className="numeric text-[13px]">{orphan.receivedSol} SOL</span>
       </Field>
 
       <Field label="Why it was filed">
@@ -232,7 +232,7 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
 
       {/*
         Who the CHAIN says paid, in both forms migration 002 records — the fee
-        payer, and every wallet whose USDC balance went down. These are here so
+        payer, and every wallet whose SOL balance went down. These are here so
         that assigning a payment does not mean trusting whoever is asking for
         it: an order id is something a claimant supplies, and this is not.
       */}
@@ -251,7 +251,7 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
           <ul className="flex flex-col gap-1">
             {orphan.senderDebited.map((entry) => (
               <li key={entry.owner} className="numeric text-[12px] break-all">
-                {entry.owner} &mdash; {entry.amountUsdc} USDC
+                {entry.owner} &mdash; {entry.amountSol} SOL
               </li>
             ))}
           </ul>
@@ -267,7 +267,7 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
         <Field label="Submitted against order">
           <span className="numeric text-[12px] break-all">{orphan.orderId}</span>
           <span className="muted text-[13px]">
-            That order&rsquo;s price was <span className="numeric">{orphan.expectedUsdc} USDC</span>.
+            That order&rsquo;s price was <span className="numeric">{orphan.expectedSol} SOL</span>.
           </span>
         </Field>
       ) : null}
@@ -292,7 +292,7 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
 
       {open ? (
         <>
-          <AssignForm orphanId={orphan.id} receivedUsdc={orphan.receivedUsdc} orders={orders} />
+          <AssignForm orphanId={orphan.id} receivedSol={orphan.receivedSol} orders={orders} />
           <DiscardForm orphanId={orphan.id} />
         </>
       ) : null}
@@ -314,11 +314,11 @@ function OrphanCard({ orphan, orders }: { orphan: Orphan; orders: AssignableOrde
  */
 function AssignForm({
   orphanId,
-  receivedUsdc,
+  receivedSol,
   orders,
 }: {
   orphanId: string;
-  receivedUsdc: string;
+  receivedSol: string;
   orders: AssignableOrder[];
 }) {
   if (orders.length === 0) {
@@ -343,7 +343,7 @@ function AssignForm({
       */}
       <p className="text-[13px]">
         The amount is not checked against the order you pick. Compare
-        <span className="numeric"> {receivedUsdc} USDC</span> against the price in the list
+        <span className="numeric"> {receivedSol} SOL</span> against the price in the list
         yourself, and assign anyway only if you mean to.
       </p>
       {/*

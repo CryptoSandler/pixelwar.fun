@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { base58Encode } from "../../base58";
 import { execute, query, queryOne } from "../../db";
 import type { War } from "../../wars/lifecycle";
-import { USDC_MINT } from "../config";
 import { orderById, type Order } from "../orders";
 import { recoverUnclaimedOrders, type RecoveryFetcher } from "../recover";
 import type { SolanaTransaction } from "../solana";
@@ -34,8 +33,8 @@ async function war(
   const id = randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                        entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 30, $4, $5)`,
+                        entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 25000000, 30, $4, $5)`,
     [
       id,
       overrides.status ?? "live",
@@ -68,6 +67,7 @@ async function war(
     height: row!.height,
     maxTokens: row!.max_tokens,
     entryPriceUsd: row!.entry_price_usd,
+    entryPriceLamports: 25_000_000n,
     cooldownSeconds: row!.cooldown_seconds,
     startsAt: row!.starts_at,
     endsAt: row!.ends_at,
@@ -115,9 +115,9 @@ async function expiredOrder(overrides: {
   const id = randomUUID();
   await execute(
     `INSERT INTO entry_orders
-       (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
+       (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey, reference_pubkey, status,
         created_at, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'expired', $7, $8)`,
+     VALUES ($1, $2, $3, $4, 25000000, $5, $6, 'expired', $7, $8)`,
     [
       id,
       overrides.warId,
@@ -151,21 +151,23 @@ function fixtureTransaction(options: {
   return {
     slot: 1,
     blockTime: Math.floor((options.blockTimeMs ?? Date.now() - 30 * 60_000) / 1000),
-    transaction: { message: { accountKeys: [{ pubkey: payer, signer: true }] } },
+    transaction: {
+      message: {
+        accountKeys: [
+          { pubkey: payer, signer: true },
+          { pubkey: PAYMENT_WALLET, signer: false },
+        ],
+      },
+    },
     meta: {
       err: options.err ?? null,
-      preTokenBalances: [
-        { accountIndex: 0, owner: PAYMENT_WALLET, mint: USDC_MINT, uiTokenAmount: { amount: "0" } },
-        { accountIndex: 1, owner: payer, mint: USDC_MINT, uiTokenAmount: { amount: "500000000" } },
-      ],
-      postTokenBalances: [
-        { accountIndex: 0, owner: PAYMENT_WALLET, mint: USDC_MINT, uiTokenAmount: { amount: options.amount } },
-        {
-          accountIndex: 1,
-          owner: payer,
-          mint: USDC_MINT,
-          uiTokenAmount: { amount: (500_000_000n - BigInt(options.amount)).toString() },
-        },
+      // Native and positional since admission moved to SOL: entry N belongs
+      // to accountKeys[N]. The payer's drop is the amount plus the network
+      // fee, which is why the verifier reads the recipient's rise.
+      preBalances: [500_000_000, 0],
+      postBalances: [
+        Number(500_000_000n - BigInt(options.amount) - 5_000n),
+        Number(options.amount),
       ],
     },
   };
@@ -729,9 +731,9 @@ describe("recoverUnclaimedOrders", () => {
              RETURNING id
            )
            INSERT INTO entry_orders
-             (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
-              created_at, expires_at)
-           SELECT $5, $2, new_token.id, 25, NULL, $6, 'expired',
+             (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey,
+              reference_pubkey, status, created_at, expires_at)
+           SELECT $5, $2, new_token.id, 25, 25000000, NULL, $6, 'expired',
                   now() - interval '1 hour', now() - interval '2 minutes'
              FROM new_token`,
           [tokenId, w.id, randomUUID(), i + 1, orderId, randomUUID()],

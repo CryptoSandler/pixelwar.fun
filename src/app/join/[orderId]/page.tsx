@@ -4,7 +4,7 @@ import { PasteSignature } from "../../../components/PasteSignature";
 import { PayWithWallet } from "../../../components/PayWithWallet";
 import { queryOne } from "../../../lib/db";
 import { classifyEndpoints } from "../../../lib/payments/cluster";
-import { USDC_DECIMALS, USDC_MINT, paymentWallet, solanaRpcUrls } from "../../../lib/payments/config";
+import { paymentWallet, solanaRpcUrls } from "../../../lib/payments/config";
 import { scheduleReconcile } from "../../../lib/payments/lazy-recovery";
 import { orderById } from "../../../lib/payments/orders";
 import { warById } from "../../../lib/wars/lifecycle";
@@ -91,7 +91,7 @@ export default async function OrderPage({
           {token.ticker} in {war.title}
         </h1>
         <p className="muted text-[13px]">
-          Entry is paid once, in USDC on Solana. Painting is free for everyone afterwards, and any
+          Entry is paid once, in SOL. Painting needs its own one-time registration, and any
           pixel can be painted over — the leaderboard counts what a token holds right now.
         </p>
       </section>
@@ -106,10 +106,8 @@ export default async function OrderPage({
         order={{
           id: order.id,
           status: order.status,
-          amountUsd: order.amountUsd,
+          amountLamports: order.amountLamports.toString(),
           payTo: wallet.address,
-          mint: USDC_MINT,
-          decimals: USDC_DECIMALS,
           reference: order.referencePubkey,
           expiresAt: order.expiresAt.toISOString(),
           payerPubkey: order.payerPubkey,

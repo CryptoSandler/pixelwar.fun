@@ -163,7 +163,7 @@ export function paymentSafety(input: {
       ok: false,
       message:
         `Your wallet would be asked to sign on ${clusterLabel(signingChain)}. The entry price is ` +
-        "mainnet USDC, so a payment made here could never be credited, and paying is turned off " +
+        "mainnet SOL, so a payment made here could never be credited, and paying is turned off " +
         "on this screen.",
     };
   }
@@ -173,7 +173,7 @@ export function paymentSafety(input: {
       ok: false,
       message:
         "This page is served from a development machine. A payment from here would move real " +
-        "USDC on Solana mainnet, so paying is turned off on this screen.",
+        "SOL on Solana mainnet, so paying is turned off on this screen.",
     };
   }
 

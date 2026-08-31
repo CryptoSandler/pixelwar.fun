@@ -155,8 +155,8 @@ describe("POST /api/cron/reconcile", () => {
       const warId = randomUUID();
       await execute(
         `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                            entry_price_usd, cooldown_seconds, starts_at, ends_at)
-         VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 30, $2, $3)`,
+                            entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+         VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 25000000, 30, $2, $3)`,
         [warId, new Date(Date.now() - 3_600_000), new Date(Date.now() + 3_600_000)],
       );
 
@@ -172,9 +172,9 @@ describe("POST /api/cron/reconcile", () => {
       const orderId = randomUUID();
       await execute(
         `INSERT INTO entry_orders
-           (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
+           (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey, reference_pubkey, status,
             created_at, expires_at)
-         VALUES ($1, $2, $3, 25, NULL, $1, 'pending',
+         VALUES ($1, $2, $3, 25, 25000000, NULL, $1, 'pending',
                  now() - interval '40 minutes', now() - interval '10 minutes')`,
         [orderId, warId, tokenId],
       );

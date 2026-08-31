@@ -8,8 +8,8 @@ import type { War } from "../../wars/lifecycle";
 export async function makeWar(overrides: Partial<{ width: number; height: number; cooldownSeconds: number; status: string; startsAt: Date; endsAt: Date }> = {}): Promise<War> {
   const id = randomUUID();
   await execute(
-    `INSERT INTO wars (id, slug, title, status, width, height, entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', $2, $3, $4, 25, $5, $6, $7)`,
+    `INSERT INTO wars (id, slug, title, status, width, height, entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', $2, $3, $4, 25, 25000000, $5, $6, $7)`,
     [
       id,
       overrides.status ?? "live",

@@ -21,7 +21,7 @@ describe("creating a war", () => {
     const result = await createWar({
       slug: `w-${randomUUID().slice(0, 8)}`,
       title: "Fixture",
-      entryPriceUsd: 25,
+      entryPriceLamports: 25_000_000n,
       cooldownSeconds: 30,
       startsAt: new Date(Date.now() + HOUR),
       endsAt: new Date(Date.now() + 3 * HOUR),
@@ -40,7 +40,7 @@ describe("creating a war", () => {
     const result = await createWar({
       slug: `w-${randomUUID().slice(0, 8)}`,
       title: "Fixture",
-      entryPriceUsd: 25,
+      entryPriceLamports: 25_000_000n,
       cooldownSeconds: 30,
       startsAt: new Date(Date.now() - HOUR),
       endsAt: new Date(Date.now() + HOUR),
@@ -54,7 +54,7 @@ describe("creating a war", () => {
   it("refuses a taken slug, a bad slug and a backwards window", { timeout: 30_000 }, async () => {
     const slug = `w-${randomUUID().slice(0, 8)}`;
     const base = {
-      title: "Fixture", entryPriceUsd: 25, cooldownSeconds: 30,
+      title: "Fixture", entryPriceLamports: 25_000_000n, cooldownSeconds: 30,
       startsAt: new Date(Date.now() + HOUR), endsAt: new Date(Date.now() + 2 * HOUR),
     };
     expect((await createWar({ ...base, slug })).ok).toBe(true);

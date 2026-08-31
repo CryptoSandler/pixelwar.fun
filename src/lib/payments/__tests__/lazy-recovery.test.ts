@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { base58Encode } from "../../base58";
 import { execute } from "../../db";
-import { USDC_MINT } from "../config";
 import { claimForRecovery, reconcileOnRead } from "../lazy-recovery";
 import { orderById, type Order } from "../orders";
 import type { RecoveryFetcher } from "../recover";
@@ -32,8 +31,8 @@ async function war(): Promise<string> {
   const id = randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                       entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 30, $2, $3)`,
+                       entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 25000000, 30, $2, $3)`,
     [id, new Date(Date.now() - 3_600_000), new Date(Date.now() + 3_600_000)],
   );
   return id;
@@ -89,9 +88,9 @@ async function order(overrides: {
   const expiresInMinutes = overrides.expiresInMinutes ?? -2;
   await execute(
     `INSERT INTO entry_orders
-       (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
-        created_at, expires_at, recovery_attempted_at)
-     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9)`,
+       (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey, reference_pubkey,
+        status, created_at, expires_at, recovery_attempted_at)
+     VALUES ($1, $2, $3, $4, 25000000, NULL, $5, $6, $7, $8, $9)`,
     [
       id,
       overrides.warId,
@@ -112,22 +111,21 @@ function fixtureTransaction(amount: string): SolanaTransaction {
   return {
     slot: 1,
     blockTime: Math.floor((Date.now() - 30 * 60_000) / 1000),
-    transaction: { message: { accountKeys: [{ pubkey: payer, signer: true }] } },
+    transaction: {
+      message: {
+        accountKeys: [
+          { pubkey: payer, signer: true },
+          { pubkey: PAYMENT_WALLET, signer: false },
+        ],
+      },
+    },
     meta: {
       err: null,
-      preTokenBalances: [
-        { accountIndex: 0, owner: PAYMENT_WALLET, mint: USDC_MINT, uiTokenAmount: { amount: "0" } },
-        { accountIndex: 1, owner: payer, mint: USDC_MINT, uiTokenAmount: { amount: "500000000" } },
-      ],
-      postTokenBalances: [
-        { accountIndex: 0, owner: PAYMENT_WALLET, mint: USDC_MINT, uiTokenAmount: { amount } },
-        {
-          accountIndex: 1,
-          owner: payer,
-          mint: USDC_MINT,
-          uiTokenAmount: { amount: (500_000_000n - BigInt(amount)).toString() },
-        },
-      ],
+      // Native and positional: entry N belongs to accountKeys[N]. The payer's
+      // own drop is the amount plus the network fee, which is why the
+      // verifier reads the recipient's rise instead.
+      preBalances: [500_000_000, 0],
+      postBalances: [Number(500_000_000n - BigInt(amount) - 5_000n), Number(amount)],
     },
   };
 }

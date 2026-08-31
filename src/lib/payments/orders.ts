@@ -35,6 +35,18 @@ export type Order = {
   id: string;
   warId: string;
   warTokenId: string;
+  /**
+   * What this order asks for, in lamports. Snapshotted at creation: the price
+   * is configuration and it moves, so an order says what it asked rather than
+   * what the war currently asks.
+   */
+  amountLamports: bigint;
+  /**
+   * The dollar figure this order was recorded with. NOT a price anybody is
+   * charged since migration 015 — kept because `amount_usd` is still NOT NULL
+   * and because orders placed before the change are the record of what those
+   * payers were actually asked for.
+   */
   amountUsd: number;
   payerPubkey: string | null;
   referencePubkey: string;
@@ -52,7 +64,11 @@ export type CreateOrderInput = {
   contract: string;
   /** Normalised contract identity (lowercased for EVM). Task 5's concern; this module only stores it. */
   contractKey: string;
-  colourSlot: number;
+  /**
+   * NO COLOUR. Since the flag stopped being something a payer chooses, the
+   * slot is assigned by this function — the lowest free one — and there is
+   * nothing for a caller to pass or to get wrong. See the INSERT below.
+   */
   name: string;
   ticker: string;
   logoUrl?: string | null;
@@ -71,7 +87,8 @@ export type CreateOrderFailureReason =
   | "colour_taken"
   | "already_entered"
   | "war_full"
-  | "war_closed";
+  | "war_closed"
+  | "no_price";
 
 export type CreateOrderResult =
   | { ok: true; order: Order }
@@ -82,6 +99,7 @@ type OrderRow = {
   war_id: string;
   war_token_id: string;
   amount_usd: number;
+  amount_lamports: string | null;
   payer_pubkey: string | null;
   reference_pubkey: string;
   ip_hash: string | null;
@@ -92,14 +110,19 @@ type OrderRow = {
   paid_at: Date | null;
 };
 
-const ORDER_COLUMNS = `id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey,
-  ip_hash, status, failure_reason, created_at, expires_at, paid_at`;
+const ORDER_COLUMNS = `id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey,
+  reference_pubkey, ip_hash, status, failure_reason, created_at, expires_at, paid_at`;
 
 function toOrder(row: OrderRow): Order {
   return {
     id: row.id,
     warId: row.war_id,
     warTokenId: row.war_token_id,
+    // Zero for an order placed before migration 015. Such an order can no
+    // longer be paid — the verifier compares against lamports and nothing
+    // clears a floor of zero by arriving — and `POST /api/orders` refuses to
+    // create another one against a war with no SOL price.
+    amountLamports: BigInt(row.amount_lamports ?? 0),
     amountUsd: row.amount_usd,
     payerPubkey: row.payer_pubkey,
     referencePubkey: row.reference_pubkey,
@@ -169,9 +192,10 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
       status: string;
       ended: boolean;
       entry_price_usd: number;
+      entry_price_sol: string | null;
       max_tokens: number;
     }>(
-      `SELECT status, (ends_at <= now()) AS ended, entry_price_usd, max_tokens
+      `SELECT status, (ends_at <= now()) AS ended, entry_price_usd, entry_price_sol, max_tokens
          FROM wars WHERE id = $1 FOR UPDATE`,
       [input.warId],
     );
@@ -188,6 +212,14 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
       // for a war that never runs. 'scheduled' is deliberately NOT refused
       // here — entry opens before a war starts.
       return { ok: false as const, reason: "war_closed" as const };
+    }
+
+    // A war with no SOL price cannot take money. Refused rather than defaulted
+    // to zero: a free entry is a decision nobody made, and migration 015 left
+    // the column nullable precisely so this case is visible instead of
+    // silently priced.
+    if (war.entry_price_sol === null) {
+      return { ok: false as const, reason: "no_price" as const };
     }
 
     const tokenId = randomUUID();
@@ -207,11 +239,29 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         `INSERT INTO war_tokens
            (id, war_id, chain_id, contract, contract_key, colour_slot, status,
             name, ticker, logo_url, links, metadata_fetched_at, reserved_at)
-         SELECT $1, $2, $3, $4, $5, $6, 'reserved', $7, $8, $9, $10::jsonb, now(), now()
+         SELECT $1, $2, $3, $4, $5,
+                (
+                  -- THE FLAG IS ASSIGNED, NOT CHOSEN. The lowest slot this war
+                  -- has not already given out, computed inside the same
+                  -- statement that takes it. The war row is locked FOR UPDATE
+                  -- above, so order creation is serialised on it and two
+                  -- callers cannot be handed the same number; the partial
+                  -- unique index war_tokens_colour_live is still there as the
+                  -- thing that would refuse it if they were. (No backticks in
+                  -- this comment on purpose: it lives inside a template
+                  -- literal, and one would end the string.)
+                  SELECT slot FROM generate_series(1, $11) AS slot
+                   WHERE slot NOT IN (
+                     SELECT colour_slot FROM war_tokens
+                      WHERE war_id = $2 AND status <> 'released'
+                   )
+                   ORDER BY slot LIMIT 1
+                ),
+                'reserved', $6, $7, $8, $9::jsonb, now(), now()
           WHERE (
             SELECT count(*) FROM war_tokens wt
              WHERE wt.war_id = $2 AND wt.status <> 'released'
-          ) < $11
+          ) < $10
          RETURNING id`,
         [
           tokenId,
@@ -219,11 +269,11 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
           input.chainId,
           input.contract,
           input.contractKey,
-          input.colourSlot,
           input.name,
           input.ticker,
           input.logoUrl ?? null,
           JSON.stringify(input.links ?? {}),
+          war.max_tokens,
           war.max_tokens,
         ],
       );
@@ -247,16 +297,19 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     const orderId = randomUUID();
     const orderRow = await client.query<OrderRow>(
       `INSERT INTO entry_orders
-         (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, ip_hash,
-          status, created_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', now(),
-               now() + ($8 || ' minutes')::interval)
+         (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey,
+          reference_pubkey, ip_hash, status, created_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', now(),
+               now() + ($9 || ' minutes')::interval)
        RETURNING ${ORDER_COLUMNS}`,
       [
         orderId,
         input.warId,
         tokenId,
+        // Record-keeping only — `amount_usd` is still NOT NULL and its CHECK
+        // refuses zero. What the payer is charged is the lamports beside it.
         war.entry_price_usd,
+        war.entry_price_sol,
         input.payerPubkey ?? null,
         input.referencePubkey,
         input.ipHash ?? null,

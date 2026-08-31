@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { base58Encode } from "../../../lib/base58";
-import { execute } from "../../../lib/db";
+import { execute, query } from "../../../lib/db";
 import { GET as getOrderRoute } from "../orders/[id]/route";
 import { POST as ordersRoute } from "../orders/route";
 
@@ -48,8 +48,8 @@ async function makeWar(
   const id = randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                        entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 30, $4, $5)`,
+                        entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 25000000, 30, $4, $5)`,
     [
       id,
       overrides.status ?? "live",
@@ -142,7 +142,7 @@ describe("POST /api/orders", () => {
   });
 
   it(
-    "opens an order for a valid token and colour",
+    "opens an order for a valid token, priced in lamports",
     { timeout: 20_000 },
     async () => {
       const war = await makeWar();
@@ -152,9 +152,11 @@ describe("POST /api/orders", () => {
       expect(response.status).toBe(201);
       const body = await response.json();
       expect(body).toMatchObject({
-        amountUsd: 25,
+        // The war fixture's price, in lamports, as a string — a bigint does
+        // not survive JSON and a Number would be a float standing in for an
+        // exact count of the smallest unit this product moves.
+        amountLamports: "25000000",
         payTo: PAYMENT_WALLET,
-        mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       });
       expect(typeof body.orderId).toBe("string");
       expect(typeof body.reference).toBe("string");
@@ -174,8 +176,10 @@ describe("POST /api/orders", () => {
       // Exactly the payer-facing fields — no ip_hash, no war_token_id, no
       // internal status, nothing the payer never submitted and has no
       // business seeing.
+      // Exhaustive, and one field shorter than it was: `mint` went with the
+      // USDC path, because a native transfer has no mint to name.
       expect(Object.keys(body).sort()).toEqual(
-        ["amountUsd", "expiresAt", "mint", "orderId", "payTo", "reference"].sort(),
+        ["amountLamports", "expiresAt", "orderId", "payTo", "reference"].sort(),
       );
     },
   );
@@ -216,21 +220,25 @@ describe("POST /api/orders", () => {
   );
 
   it(
-    "409s with colour_taken for a colour another order already holds",
+    "gives two entrants two different flags instead of refusing the second",
     { timeout: 20_000 },
     async () => {
+      // This test used to assert a 409 `colour_taken`, which was the commonest
+      // refusal in the product when a payer chose their own flag. Nobody
+      // chooses now, so the second entrant is served rather than told to pick
+      // again — the refusal survives only for a genuine race.
       const war = await makeWar();
-      const first = await ordersRoute(
-        post("/api/orders", orderBody({ warSlug: war.slug, colourSlot: 5 })),
-      );
+      const first = await ordersRoute(post("/api/orders", orderBody({ warSlug: war.slug })));
       expect(first.status).toBe(201);
 
-      const second = await ordersRoute(
-        post("/api/orders", orderBody({ warSlug: war.slug, colourSlot: 5 })),
-      );
+      const second = await ordersRoute(post("/api/orders", orderBody({ warSlug: war.slug })));
+      expect(second.status).toBe(201);
 
-      expect(second.status).toBe(409);
-      expect(await second.json()).toMatchObject({ reason: "colour_taken" });
+      const slots = await query<{ colour_slot: number }>(
+        `SELECT colour_slot FROM war_tokens WHERE war_id = $1 ORDER BY colour_slot`,
+        [war.id],
+      );
+      expect(slots.map((row) => row.colour_slot)).toEqual([1, 2]);
     },
   );
 
@@ -510,9 +518,7 @@ describe("GET /api/orders/[id]", () => {
     { timeout: 20_000 },
     async () => {
       const war = await makeWar();
-      const opened = await ordersRoute(
-        post("/api/orders", orderBody({ warSlug: war.slug, colourSlot: 9 })),
-      );
+      const opened = await ordersRoute(post("/api/orders", orderBody({ warSlug: war.slug })));
       const { orderId } = await opened.json();
 
       const response = await getOrderRoute(get(`/api/orders/${orderId}`), {
@@ -522,10 +528,11 @@ describe("GET /api/orders/[id]", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
         status: "pending",
-        amountUsd: 25,
+        amountLamports: "25000000",
         paidAt: null,
         tokenTicker: "FIX",
-        colourSlot: 9,
+        // The first free flag, assigned rather than requested.
+        colourSlot: 1,
       });
     },
   );

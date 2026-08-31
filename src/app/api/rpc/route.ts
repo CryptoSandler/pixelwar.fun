@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
  * ever forward:
  *
  * - getLatestBlockhash: every transaction needs a recent blockhash.
- * - getAccountInfo: does the payer's USDC account exist.
+ * - getAccountInfo: read an account before building a transfer.
  * - getTokenAccountsByOwner: find it.
  * - getMinimumBalanceForRentExemption: only if a token account must be created.
  * - sendTransaction: submit the signed transfer.

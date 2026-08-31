@@ -59,7 +59,7 @@ export async function GET(
   return json(
     {
       status: order.status,
-      amountUsd: order.amountUsd,
+      amountLamports: order.amountLamports.toString(),
       expiresAt: order.expiresAt.toISOString(),
       paidAt: order.paidAt ? order.paidAt.toISOString() : null,
       tokenTicker: token?.ticker ?? null,

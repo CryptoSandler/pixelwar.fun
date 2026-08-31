@@ -25,8 +25,8 @@ async function war(
   const id = randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                        entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 30, $4, $5)`,
+                        entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 25000000, 30, $4, $5)`,
     [
       id,
       overrides.status ?? "live",
@@ -59,6 +59,7 @@ async function war(
     height: row!.height,
     maxTokens: row!.max_tokens,
     entryPriceUsd: row!.entry_price_usd,
+    entryPriceLamports: 25_000_000n,
     cooldownSeconds: row!.cooldown_seconds,
     startsAt: row!.starts_at,
     endsAt: row!.ends_at,
@@ -91,7 +92,13 @@ async function insertToken(overrides: {
 
 function orderInput(overrides: {
   warId: string;
-  colourSlot: number;
+  /**
+   * IGNORED, and kept in the signature on purpose. Several tests below read
+   * better naming the flag they expect ("the order that took slot 5"), and a
+   * field that is accepted and dropped says out loud that the caller no
+   * longer decides it — which is the change this file exists to describe.
+   */
+  colourSlot?: number;
   contractKey?: string;
   referencePubkey?: string;
   payerPubkey?: string | null;
@@ -101,7 +108,6 @@ function orderInput(overrides: {
     chainId: "solana",
     contract: overrides.contractKey ?? randomUUID(),
     contractKey: overrides.contractKey ?? randomUUID(),
-    colourSlot: overrides.colourSlot,
     name: "Fixture Token",
     ticker: "FIX",
     referencePubkey: overrides.referencePubkey ?? randomUUID(),
@@ -120,7 +126,7 @@ function orderInput(overrides: {
  * itself. A test that expires by hand first passes just as happily with no
  * caller anywhere, which is exactly how this defect survived review.
  */
-async function deadReservation(warId: string, colourSlot: number): Promise<string> {
+async function deadReservation(warId: string, colourSlot?: number): Promise<string> {
   const opened = await createOrder(orderInput({ warId, colourSlot }));
   if (!opened.ok) throw new Error(`expected an order, got ${opened.reason}`);
   await execute(
@@ -132,51 +138,104 @@ async function deadReservation(warId: string, colourSlot: number): Promise<strin
 
 describe("createOrder", () => {
   it(
-    "reserves a colour and opens an order for it",
+    "takes a seat, opens an order, and prices it in lamports",
     { timeout: 20_000 },
     async () => {
       const w = await war();
 
-      const result = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
+      const result = await createOrder(orderInput({ warId: w.id }));
 
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error("expected ok");
       expect(result.order.status).toBe("pending");
-      expect(result.order.amountUsd).toBe(w.entryPriceUsd);
+      expect(result.order.amountLamports).toBe(w.entryPriceLamports);
       expect(result.order.warId).toBe(w.id);
 
       const [tokenRow] = await query<{ status: string; colour_slot: number }>(
         `SELECT status, colour_slot FROM war_tokens WHERE id = $1`,
         [result.order.warTokenId],
       );
-      expect(tokenRow).toMatchObject({ status: "reserved", colour_slot: 5 });
+      // The FIRST free slot, assigned rather than asked for.
+      expect(tokenRow).toMatchObject({ status: "reserved", colour_slot: 1 });
     },
   );
 
   it(
-    "refuses a colour another live reservation holds",
+    "hands out the lowest free flag, in order, without anybody choosing",
     { timeout: 20_000 },
     async () => {
       const w = await war();
-      const first = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
-      expect(first.ok).toBe(true);
 
-      const second = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
+      const slots: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const result = await createOrder(orderInput({ warId: w.id }));
+        if (!result.ok) throw new Error(`order ${i} failed: ${result.reason}`);
+        const [row] = await query<{ colour_slot: number }>(
+          `SELECT colour_slot FROM war_tokens WHERE id = $1`,
+          [result.order.warTokenId],
+        );
+        slots.push(row.colour_slot);
+      }
 
-      expect(second).toEqual({ ok: false, reason: "colour_taken" });
+      expect(slots).toEqual([1, 2, 3]);
     },
   );
 
   it(
-    "refuses a colour an active token holds",
+    "steps over a flag an active token already holds",
     { timeout: 20_000 },
     async () => {
+      // The assignment reads the same "not released" predicate capacity does,
+      // so a seat taken by any live token — reserved, active or removed — is
+      // a number the next entrant does not get.
       const w = await war();
-      await insertToken({ warId: w.id, colourSlot: 5, status: "active" });
+      await insertToken({ warId: w.id, colourSlot: 1, status: "active" });
+      await insertToken({ warId: w.id, colourSlot: 2, status: "removed" });
 
-      const result = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
+      const result = await createOrder(orderInput({ warId: w.id }));
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected ok");
 
-      expect(result).toEqual({ ok: false, reason: "colour_taken" });
+      const [row] = await query<{ colour_slot: number }>(
+        `SELECT colour_slot FROM war_tokens WHERE id = $1`,
+        [result.order.warTokenId],
+      );
+      expect(row.colour_slot).toBe(3);
+    },
+  );
+
+  it(
+    "reuses a flag whose reservation was released",
+    { timeout: 20_000 },
+    async () => {
+      // A released row does not hold its number: that is what makes an
+      // expired order give the seat back rather than burning it.
+      const w = await war();
+      await insertToken({ warId: w.id, colourSlot: 1, status: "released" });
+
+      const result = await createOrder(orderInput({ warId: w.id }));
+      if (!result.ok) throw new Error("expected ok");
+      const [row] = await query<{ colour_slot: number }>(
+        `SELECT colour_slot FROM war_tokens WHERE id = $1`,
+        [result.order.warTokenId],
+      );
+      expect(row.colour_slot).toBe(1);
+    },
+  );
+
+  it(
+    "refuses to price an order against a war with no SOL price",
+    { timeout: 20_000 },
+    async () => {
+      // Migration 015 left the column nullable so a war that predates SOL
+      // pricing is visible rather than silently charged zero.
+      const w = await war();
+      await execute(`UPDATE wars SET entry_price_sol = NULL WHERE id = $1`, [w.id]);
+
+      expect(await createOrder(orderInput({ warId: w.id }))).toEqual({
+        ok: false,
+        reason: "no_price",
+      });
     },
   );
 
@@ -186,12 +245,10 @@ describe("createOrder", () => {
     async () => {
       const w = await war();
       const contractKey = randomUUID();
-      const first = await createOrder(orderInput({ warId: w.id, colourSlot: 5, contractKey }));
+      const first = await createOrder(orderInput({ warId: w.id, contractKey }));
       expect(first.ok).toBe(true);
 
-      const second = await createOrder(
-        orderInput({ warId: w.id, colourSlot: 6, contractKey }),
-      );
+      const second = await createOrder(orderInput({ warId: w.id, contractKey }));
 
       expect(second).toEqual({ ok: false, reason: "already_entered" });
     },
@@ -204,14 +261,10 @@ describe("createOrder", () => {
       const warA = await war();
       const warB = await war();
       const contractKey = randomUUID();
-      const first = await createOrder(
-        orderInput({ warId: warA.id, colourSlot: 5, contractKey }),
-      );
+      const first = await createOrder(orderInput({ warId: warA.id, contractKey }));
       expect(first.ok).toBe(true);
 
-      const second = await createOrder(
-        orderInput({ warId: warB.id, colourSlot: 5, contractKey }),
-      );
+      const second = await createOrder(orderInput({ warId: warB.id, contractKey }));
 
       expect(second.ok).toBe(true);
     },
@@ -251,35 +304,53 @@ describe("createOrder", () => {
   );
 
   it(
-    "keeps a removed token's colour retired for the rest of the war",
+    "keeps a removed token's flag retired for the rest of the war",
     { timeout: 20_000 },
     async () => {
+      // A 'removed' token is moderation's doing, and its seat does not come
+      // back — so the number is stepped over rather than reissued. That is
+      // now visible in what the NEXT entrant is handed rather than in a
+      // refusal, because nobody asks for a number any more.
       const w = await war();
-      await insertToken({ warId: w.id, colourSlot: 5, status: "removed" });
+      await insertToken({ warId: w.id, colourSlot: 1, status: "removed" });
 
-      const result = await createOrder(orderInput({ warId: w.id, colourSlot: 5 }));
+      const result = await createOrder(orderInput({ warId: w.id }));
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected ok");
 
-      expect(result).toEqual({ ok: false, reason: "colour_taken" });
+      const [row] = await query<{ colour_slot: number }>(
+        `SELECT colour_slot FROM war_tokens WHERE id = $1`,
+        [result.order.warTokenId],
+      );
+      expect(row.colour_slot).toBe(2);
     },
   );
 
   it(
-    "lets exactly one of two simultaneous orders take a colour",
+    "gives two simultaneous orders two different flags",
     { timeout: 20_000 },
     async () => {
+      // The race that used to produce a loser now produces two winners with
+      // different numbers: the war row's FOR UPDATE serialises assignment, so
+      // the second caller reads the first one's slot as taken. If that lock
+      // were removed, both would compute 1 and the partial unique index would
+      // refuse one of them — which is why this asserts BOTH succeeded, not
+      // merely that they differ.
       const w = await war();
 
       const [a, b] = await Promise.all([
-        createOrder(orderInput({ warId: w.id, colourSlot: 7 })),
-        createOrder(orderInput({ warId: w.id, colourSlot: 7 })),
+        createOrder(orderInput({ warId: w.id })),
+        createOrder(orderInput({ warId: w.id })),
       ]);
 
-      const outcomes = [a, b];
-      const winners = outcomes.filter((r) => r.ok);
-      const losers = outcomes.filter((r) => !r.ok);
-      expect(winners).toHaveLength(1);
-      expect(losers).toHaveLength(1);
-      expect(losers[0]).toEqual({ ok: false, reason: "colour_taken" });
+      expect(a.ok && b.ok).toBe(true);
+      if (!a.ok || !b.ok) throw new Error("expected both to succeed");
+
+      const rows = await query<{ colour_slot: number }>(
+        `SELECT colour_slot FROM war_tokens WHERE id = ANY($1::text[]) ORDER BY colour_slot`,
+        [[a.order.warTokenId, b.order.warTokenId]],
+      );
+      expect(rows.map((r) => r.colour_slot)).toEqual([1, 2]);
     },
   );
 

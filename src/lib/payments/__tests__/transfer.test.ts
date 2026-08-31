@@ -1,171 +1,121 @@
-import { describe, expect, it, vi } from "vitest";
-import { Keypair, PublicKey, type Connection } from "@solana/web3.js";
-import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-  associatedTokenAddress,
-  buildPaymentTransaction,
-  transferCheckedInstruction,
-} from "../transfer";
-import { USDC_DECIMALS, USDC_MINT, usdToBaseUnits } from "../config";
+import { describe, expect, it } from "vitest";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import type { Connection } from "@solana/web3.js";
+import { buildSolTransfer } from "../transfer";
 
 /**
- * The reference account is the one part of a payment that nothing about the
- * happy path can check. A transfer missing it, or carrying it with the wrong
- * flags, moves exactly the same money and settles exactly the same way — the
- * damage only appears later, when a payer closes their tab before confirming
- * and `recover.ts` searches the chain for a transaction that does not name
- * the key it is searching by. So these assertions are about flags and
- * positions, not about outcomes.
+ * The payer's side of an admission, since it moved to SOL.
+ *
+ * WHAT THIS FILE USED TO TEST, and why almost none of it survived: it pulled
+ * apart a hand-encoded SPL `transferChecked` and an idempotent
+ * associated-account creation, byte by byte, because those layouts were
+ * written here rather than taken from a dependency. Admission is a native
+ * transfer now, `SystemProgram.transfer` does the encoding, and testing
+ * web3.js's own instruction builder would be testing somebody else's library.
+ *
+ * What is left is the part that was always this module's real job and the
+ * reason it is a module: THE REFERENCE ACCOUNT. A transfer with the reference
+ * missing, or attached with the wrong flags, is indistinguishable from a
+ * correct one until a payer closes their tab and `recover.ts` cannot find
+ * their money.
  */
 
-const MINT = new PublicKey(USDC_MINT);
-const PAYER = new PublicKey("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
-const RECIPIENT = new PublicKey("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263");
+const PAYER = Keypair.generate().publicKey;
+const RECIPIENT = Keypair.generate().publicKey;
+const REFERENCE = Keypair.generate().publicKey;
 
-function reference(): PublicKey {
-  return Keypair.generate().publicKey;
-}
-
-function params(overrides: Partial<Parameters<typeof transferCheckedInstruction>[0]> = {}) {
+/** Enough of a Connection to answer the one call `buildSolTransfer` makes. */
+function connection(overrides: Partial<{ fail: boolean }> = {}): Connection {
   return {
-    payer: PAYER,
-    recipient: RECIPIENT,
-    mint: MINT,
-    decimals: USDC_DECIMALS,
-    amountBaseUnits: usdToBaseUnits(25),
-    reference: reference(),
-    ...overrides,
-  };
-}
-
-/** A connection that answers the two lookups `buildPaymentTransaction` makes. */
-function fakeConnection(accounts: { source: boolean; destination: boolean }): Connection {
-  const source = associatedTokenAddress(PAYER, MINT).toBase58();
-  const destination = associatedTokenAddress(RECIPIENT, MINT).toBase58();
-  return {
-    getAccountInfo: vi.fn(async (key: PublicKey) => {
-      if (key.toBase58() === source) return accounts.source ? { lamports: 1 } : null;
-      if (key.toBase58() === destination) return accounts.destination ? { lamports: 1 } : null;
-      return null;
-    }),
-    getLatestBlockhash: vi.fn(async () => ({
-      blockhash: "11111111111111111111111111111111",
-      lastValidBlockHeight: 1,
-    })),
+    getLatestBlockhash: async () => {
+      if (overrides.fail) throw new Error("network");
+      return { blockhash: "11111111111111111111111111111111", lastValidBlockHeight: 100 };
+    },
   } as unknown as Connection;
 }
 
-describe("the transfer instruction", () => {
-  it("carries the reference as an account that neither signs nor is written", () => {
-    const input = params();
-    const instruction = transferCheckedInstruction(input);
+describe("the admission transfer", () => {
+  it("moves the lamports the order asks for, from payer to recipient", async () => {
+    const built = await buildSolTransfer(connection(), {
+      payer: PAYER,
+      recipient: RECIPIENT,
+      lamports: 10_000_000n,
+      reference: REFERENCE,
+    });
 
-    const key = instruction.keys.find((k) => k.pubkey.equals(input.reference));
-    expect(key).toBeDefined();
-    expect(key!.isSigner).toBe(false);
-    expect(key!.isWritable).toBe(false);
-  });
-
-  it("puts the reference last, after the four accounts the token program reads", () => {
-    const input = params();
-    const instruction = transferCheckedInstruction(input);
-
-    expect(instruction.programId.equals(TOKEN_PROGRAM_ID)).toBe(true);
-    expect(instruction.keys).toHaveLength(5);
-    expect(instruction.keys[4].pubkey.equals(input.reference)).toBe(true);
-    // Source and destination are the only writable accounts; the owner is the
-    // only signer.
-    expect(instruction.keys.map((k) => k.isWritable)).toEqual([true, false, true, false, false]);
-    expect(instruction.keys.map((k) => k.isSigner)).toEqual([false, false, false, true, false]);
-  });
-
-  it("encodes TransferChecked with the amount in base units and the mint's decimals", () => {
-    const instruction = transferCheckedInstruction(params({ amountBaseUnits: usdToBaseUnits(25) }));
-    const data = new Uint8Array(instruction.data);
-
-    expect(data).toHaveLength(10);
-    expect(data[0]).toBe(12);
-    expect(new DataView(data.buffer, data.byteOffset).getBigUint64(1, true)).toBe(25_000_000n);
-    expect(data[9]).toBe(USDC_DECIMALS);
-  });
-
-  it("moves USDC between associated token accounts, not between wallets", () => {
-    const instruction = transferCheckedInstruction(params());
-    expect(instruction.keys[0].pubkey.equals(associatedTokenAddress(PAYER, MINT))).toBe(true);
-    expect(instruction.keys[2].pubkey.equals(associatedTokenAddress(RECIPIENT, MINT))).toBe(true);
-    // A derived token account is off the ed25519 curve — nobody holds a
-    // private key for it, which is what makes it derivable in the first place.
-    expect(PublicKey.isOnCurve(associatedTokenAddress(PAYER, MINT).toBytes())).toBe(false);
-  });
-});
-
-describe("the transaction a wallet is handed", () => {
-  it("keeps the reference read-only and unsigned once the message is compiled", async () => {
-    const input = params();
-    const built = await buildPaymentTransaction(fakeConnection({ source: true, destination: true }), input);
     expect(built.ok).toBe(true);
-    if (!built.ok) return;
-
-    // Compiling is where a flag would actually be lost: web3.js merges the
-    // per-instruction flags into one account list, and an account named
-    // writable by any instruction is writable for the whole message.
-    const message = built.transaction.compileMessage();
-    const index = message.accountKeys.findIndex((key) => key.equals(input.reference));
-    expect(index).toBeGreaterThan(-1);
-    expect(message.isAccountSigner(index)).toBe(false);
-    expect(message.isAccountWritable(index)).toBe(false);
-
-    // The payer is the only signature the transaction asks for.
-    expect(message.header.numRequiredSignatures).toBe(1);
-    expect(message.accountKeys[0].equals(PAYER)).toBe(true);
-  });
-
-  it("opens the recipient's token account when it does not exist yet", async () => {
-    const built = await buildPaymentTransaction(
-      fakeConnection({ source: true, destination: false }),
-      params(),
-    );
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-
-    expect(built.transaction.instructions).toHaveLength(2);
-    expect(built.transaction.instructions[0].programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)).toBe(true);
-    expect(built.transaction.instructions[0].data).toEqual(Buffer.from([1]));
-    expect(built.transaction.instructions[1].programId.equals(TOKEN_PROGRAM_ID)).toBe(true);
-  });
-
-  it("does not open an account that is already there", async () => {
-    const built = await buildPaymentTransaction(
-      fakeConnection({ source: true, destination: true }),
-      params(),
-    );
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
+    if (!built.ok) throw new Error("unreachable");
     expect(built.transaction.instructions).toHaveLength(1);
+
+    const instruction = built.transaction.instructions[0];
+    expect(instruction.programId.equals(SystemProgram.programId)).toBe(true);
+    expect(instruction.keys[0].pubkey.equals(PAYER)).toBe(true);
+    expect(instruction.keys[1].pubkey.equals(RECIPIENT)).toBe(true);
+    expect(built.transaction.feePayer?.equals(PAYER)).toBe(true);
   });
 
-  it("refuses before signing when the payer holds no USDC at all", async () => {
-    const built = await buildPaymentTransaction(
-      fakeConnection({ source: false, destination: true }),
-      params(),
-    );
-    expect(built.ok).toBe(false);
-    if (built.ok) return;
-    expect(built.message).toContain("no USDC");
+  it("carries the reference as a read-only, non-signing account, LAST", async () => {
+    // Appended rather than inserted, and the position is the point: the
+    // System Program reads its two accounts positionally, so a reference put
+    // anywhere but the end would move the accounts it does read.
+    const built = await buildSolTransfer(connection(), {
+      payer: PAYER,
+      recipient: RECIPIENT,
+      lamports: 10_000_000n,
+      reference: REFERENCE,
+    });
+    if (!built.ok) throw new Error("unreachable");
+
+    const keys = built.transaction.instructions[0].keys;
+    const reference = keys[keys.length - 1];
+    expect(reference.pubkey.equals(REFERENCE)).toBe(true);
+    expect(reference.isSigner).toBe(false);
+    expect(reference.isWritable).toBe(false);
+    // And the two the program actually reads are still where it expects them.
+    expect(keys[0].pubkey.equals(PAYER)).toBe(true);
+    expect(keys[1].pubkey.equals(RECIPIENT)).toBe(true);
   });
 
-  it("reports an unreachable cluster rather than handing over a transaction with no blockhash", async () => {
-    const connection = {
-      getAccountInfo: vi.fn(async () => ({ lamports: 1 })),
-      getLatestBlockhash: vi.fn(async () => {
-        throw new Error("network");
-      }),
-    } as unknown as Connection;
+  it("omits the reference when there is no order behind the payment", async () => {
+    // A painter's registration. Nothing has to find it later — the payer
+    // hands us the signature — so there is no reference to attach, and this
+    // asserts the absence rather than leaving it to be assumed.
+    const built = await buildSolTransfer(connection(), {
+      payer: PAYER,
+      recipient: RECIPIENT,
+      lamports: 3_000_000n,
+    });
+    if (!built.ok) throw new Error("unreachable");
 
-    const built = await buildPaymentTransaction(connection, params());
-    expect(built.ok).toBe(false);
-    if (built.ok) return;
-    expect(built.message).toContain("Solana network");
+    const keys = built.transaction.instructions[0].keys;
+    expect(keys).toHaveLength(2);
+    expect(keys.some((key) => key.pubkey.equals(REFERENCE))).toBe(false);
+  });
+
+  it("refuses rather than building an unsignable transaction when the node is down", async () => {
+    // Without a blockhash the wallet would be handed something it cannot
+    // sign, and the payer would meet the failure inside their wallet dialog.
+    const built = await buildSolTransfer(connection({ fail: true }), {
+      payer: PAYER,
+      recipient: RECIPIENT,
+      lamports: 10_000_000n,
+      reference: REFERENCE,
+    });
+    expect(built).toMatchObject({ ok: false });
+    if (built.ok) throw new Error("unreachable");
+    expect(built.message).toContain("did not answer");
+  });
+
+  it("keeps the recipient exactly as given", async () => {
+    // A transfer that quietly rounds, derives or normalises the destination
+    // is the one bug in this file nobody would catch by looking at a screen.
+    const other = new PublicKey(Keypair.generate().publicKey.toBytes());
+    const built = await buildSolTransfer(connection(), {
+      payer: PAYER,
+      recipient: other,
+      lamports: 1n,
+    });
+    if (!built.ok) throw new Error("unreachable");
+    expect(built.transaction.instructions[0].keys[1].pubkey.toBase58()).toBe(other.toBase58());
   });
 });

@@ -1,5 +1,6 @@
-import { BLOCKTIME_SKEW_SECONDS } from "./config";
-import type { SolanaTransaction, TransactionFetcher } from "./solana";
+import { BLOCKTIME_SKEW_SECONDS, formatSol } from "./config";
+import { isSignatureShaped } from "./signature";
+import { defaultFetchTransaction, type SolanaTransaction, type TransactionFetcher, type VerifyResult } from "./solana";
 
 /**
  * Verifying a NATIVE SOL transfer, which the USDC verifier cannot do.
@@ -184,4 +185,180 @@ export async function verifySolTransfer(input: {
   }
 
   return { ok: true, payer: transfer.payer, lamports: transfer.lamports, blockTimeMs };
+}
+
+/**
+ * The admission verifier: the same discipline as `verifyPayment`, reading
+ * native lamports instead of token balances.
+ *
+ * WHY IT RETURNS `VerifyResult` — the USDC verifier's own type — rather than
+ * a shape of its own. `settlePayment` is the thing that decides whether a
+ * signature is spent, an order is seated, and a stray payment is filed for a
+ * human, and every one of those decisions is denomination-agnostic. Giving
+ * this path its own result type would have meant a second copy of that
+ * machinery to keep in step with the first, which is how two payment paths
+ * drift into disagreeing about what "already settled" means.
+ *
+ * `amountBaseUnits` and `receivedBaseUnits` therefore carry LAMPORTS here,
+ * where the USDC path put micro-dollars in them. The name is inherited and
+ * imprecise; the alternative was renaming a field that appears in the
+ * operator's orphan queue and in stored rows, which is worse than a name that
+ * means "the smallest unit of whatever this order is denominated in".
+ *
+ * `wrong_token` is unreachable on this path, and deliberately so: there is no
+ * token to get wrong. A transfer of the wrong ASSET simply does not move our
+ * lamports, and lands as `wrong_destination`.
+ */
+export async function verifySolPayment(params: {
+  signature: string;
+  /** The order's price, in lamports. A floor: paying more is recorded, not refused. */
+  expectedLamports: bigint;
+  wallet: string;
+  /** The wallet the order was opened from, when there is one. Only it may pay. */
+  expectedPayer?: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  fetchTransaction?: TransactionFetcher;
+}): Promise<VerifyResult> {
+  const signature = params.signature.trim();
+
+  if (!isSignatureShaped(signature)) {
+    return {
+      ok: false,
+      reason: "invalid_signature",
+      message: "That does not look like a Solana transaction signature.",
+    };
+  }
+
+  let transaction: SolanaTransaction;
+  try {
+    transaction = await (params.fetchTransaction ?? defaultFetchTransaction)(signature);
+  } catch (error) {
+    // The name only — never the object. See `verifySolTransfer` above: on any
+    // paid provider the URL in a rejected fetch carries an api-key.
+    console.error(`verifySolPayment: fetch failed (${error instanceof Error ? error.name : "unknown"})`);
+    return {
+      ok: false,
+      reason: "rpc_unavailable",
+      message: "Could not reach a Solana node to check this transaction. Try again in a moment.",
+    };
+  }
+
+  if (!transaction) {
+    return {
+      ok: false,
+      reason: "not_confirmed",
+      message:
+        "That transaction is not confirmed yet, or does not exist. Wait a few seconds and try again.",
+    };
+  }
+  if (!transaction.meta) {
+    return {
+      ok: false,
+      reason: "not_confirmed",
+      message: "That transaction has no confirmed result yet. Try again in a moment.",
+    };
+  }
+  if (transaction.meta.err !== null && transaction.meta.err !== undefined) {
+    return {
+      ok: false,
+      reason: "failed_tx",
+      message: "That transaction failed on-chain, so nothing was transferred.",
+    };
+  }
+
+  const blockTime = transaction.blockTime;
+  if (typeof blockTime !== "number" || !Number.isFinite(blockTime)) {
+    return {
+      ok: false,
+      reason: "no_block_time",
+      message:
+        "That transaction has no confirmed block time yet, so it cannot be matched to this order. Try again in a moment.",
+    };
+  }
+
+  const transfer = readSolTransfer(transaction, params.wallet);
+  const received = transfer?.lamports ?? 0n;
+
+  /**
+   * The sender, from the same balances the amount comes from.
+   *
+   * Every signer whose lamports fell is reported, not just the largest — an
+   * operator reuniting a stray payment with an order needs to see everything
+   * that funded it, and the fee payer's own drop includes the network fee,
+   * which is why the amount never comes from this side.
+   */
+  const keys = transaction.transaction?.message?.accountKeys ?? [];
+  const pre = transaction.meta.preBalances ?? [];
+  const post = transaction.meta.postBalances ?? [];
+  const debited: { owner: string; amountBaseUnits: string }[] = [];
+  for (let i = 0; i < keys.length && i < pre.length && i < post.length; i++) {
+    const delta = BigInt(post[i] ?? 0) - BigInt(pre[i] ?? 0);
+    const pubkey = keys[i]?.pubkey;
+    if (pubkey && pubkey !== params.wallet && delta < 0n) {
+      debited.push({ owner: pubkey, amountBaseUnits: (-delta).toString() });
+    }
+  }
+  const sender = { feePayer: keys.find((key) => key.signer)?.pubkey ?? null, debited };
+
+  const skewMs = BLOCKTIME_SKEW_SECONDS * 1000;
+  const blockTimeMs = blockTime * 1000;
+  if (blockTimeMs < params.createdAtMs - skewMs || blockTimeMs > params.expiresAtMs + skewMs) {
+    return {
+      ok: false,
+      reason: "outside_bid_window",
+      message:
+        "That transaction was not made during this order. Pay for an order after starting it. A transfer from before the order existed cannot be used to claim it.",
+      ...(received > 0n ? { receivedBaseUnits: received, sender } : {}),
+    };
+  }
+
+  if (received <= 0n) {
+    /**
+     * `provenNotOurs` is a stronger claim here than on the USDC path, and the
+     * difference is worth stating. Token balances are a sparse list a node can
+     * return empty; native balances are POSITIONAL and cover every account in
+     * the transaction, so arrays that line up with `accountKeys` are a
+     * complete account of where lamports went. Lining up is therefore the
+     * proof, and a mismatch is the only case where we cannot tell.
+     */
+    const readable = pre.length === post.length && keys.length === pre.length && pre.length > 0;
+    return {
+      ok: false,
+      reason: "wrong_destination",
+      message: readable
+        ? "That transaction did not send SOL to our payment wallet."
+        : "That transaction could not be read in full — the Solana node did not report its balances, so we cannot tell where the money went. Nothing has been recorded against this order. Wait a moment and try again.",
+      provenNotOurs: readable,
+    };
+  }
+
+  if (params.expectedPayer !== undefined && params.expectedPayer !== null) {
+    const expectedPayer = params.expectedPayer.trim();
+    const paidByExpectedWallet =
+      sender.feePayer === expectedPayer || debited.some((debit) => debit.owner === expectedPayer);
+    if (!paidByExpectedWallet) {
+      return {
+        ok: false,
+        reason: "wrong_payer",
+        message: "That transaction was not paid from the wallet this order was opened with.",
+        receivedBaseUnits: received,
+        sender,
+      };
+    }
+  }
+
+  if (received < params.expectedLamports) {
+    return {
+      ok: false,
+      reason: "insufficient_amount",
+      message:
+        `That transaction sent ${formatSol(received)} SOL, but this order costs ` +
+        `${formatSol(params.expectedLamports)}. Send at least the full price in a single transaction.`,
+      receivedBaseUnits: received,
+      sender,
+    };
+  }
+
+  return { ok: true, amountBaseUnits: received };
 }

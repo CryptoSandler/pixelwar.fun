@@ -19,6 +19,13 @@ export type War = {
   width: number;
   height: number;
   maxTokens: number;
+  /**
+   * Admission, in lamports. Null on a war created before migration 015, which
+   * cannot take new orders — `createOrder` refuses rather than pricing it at
+   * zero.
+   */
+  entryPriceLamports: bigint | null;
+  /** Kept as the record of what pre-SOL wars charged. Nothing reads it to price anything. */
   entryPriceUsd: number;
   cooldownSeconds: number;
   startsAt: Date;
@@ -48,6 +55,7 @@ type WarRow = {
   height: number;
   max_tokens: number;
   entry_price_usd: number;
+  entry_price_sol: string | null;
   cooldown_seconds: number;
   starts_at: Date;
   ends_at: Date;
@@ -68,6 +76,7 @@ function toWar(row: WarRow): War {
     width: row.width,
     height: row.height,
     maxTokens: row.max_tokens,
+    entryPriceLamports: row.entry_price_sol === null ? null : BigInt(row.entry_price_sol),
     entryPriceUsd: row.entry_price_usd,
     cooldownSeconds: row.cooldown_seconds,
     startsAt: row.starts_at,
@@ -78,7 +87,7 @@ function toWar(row: WarRow): War {
 }
 
 const WAR_COLUMNS = `id, slug, title, status, width, height, max_tokens,
-  entry_price_usd, cooldown_seconds, starts_at, ends_at, last_seq, ended_at`;
+  entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at, last_seq, ended_at`;
 
 export async function warBySlug(slug: string): Promise<War | null> {
   const row = await queryOne<WarRow>(

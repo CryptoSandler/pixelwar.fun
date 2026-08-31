@@ -47,7 +47,7 @@ export async function POST(request: Request): Promise<Response> {
   // Shape first, and BEFORE the rate limiter, so a string that cannot be a
   // signature costs nothing at all: not an RPC call against the same quota
   // every live checkout shares, and not one of the attempts a real payer's
-  // retry needs. The USDC path has always checked this; the SOL path did not,
+  // retry needs. The admission path has always checked this; this one did not,
   // which is what the audit found.
   if (!isSignatureShaped(signature)) {
     return json(

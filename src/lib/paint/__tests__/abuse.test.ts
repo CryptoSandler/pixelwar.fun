@@ -25,7 +25,7 @@ async function paintCluster(warId: string, token: string, from: number, count: n
     // Inside one 10x10 cell: x stays in [from, from+9], y walks down.
     const x = from + (i % 10);
     const y = Math.floor(i / 10);
-    await paintRaw(warId, y * width + x, token, 5, i + 1, );
+    await paintRaw(warId, y * width + x, token, 5, i + 1);
   }
 }
 

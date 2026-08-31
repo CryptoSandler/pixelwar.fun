@@ -1,5 +1,5 @@
 import { query, queryOne } from "../db";
-import { formatUsdc } from "./config";
+import { formatSol } from "./config";
 
 /**
  * The unmatched-payment queue, read for a human.
@@ -26,10 +26,10 @@ export type Orphan = {
   signature: string;
   /** The order this payment was submitted against, when it named one. */
   orderId: string | null;
-  /** What actually arrived, as USDC. Never base units — a human reads this. */
-  receivedUsdc: string;
-  /** What that order's price was, as USDC. The gap is the whole story on an underpayment. */
-  expectedUsdc: string;
+  /** What actually arrived, as SOL. Never lamports — a human reads this. */
+  receivedSol: string;
+  /** What that order's price was, as SOL. The gap is the whole story on an underpayment. */
+  expectedSol: string;
   reason: string;
   createdAt: Date;
   status: string;
@@ -45,7 +45,7 @@ export type Orphan = {
    */
   senderFeePayer: string | null;
   /**
-   * The wallets whose USDC balance went DOWN in this transaction — whoever
+   * The wallets whose SOL balance went DOWN in this transaction — whoever
    * actually funded it. Usually one; more than one means the operator should
    * look harder, not less.
    *
@@ -56,7 +56,7 @@ export type Orphan = {
    * leave an operator judging a money decision on exactly the facts a
    * claimant can assert.
    */
-  senderDebited: { owner: string; amountUsdc: string }[];
+  senderDebited: { owner: string; amountSol: string }[];
 };
 
 type OrphanRow = {
@@ -117,10 +117,10 @@ export async function listOrphans(limit: number = ORPHAN_PAGE_SIZE): Promise<Orp
     signature: row.signature,
     orderId: row.order_id,
     // The column is TEXT holding u64 base units, because a JS number cannot
-    // hold one safely. BigInt in, dollars out — the same `formatUsdc` the
+    // hold one safely. BigInt in, SOL out — the same `formatSol` the
     // payer's own messages use, so an operator and a payer read one number.
-    receivedUsdc: formatUsdc(BigInt(row.received_base_units)),
-    expectedUsdc: formatUsdc(BigInt(row.expected_base_units)),
+    receivedSol: formatSol(BigInt(row.received_base_units)),
+    expectedSol: formatSol(BigInt(row.expected_base_units)),
     reason: row.reason,
     createdAt: row.created_at,
     status: row.status,
@@ -136,7 +136,7 @@ export async function listOrphans(limit: number = ORPHAN_PAGE_SIZE): Promise<Orp
       .filter((entry): entry is { owner: string; amountBaseUnits?: string } => !!entry?.owner)
       .map((entry) => ({
         owner: entry.owner,
-        amountUsdc: formatUsdc(BigInt(entry.amountBaseUnits ?? "0")),
+        amountSol: formatSol(BigInt(entry.amountBaseUnits ?? "0")),
       })),
   }));
 }

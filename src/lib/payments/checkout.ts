@@ -80,7 +80,7 @@ export function walletErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   if (/reject|denied|cancel/i.test(raw)) return "You dismissed the payment in your wallet.";
   if (/insufficient|0x1\b/i.test(raw)) {
-    return "The payment did not go through. Check the wallet holds enough USDC, and a little SOL for the fee.";
+    return "The payment did not go through. Check the wallet holds enough SOL, including a little for the network fee.";
   }
   return "Your wallet could not send this payment. Try again in a moment.";
 }

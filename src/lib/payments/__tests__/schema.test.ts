@@ -21,8 +21,8 @@ async function makeOrder(overrides: {
   const id = randomUUID();
   await execute(
     `INSERT INTO entry_orders
-       (id, war_id, war_token_id, amount_usd, reference_pubkey, status, created_at, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '30 minutes')`,
+       (id, war_id, war_token_id, amount_usd, amount_lamports, reference_pubkey, status, created_at, expires_at)
+     VALUES ($1, $2, $3, $4, 25000000, $5, $6, now(), now() + interval '30 minutes')`,
     [
       id,
       overrides.warId,

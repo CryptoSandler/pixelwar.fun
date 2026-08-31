@@ -1,6 +1,6 @@
 import { requireAdmin } from "../../../../../../lib/admin-guard";
 import { json, NO_STORE } from "../../../../../../lib/http";
-import { formatUsdc } from "../../../../../../lib/payments/config";
+import { formatSol } from "../../../../../../lib/payments/config";
 import { settleAssignedPayment } from "../../../../../../lib/payments/settle";
 
 export const dynamic = "force-dynamic";
@@ -90,9 +90,9 @@ export async function POST(
         {
           ok: true,
           orderId: result.orderId,
-          // USDC, never base units. An operator driving this with curl is a
+          // SOL, never lamports. An operator driving this with curl is a
           // human reading a money amount like any other.
-          amountUsdc: formatUsdc(result.amountBaseUnits),
+          amountSol: formatSol(result.amountBaseUnits),
         },
         { headers: NO_STORE },
       );

@@ -20,7 +20,7 @@ import { POST as discardRoute } from "../admin/orphans/[id]/discard/route";
  * unauthenticated caller, a caller with a wrong token, a caller with a revoked
  * session and a caller hitting a deployment with no `ADMIN_TOKEN` at all must
  * be indistinguishable, or a prober learns which half of the surface to
- * attack. Second, that what comes out is USDC and not base units — a human
+ * attack. Second, that what comes out is SOL and not lamports — a human
  * reads this while deciding whether to refund real money.
  *
  * These drive the ROUTE and the PAGE, not the reader underneath them
@@ -130,8 +130,8 @@ async function orderFixture(options: {
 
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                       entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1,$1,'Fixture war',$2,8,8,$3,25,30, now() - interval '1 hour',
+                       entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1,$1,'Fixture war',$2,8,8,$3,25,25000000,30, now() - interval '1 hour',
              now() + ($4 || ' minutes')::interval)`,
     [warId, options.warStatus ?? "live", options.maxTokens ?? 24, options.warEndsAt ?? "60"],
   );
@@ -146,9 +146,9 @@ async function orderFixture(options: {
   );
   await execute(
     `INSERT INTO entry_orders
-       (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
-        created_at, expires_at)
-     VALUES ($1,$2,$3,25,NULL,$1,$4, now() - interval '40 minutes', now() - interval '10 minutes')`,
+       (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey, reference_pubkey,
+        status, created_at, expires_at)
+     VALUES ($1,$2,$3,25,25000000,NULL,$1,$4, now() - interval '40 minutes', now() - interval '10 minutes')`,
     [orderId, warId, tokenId, orderStatus],
   );
 
@@ -267,7 +267,7 @@ describe("GET /api/admin/orphans", () => {
     },
   );
 
-  it("lists filed payments newest first, as USDC", { timeout: 20_000 }, async () => {
+  it("lists filed payments newest first, as SOL", { timeout: 20_000 }, async () => {
     const older = await file({
       received: "25000000",
       expected: "25000000",
@@ -275,7 +275,7 @@ describe("GET /api/admin/orphans", () => {
       createdAt: new Date("2026-08-20T10:00:00Z"),
     });
     const newer = await file({
-      // 12.5 USDC against a 25 USDC price: an underpayment, and the case where
+      // 0.0125 SOL against a 0.025 price: an underpayment, and the case where
       // showing base units would be actively misleading.
       received: "12500000",
       expected: "25000000",
@@ -289,13 +289,13 @@ describe("GET /api/admin/orphans", () => {
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as {
-      orphans: { signature: string; receivedUsdc: string; expectedUsdc: string; reason: string }[];
+      orphans: { signature: string; receivedSol: string; expectedSol: string; reason: string }[];
     };
 
     expect(body.orphans.map((o) => o.signature)).toEqual([newer, older]);
     expect(body.orphans[0]).toMatchObject({
-      receivedUsdc: "12.50",
-      expectedUsdc: "25.00",
+      receivedSol: "0.0125",
+      expectedSol: "0.025",
       reason: "insufficient_amount",
       senderFeePayer: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
     });
@@ -371,13 +371,13 @@ describe("/admin/orphans", () => {
     expect(html).toContain(`/api/admin/orphans/${orphanId}/assign`);
     expect(html).toContain(`/api/admin/orphans/${orphanId}/discard`);
     expect(html).toContain('name="note"');
-    expect(html).toContain("12.50 USDC");
+    expect(html).toContain("0.0125 SOL");
     // The RECEIVED amount is on the card. The order price deliberately is NOT,
     // because this row names no order — see the next test. A price shown here
     // would be a number the operator reads as the comparison that matters,
     // and it is the wrong comparison in exactly the reunite-with-a-different-
     // order case this screen exists for.
-    expect(html).not.toContain("25.00 USDC");
+    expect(html).not.toContain("0.025 SOL");
     expect(html).toContain("2026-08-22 10:00:00 UTC");
     // The reason, in words as well as in code.
     expect(html).toContain("Less than the entry price arrived.");
@@ -414,7 +414,7 @@ describe("/admin/orphans", () => {
       // Present, but only as a fact about the order it was submitted against.
       expect(html).toContain("Submitted against order");
       expect(html).toContain("That order\u2019s price was");
-      expect(html).toContain("25.00 USDC");
+      expect(html).toContain("0.025 SOL");
       // And never as a bare labelled figure next to the received amount, which
       // is what read as "compare these two" and was wrong whenever the
       // operator picks a different order.
@@ -492,7 +492,7 @@ describe("POST /api/admin/orphans/[id]/assign", () => {
       );
       expect(response.status).toBe(200);
       // USDC on the way out, never base units.
-      expect(await response.json()).toEqual({ ok: true, orderId, amountUsdc: "25.00" });
+      expect(await response.json()).toEqual({ ok: true, orderId, amountSol: "0.025" });
 
       // The settlement trio, all three, from the payer's own code path.
       expect(

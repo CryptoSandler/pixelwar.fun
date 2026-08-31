@@ -21,7 +21,12 @@ import { advanceWar, reviveWar, warById, type War } from "./lifecycle";
 export type CreateWarInput = {
   slug: string;
   title: string;
-  entryPriceUsd: number;
+  /**
+   * Admission in lamports. The only price a war charges since migration 015 —
+   * `entry_price_usd` is written alongside it purely because that column is
+   * still NOT NULL, and nothing reads it back.
+   */
+  entryPriceLamports: bigint;
   cooldownSeconds: number;
   startsAt: Date;
   endsAt: Date;
@@ -68,7 +73,7 @@ export async function createWar(input: CreateWarInput): Promise<OperateResult<Wa
   }
   const maxTokens = input.maxTokens ?? 24;
   if (
-    !Number.isInteger(input.entryPriceUsd) || input.entryPriceUsd <= 0 ||
+    input.entryPriceLamports <= 0n ||
     !Number.isInteger(input.cooldownSeconds) || input.cooldownSeconds < 1 || input.cooldownSeconds > 3600 ||
     !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > MAX_TOKEN_SLOT
   ) {
@@ -87,12 +92,16 @@ export async function createWar(input: CreateWarInput): Promise<OperateResult<Wa
   const id = crypto.randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                       entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $2, $3, 'scheduled', $4, $5, $6, $7, $8, $9, $10)`,
+                       entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $2, $3, 'scheduled', $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       id, slug, input.title.trim() || slug,
       input.width ?? 200, input.height ?? 200, maxTokens,
-      input.entryPriceUsd, input.cooldownSeconds, input.startsAt, input.endsAt,
+      // A placeholder for a column that is still NOT NULL and still refuses
+      // zero. Nothing prices anything off it; see migration 015.
+      1,
+      input.entryPriceLamports.toString(),
+      input.cooldownSeconds, input.startsAt, input.endsAt,
     ],
   );
 

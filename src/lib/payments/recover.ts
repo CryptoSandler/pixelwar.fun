@@ -1,8 +1,9 @@
 import { execute, query } from "../db";
-import { paymentWallet, RPC_BACKOFF_MAX_MS, RPC_BACKOFF_MS, RPC_COMMITMENT, RPC_MAX_ATTEMPTS, solanaRpcUrls, usdToBaseUnits } from "./config";
+import { paymentWallet, RPC_BACKOFF_MAX_MS, RPC_BACKOFF_MS, RPC_COMMITMENT, RPC_MAX_ATTEMPTS, solanaRpcUrls } from "./config";
 import { orderById, type Order } from "./orders";
 import { settlePayment, type SettleFailureReason } from "./settle";
-import { verifyPayment, type TransactionFetcher } from "./solana";
+import { verifySolPayment } from "./sol-transfer";
+import type { TransactionFetcher } from "./solana";
 
 /**
  * Recovery: the payoff for the reference key.
@@ -319,9 +320,9 @@ async function examineOrder(
     );
 
     for (const signature of candidates) {
-      const verified = await verifyPayment({
+      const verified = await verifySolPayment({
         signature,
-        expectedBaseUnits: usdToBaseUnits(order.amountUsd),
+        expectedLamports: order.amountLamports,
         wallet,
         expectedPayer: order.payerPubkey ?? undefined,
         // See the widened-window paragraph on `recoverUnclaimedOrders`.

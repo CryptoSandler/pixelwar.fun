@@ -28,8 +28,8 @@ async function war(
   const id = randomUUID();
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
-                        entry_price_usd, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 30, $4, $5)`,
+                        entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
+     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 25000000, 30, $4, $5)`,
     [
       id,
       overrides.status ?? "live",
@@ -62,6 +62,7 @@ async function war(
     height: row!.height,
     maxTokens: row!.max_tokens,
     entryPriceUsd: row!.entry_price_usd,
+    entryPriceLamports: 25_000_000n,
     cooldownSeconds: row!.cooldown_seconds,
     startsAt: row!.starts_at,
     endsAt: row!.ends_at,
@@ -103,9 +104,9 @@ async function insertOrder(overrides: {
   const id = randomUUID();
   await execute(
     `INSERT INTO entry_orders
-       (id, war_id, war_token_id, amount_usd, payer_pubkey, reference_pubkey, status,
-        created_at, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now() - interval '20 minutes', $8)`,
+       (id, war_id, war_token_id, amount_usd, amount_lamports, payer_pubkey, reference_pubkey,
+        status, created_at, expires_at)
+     VALUES ($1, $2, $3, $4, 25000000, $5, $6, $7, now() - interval '20 minutes', $8)`,
     [
       id,
       overrides.warId,
@@ -1428,7 +1429,6 @@ describe("settlePayment: late confirmation", () => {
       const sharedContract = randomUUID();
       const { war: w, tokenId, order } = await expiredReservation({
         maxTokens: 24,
-        colourSlot: 3,
         contractKey: sharedContract,
       });
 

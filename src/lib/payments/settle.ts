@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { execute, isUniqueViolation, query, queryOne, transaction, violatedConstraint } from "../db";
-import { LATE_CONFIRM_GRACE_MINUTES, VERIFY_LIMITS, supportContact, usdToBaseUnits } from "./config";
+import { LATE_CONFIRM_GRACE_MINUTES, VERIFY_LIMITS, supportContact } from "./config";
 import type { Order } from "./orders";
 import type { PaymentFailure, SenderInfo, VerifyResult } from "./solana";
 
@@ -11,7 +11,7 @@ import type { PaymentFailure, SenderInfo, VerifyResult } from "./solana";
  *
  * This is the one place in the codebase where a mistake costs somebody real
  * money in either direction — a false settle gives a colour away for
- * nothing, and a failure to settle takes somebody's USDC and credits no one.
+ * nothing, and a failure to settle takes somebody's SOL and credits no one.
  * Every branch below either commits the full, atomic settlement (payment
  * row + order paid + token active) or leaves that trio untouched; there is
  * no state in between.
@@ -155,7 +155,16 @@ export async function settlePayment(params: {
   verified: VerifyResult;
 }): Promise<SettleResult> {
   const { order, signature, verified } = params;
-  const expectedBaseUnits = usdToBaseUnits(order.amountUsd);
+  /**
+   * LAMPORTS SINCE MIGRATION 015, where this used to be micro-dollars.
+   *
+   * Nothing else in this function changed, and that is the point of taking
+   * the price off the order rather than converting a dollar figure here:
+   * settlement decides whether a signature is spent, a seat is filled and a
+   * stray payment is filed, and none of those depend on what the money is
+   * denominated in.
+   */
+  const expectedBaseUnits = order.amountLamports;
 
   if (!verified.ok) {
     return handleVerificationFailure({ order, signature, verified, expectedBaseUnits });
@@ -340,7 +349,7 @@ export async function settlePayment(params: {
  * before the cluster confirms it — `not_confirmed` is the ordinary, expected
  * first answer, not an edge case. Claiming the signature there meant the
  * retry the message promised could only ever come back `signature_reused`,
- * with the real USDC already sitting in our wallet and nothing crediting it.
+ * with the real money already sitting in our wallet and nothing crediting it.
  * Worse, claiming it ahead of even reading the order meant it succeeded
  * against an order in ANY status: an attacker could take a bystander's
  * in-flight signature, post it against an order they control, collect
@@ -353,10 +362,12 @@ export async function settlePayment(params: {
  * cannot possibly have gone anywhere else" is actually true:
  *
  * - `failed_tx` — the transaction failed on-chain. Nothing transferred, ever.
- * - `wrong_token` — real balance moved, but not USDC. USDC is the only asset
- *   this system accepts from any order, so this can never become a payment.
+ * - `wrong_token` — unreachable since admission moved to SOL: a native
+ *   transfer has no token to get wrong. The reason stays in the union because
+ *   it is stored on rows, and it meant: a real balance moved, but not the one
+ *   asset this system accepts, so it can never become a payment.
  * - `wrong_destination`, and ONLY when `verified.provenNotOurs` is true —
- *   real USDC moved, and the response said so, but not to our (single,
+ *   real money moved, and the response said so, but not to our (single,
  *   fixed) wallet. Same reasoning: no order in this deployment could ever
  *   accept it.
  *
@@ -383,7 +394,7 @@ export async function settlePayment(params: {
  * working without needing a permanent claim.
  *
  * `wrong_payer`, `insufficient_amount` and `outside_bid_window` get one more
- * thing the others don't: all three can mean real USDC reached our wallet,
+ * thing the others don't: all three can mean real money reached our wallet,
  * and `verifyPayment` reports both how much and who sent it
  * (`VerifyResult.receivedBaseUnits` / `.sender`, chain-derived, not asserted
  * by whoever is calling). That money is filed to `unmatched_payments` here —
@@ -438,7 +449,7 @@ async function handleVerificationFailure(params: {
 
   // Money that reached our wallet is filed wherever the verdict says it
   // arrived, whether or not it can be applied. `receivedBaseUnits` is only
-  // ever set by `verifyPayment` when our own wallet's USDC balance genuinely
+  // ever set by the verifier when our own wallet's balance genuinely
   // went up in this transaction, so this is a fact about the chain rather
   // than a claim by whoever posted the signature.
   //
@@ -1239,7 +1250,7 @@ export type DiscardResult =
  * How much prose one resolution note may carry.
  *
  * The column is TEXT and would take any length; this is the trust boundary,
- * not the storage limit. Long enough for "refunded 25 USDC to the fee payer,
+ * not the storage limit. Long enough for "refunded 0.25 SOL to the fee payer,
  * tx 5Kd…, confirmed with the payer by email", short enough that a form
  * field cannot be used to write a novel into the operator's own queue.
  */
