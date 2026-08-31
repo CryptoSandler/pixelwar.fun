@@ -240,6 +240,58 @@ describe("recoverUnclaimedOrders", () => {
   });
 
   it(
+    "asks the chain about the ORDER'S REFERENCE and never about the wallet",
+    { timeout: 20_000 },
+    async () => {
+      /**
+       * THE PROPERTY THAT KEEPS A SHARED RECEIVING WALLET SAFE.
+       *
+       * `PAYMENT_WALLET` is now the same address bidoor.lol collects on — the
+       * owner's decision, two products, one wallet. A bid there is a transfer
+       * to that address carrying no Solana Pay reference, and pixelwar must
+       * never see it: not to settle it, and above all not to FILE it as an
+       * unmatched payment, which would put another product's money in this
+       * product's support queue.
+       *
+       * Nothing filters those out, and nothing needs to. Recovery asks the
+       * chain "what named this order's reference key", never "what did this
+       * wallet receive" — so a transfer that names no reference is not
+       * rejected, it is never a candidate. That is a stronger guarantee than
+       * a filter, and this test is what stops somebody turning it into the
+       * weaker one by scanning the wallet for convenience.
+       *
+       * Falsify it by passing `wallet` instead of `order.referencePubkey` at
+       * the `collectOldestCandidates` call in `recover.ts`: the asked-for
+       * address stops matching and this fails.
+       */
+      const w = await war();
+      const tokenId = await insertToken({ warId: w.id, colourSlot: 5, status: "released" });
+      const order = await expiredOrder({ warId: w.id, warTokenId: tokenId });
+
+      const asked: string[] = [];
+      const bidoorBid = randomSignature();
+
+      await recoverUnclaimedOrders({
+        signatures: async (address) => {
+          asked.push(address);
+          // What a wallet-history scan WOULD have returned: a transfer to the
+          // shared wallet with no reference on it. Offered here precisely so
+          // the test fails loudly if anybody ever asks for it.
+          return address === PAYMENT_WALLET ? [{ signature: bidoorBid, blockTime: null }] : [];
+        },
+        transaction: async () => null,
+      });
+
+      expect(asked).toEqual([order.referencePubkey]);
+      expect(asked).not.toContain(PAYMENT_WALLET);
+
+      // And nothing was filed: no orphan row exists for anybody's payment.
+      const filed = await query(`SELECT 1 FROM unmatched_payments`);
+      expect(filed.length).toBe(0);
+    },
+  );
+
+  it(
     "settles an expired order whose payment did arrive",
     { timeout: 20_000 },
     async () => {

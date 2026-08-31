@@ -377,3 +377,50 @@ diagnosis, ship `.next/static` and the server output, never `.next/cache`. And
 if a cache directory has been shared, treat those three variables as disclosed
 and rotate them — `PAINTER_COOKIE_SECRET` in particular, since forging painter
 cookies is what it prevents.
+
+
+## One receiving wallet, two products
+
+**`PAYMENT_WALLET` is the same address bidoor.lol collects on. The owner's
+decision: two products, one receiving wallet.** Three consequences follow, and
+only the first is already handled.
+
+**1. Pixelwar's reconcile cannot see a bidoor bid, and that is structural
+rather than filtered.** Recovery asks the chain "what named this order's
+reference key" — a fresh single-use address minted per order — never "what did
+this wallet receive". A bid carries no pixelwar reference, so it is not
+rejected as a candidate; it is never a candidate. `recover.test.ts` asserts
+the address the pass asks about is the order's reference and never
+`PAYMENT_WALLET`, so nobody can quietly turn that into a wallet scan for
+convenience. **The thing to protect is the absence of a wallet scan**, and a
+filter would be the weaker version of it.
+
+**2. BIDOOR NEEDS THE MIRROR FILTER, AND NOBODY HAS WRITTEN IT.** If bidoor's
+reconcile scans its wallet's history — which is the obvious way to find bids,
+since a bid has no reference — then every pixelwar entry payment and every
+pixelwar registration fee lands in bidoor's queue as an unattributable
+receipt. The filter it needs is the mirror of ours: **ignore any transfer that
+carries a Solana Pay reference account**, because that is pixelwar's money by
+construction. Until that exists, expect pixelwar's payments to show up in
+bidoor's unmatched pile.
+
+**3. THE REGISTRATION VERIFIER CANNOT TELL A BID FROM A FEE, AND THIS ONE IS
+OPEN.** `verifySolTransfer` accepts any native SOL transfer to
+`PAYMENT_WALLET` above the fee within 24 hours. A bidoor bid is exactly that.
+So somebody who bid on bidoor can paste that signature into
+`POST /api/register` and register on pixelwar without paying pixelwar
+anything — once per bid, since `registrations.signature` is UNIQUE. The
+anti-sybil property in DESIGN.md §1a ("thirty identities is thirty funded
+wallets") survives, because the bidder did fund a wallet and did spend; what
+does not survive is "the fee was paid to us for this".
+
+**The fix, when it is wanted, is the mechanism the checkout already has**: mint
+a reference key per registration, put it in the transfer as a read-only
+account, and require `readSolTransfer` to see it. That makes a registration
+payment identifiable as one — which also gives registration the recovery pass
+it currently lacks, and gives bidoor a clean rule to filter on. It is a client
+change, a verifier change and a migration, so it is written down here rather
+than done quietly.
+
+**Until then**: a shared wallet means the amount alone decides, and 0.003 SOL
+is under any plausible bid. Decide this before the fee is switched on.
