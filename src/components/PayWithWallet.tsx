@@ -7,6 +7,8 @@ import { PublicKey } from "@solana/web3.js";
 import { getChainForEndpoint } from "@solana/wallet-standard-util";
 import { WalletConnect, useInBrowser } from "./WalletProvider";
 import { buildSolTransfer } from "../lib/payments/transfer";
+import { preflightBlocks } from "../lib/payments/preflight-client";
+import { requireSingleSigner } from "../lib/payments/send";
 import { formatSol } from "../lib/payments/config";
 import {
   checkoutOutcome,
@@ -244,9 +246,23 @@ export function PayWithWallet({
       return;
     }
 
+    // BEFORE the wallet, never after. See `preflightBlocks`.
+    const blocked = await preflightBlocks(
+      built.transaction,
+      publicKey.toBase58(),
+      BigInt(order.amountLamports),
+    );
+    if (blocked) {
+      setPhase({ kind: "error", message: blocked });
+      return;
+    }
+
     setPhase({ kind: "signing" });
     let signature: string;
     try {
+      // One signer, checked before anything opens: the reference rides along
+      // read-only and must not count. Throws rather than prompting.
+      requireSingleSigner(built.transaction, publicKey.toBase58());
       signature = await sendTransaction(built.transaction, connection, {
         preflightCommitment: "confirmed",
       });

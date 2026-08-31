@@ -10,6 +10,8 @@ import type { ProxyCluster } from "../lib/payments/cluster";
 import { formatSol } from "../lib/payments/config";
 import { walletErrorMessage } from "../lib/payments/checkout";
 import { buildSolTransfer } from "../lib/payments/transfer";
+import { preflightBlocks } from "../lib/payments/preflight-client";
+import { requireSingleSigner } from "../lib/payments/send";
 import { shortenAddress } from "../lib/tokens/addresses";
 import { useInBrowser } from "./WalletProvider";
 
@@ -145,9 +147,16 @@ export function Register({
       return;
     }
 
+    const blocked = await preflightBlocks(built.transaction, publicKey.toBase58(), lamports);
+    if (blocked) {
+      setPhase({ kind: "error", message: blocked });
+      return;
+    }
+
     setPhase({ kind: "signing" });
     let signature: string;
     try {
+      requireSingleSigner(built.transaction, publicKey.toBase58());
       signature = await sendTransaction(built.transaction, connection, {
         preflightCommitment: "confirmed",
       });
