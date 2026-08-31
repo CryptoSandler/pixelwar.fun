@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { CHROME_SURFACES, INK, INK_INVERSE, contrastRatio } from "../../lib/wars/chrome";
 
 /**
  * The wallet is connected from the header, on every page, once.
@@ -99,5 +100,60 @@ describe("one wallet connection, shared by the whole app", () => {
     // screen is for connecting a wallet.
     expect(buttonCode).not.toContain("btn-primary");
     expect(buttonCode).not.toContain("--chrome-accent");
+  });
+
+  describe("the open menu, and the bug that made its address invisible", () => {
+    /**
+     * WHAT THE OWNER SAW: a large empty block between the button and
+     * Disconnect, where the full address should be.
+     *
+     * WHAT IT ACTUALLY WAS, measured rather than guessed: the menu is a
+     * `.panel` and it is mounted INSIDE `<header class="header-bar">`.
+     * `.header-bar` sets `color: var(--chrome-ink-inverse)` for its dark
+     * surface; `.panel` set only a background. So the address inherited the
+     * light ink and painted it on the light panel — `contrastRatio` says
+     * 1.00:1, the same colour, which renders as nothing at all. Every other
+     * element in that menu sets its own colour (`.btn-secondary`, `.muted`)
+     * and was accidentally immune.
+     *
+     * THERE IS NO PIXEL HARNESS IN THIS SUITE and this file does not pretend
+     * to be one: no browser, no screenshot, no measured heights. What is
+     * asserted instead is the pair of facts that decide the bug — the colour
+     * arithmetic, and the source order of the menu — plus the root cause, so
+     * the next panel nested in a dark surface cannot repeat it.
+     */
+    const css = readFileSync("src/app/globals.css", "utf8");
+
+    it("paints panel text at a ratio that clears AA, not at 1.00:1", () => {
+      // The defect, stated as the number it was.
+      expect(contrastRatio(INK_INVERSE, CHROME_SURFACES.panel)).toBeCloseTo(1, 2);
+      // And what it is now that a panel carries its own ink.
+      expect(contrastRatio(INK, CHROME_SURFACES.panel)).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it("makes a panel carry its ink as well as its background", () => {
+      // The root cause, guarded where it was fixed: a background without an
+      // ink is half a surface, and it only shows when the panel is nested
+      // somewhere that sets a colour.
+      const panelRule = css.slice(css.indexOf(".panel {"), css.indexOf("}", css.indexOf(".panel {")));
+      expect(panelRule).toContain("--chrome-panel");
+      expect(panelRule).toContain("color:");
+    });
+
+    it("puts the full address between the button and Disconnect", () => {
+      // Source order, which is the only ordering available without a browser.
+      const menu = buttonCode.slice(buttonCode.indexOf('role="menu"'));
+      const address = menu.indexOf("publicKey.toBase58()");
+      const disconnect = menu.indexOf("Disconnect");
+      expect(address).toBeGreaterThan(-1);
+      expect(disconnect).toBeGreaterThan(address);
+    });
+
+    it("gives the address no fixed height to be empty with", () => {
+      // A height on that element is what would turn a colour bug into a
+      // permanent gap even after the colour is right.
+      const address = buttonCode.slice(buttonCode.indexOf("publicKey.toBase58()") - 220);
+      expect(address).not.toMatch(/h-\d|min-h-|height:/);
+    });
   });
 });

@@ -84,13 +84,20 @@ export function WalletButton() {
       {open ? (
         <div
           role="menu"
-          className="panel bevel absolute right-0 z-20 mt-1 flex w-[240px] flex-col gap-1 p-2"
+          className="panel bevel absolute right-0 z-20 mt-1 flex w-[232px] flex-col gap-0.5 p-1.5"
         >
           {connected && publicKey ? (
             <>
               {/* The full address, because the button shows a truncation and
-                  somebody checking which wallet they are on needs the rest. */}
-              <p className="numeric break-all p-1 text-[11px]">{publicKey.toBase58()}</p>
+                  somebody checking which wallet they are on needs the rest.
+
+                  It reads at 11.51:1 on the panel now that `.panel` carries
+                  its ink. It rendered at 1.00:1 before — present in the DOM,
+                  the exact colour of the surface, and read by the owner as an
+                  empty block where an address should be. */}
+              <p className="numeric break-all px-1 py-0.5 text-[11px] leading-snug">
+                {publicKey.toBase58()}
+              </p>
               <button
                 type="button"
                 role="menuitem"
@@ -138,12 +145,12 @@ export function WalletButton() {
                 </button>
               ))}
               {installed.length === 0 ? (
-                <p className="p-1 text-[12px]">
+                <p className="px-1 py-0.5 text-[12px]">
                   No Solana wallet was detected. Phantom, Solflare and Backpack all work here.
                 </p>
               ) : null}
               {notInstalled.length > 0 ? (
-                <p className="muted p-1 text-[11px]">
+                <p className="muted px-1 py-0.5 text-[11px]">
                   Not installed:{" "}
                   {notInstalled.map((entry, index) => (
                     <span key={entry.adapter.name}>

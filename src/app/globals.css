@@ -92,8 +92,25 @@ button.swatch:hover:not(:disabled),
     var(--bevel-light-hover);
 }
 
+/**
+ * A panel carries its own ink as well as its own background.
+ *
+ * IT USED TO SET ONLY THE BACKGROUND, and that was invisible until a panel
+ * was first nested inside the header. `.header-bar` sets
+ * `color: var(--chrome-ink-inverse)` for its dark surface, and a panel
+ * dropped inside it inherited that light ink and painted it on
+ * `--chrome-panel` — measured at 1.00:1, the same colour as the surface it
+ * sits on. The wallet menu's address line was the first element to hit it,
+ * because every other thing in that menu (`.btn-secondary`, `.muted`) sets a
+ * colour of its own and was therefore accidentally immune.
+ *
+ * A background without an ink is half a surface. Both together here, so a
+ * panel is legible wherever it is mounted rather than wherever it happened to
+ * be mounted first.
+ */
 .panel {
   background: var(--chrome-panel);
+  color: var(--chrome-ink);
 }
 
 /**
