@@ -459,3 +459,54 @@ blocker.** What it would buy, and why it is still worth doing later:
 question**: at the time of writing, `7ozy…UVgi` does not exist on mainnet — it
 has never received anything. So none of this is historical clean-up; it is
 about payments neither product has taken yet.
+
+
+## The dress rehearsal before every money-path change
+
+**Before anything that touches how money is taken — a new denomination, a new
+verifier, a price change, a change to how an order is created or settled — a
+throwaway war runs the whole flow on PRODUCTION, with real money, and is
+cleaned up afterwards.**
+
+A preview proves the code runs. It cannot prove that a wallet, a real RPC
+provider, the real receiving address and this deployment's own configuration
+agree with each other — and that is the half that costs money when it is
+wrong.
+
+**The war.** Made with `createWar` rather than an INSERT, because opening a
+war is itself part of the path being rehearsed. An obvious test name so no
+visitor mistakes it for the real thing, the smallest price the schema allows,
+an hour long, and not announced anywhere.
+
+**The five steps, in this order**, because each one can only fail after the
+one before it has worked:
+
+1. **Connect** from the header.
+2. **Pay** the admission through `/join`.
+3. **Paint** — which needs the painter registration, a separate charge.
+4. **Close the tab and come back**: the second visit must recognise the
+   registration without asking for a second payment.
+5. **Try to pay again**: this must be REFUSED, and the refusal is the point of
+   the rehearsal rather than a formality.
+
+**What is checked server-side after each step** — the screen saying it worked
+is not the evidence:
+
+- the order exists, `pending`, with the war's price in `amount_lamports`;
+- the payment matched the payer's own wallet, and the order is `paid` with a
+  row in `payments`;
+- the second attempt landed on the RIGHT refusal (`already_entered` for the
+  same token, `already_settled` for the same signature) — a refusal for the
+  wrong reason is a failed rehearsal;
+- **`unmatched_payments` is empty.** A row there means real money reached the
+  wallet and was credited to nobody, which is the failure this whole exercise
+  exists to catch before strangers are the ones it happens to.
+
+**Afterwards** the war is ended and its pixels removed, so the board carries
+no rehearsal.
+
+**The smallest price is not always payable.** There is deliberately no CHECK
+on `wars.entry_price_sol`, so the schema floor is one lamport — but a transfer
+to an account that does not exist yet must carry the rent-exempt minimum
+(890,880 lamports at the time of writing) or the transaction fails on chain.
+Check whether the receiving wallet exists before choosing a price of dust.
