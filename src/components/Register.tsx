@@ -11,7 +11,7 @@ import { formatSol } from "../lib/payments/config";
 import { walletErrorMessage } from "../lib/payments/checkout";
 import { buildSolTransfer } from "../lib/payments/transfer";
 import { shortenAddress } from "../lib/tokens/addresses";
-import { WalletConnect, useInBrowser } from "./WalletProvider";
+import { useInBrowser } from "./WalletProvider";
 
 /**
  * Registering to paint: one transfer, once, ever.
@@ -281,7 +281,10 @@ export function Register({
       ) : null}
 
       {!connected || !publicKey ? (
-        <WalletConnect disabled={blocked} />
+        // The header holds the only connect control on this screen. A second
+        // one here would be a second place to look for a state that is
+        // already visible at the top of every page.
+        <p className="muted text-[12px]">Connect a wallet at the top of the page to register.</p>
       ) : (
         <>
           <button

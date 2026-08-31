@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { WalletButton } from "./WalletButton";
 
 /**
  * The cabinet around a screen: a header bar carrying the wordmark, and a
@@ -20,7 +21,11 @@ export function Cabinet({ label, children }: { label: string; children: React.Re
         >
           PIXELWAR.FUN
         </Link>
-        <span className="section-label">{label}</span>
+        <div className="flex items-center gap-3">
+          <span className="section-label">{label}</span>
+          {/* Top right, on every page that wears the cabinet. */}
+          <WalletButton />
+        </div>
       </header>
       {children}
     </main>

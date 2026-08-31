@@ -9,6 +9,7 @@ import type { RailToken } from "./TokenRail";
 import { Scoreboard } from "./Scoreboard";
 import type { ProxyCluster } from "../lib/payments/cluster";
 import { Register } from "./Register";
+import { WalletButton } from "./WalletButton";
 import { leaderOf } from "../lib/canvas/standings";
 import { SwearOath } from "./SwearOath";
 import { WarClock } from "./WarClock";
@@ -340,6 +341,11 @@ export function WarView({
           <Link href="/join" className="btn-primary px-3 py-1.5">
             Add your token
           </Link>
+
+          {/* Top right on every page, this one included. Not brass: the
+              accent belongs to what a screen is FOR, and this screen is for
+              painting. */}
+          <WalletButton />
 
           <button
             type="button"

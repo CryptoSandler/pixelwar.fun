@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { WalletConnect } from "./WalletProvider";
 import { CHAINS, getChain } from "../lib/tokens/chains";
 // Type-only, and it has to stay that way: `orders.ts` is server code (node
 // crypto, the pool). `import type` is erased at compile time, so what crosses
@@ -13,8 +12,7 @@ import { CHAINS, getChain } from "../lib/tokens/chains";
 import type { CreateOrderFailureReason } from "../lib/payments/orders";
 
 /**
- * Entry, in two steps that can each be corrected before either costs
- * anything: which token, which wallet, then an order.
+ * Entry, in one step: which token. Then an order.
  *
  * THE COLOUR STEP IS GONE, and it is the interesting half of this file's
  * history. A payer used to choose their community's flag from the free
@@ -36,6 +34,15 @@ import type { CreateOrderFailureReason } from "../lib/payments/orders";
  * NO PRICE ON THIS SCREEN. The amount appears once, on the confirmation
  * screen, immediately before the wallet dialog — the same place and the same
  * moment the registration flow names its fee. See DESIGN.md §8.
+ *
+ * NO WALLET STEP EITHER, since the connect control moved to the header. A
+ * form step said the connection belonged to this one purchase; it never did,
+ * and somebody who connected on the board had to do it again here. The
+ * payer's wallet is still SENT with the order when one is connected — that is
+ * what binds the order to it — but it is read from the shared context rather
+ * than collected. Arriving at the confirmation screen with no wallet is fine
+ * and stays fine: that screen offers its own connect control, and an order
+ * with no payer takes the first payment that matches it.
  */
 
 type ResolvedToken = {
@@ -164,7 +171,7 @@ export function JoinFlow({ war }: { war: JoinWar }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <Step label="1 · Token">
+      <Step label="Your token">
         <div className="flex flex-col gap-2 sm:flex-row">
           <label className="sr-only" htmlFor="chain">
             Chain
@@ -234,15 +241,6 @@ export function JoinFlow({ war }: { war: JoinWar }) {
             ) : null}
           </div>
         ) : null}
-      </Step>
-
-      <Step label="2 · Wallet">
-        <WalletConnect />
-        <p className="muted text-[12px]">
-          {publicKey
-            ? "Only this wallet will be able to pay for the order."
-            : "You can connect on the next screen instead. An order started without a wallet accepts the first payment that matches it."}
-        </p>
       </Step>
 
       {/* QUIET text lives on a panel: the surround has no headroom under

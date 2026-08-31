@@ -470,6 +470,12 @@ export function PayWithWallet({
         ) : null}
       </section>
 
+      {/* KEPT, even though the header now carries a connect control on every
+          page. Arriving here with no wallet is an ordinary way to arrive —
+          the entry form no longer asks for one — and this is the screen where
+          it finally matters, so it offers the full list rather than sending
+          somebody back up to a button they have already walked past. The
+          state is the same one either way; there is one provider. */}
       <section className="panel bevel flex flex-col gap-2 p-4">
         <h2 className="section-label">Wallet</h2>
         <WalletConnect disabled={busy} />

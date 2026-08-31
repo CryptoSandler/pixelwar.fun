@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Board } from "./Board";
+import { WalletButton } from "./WalletButton";
 import { BoardImage } from "../lib/canvas/board-image";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
 import { flagColourForSlot, rgba } from "../lib/wars/palette";
@@ -56,9 +57,13 @@ export function Intermission({
         >
           PIXELWAR
         </span>
-        <Link href="/join" className="btn-primary px-3 py-1.5">
-          Add your token
-        </Link>
+        <span className="flex shrink-0 items-center gap-2">
+          <Link href="/join" className="btn-primary px-3 py-1.5">
+            Add your token
+          </Link>
+          {/* Same place as every other screen. */}
+          <WalletButton />
+        </span>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 rail:flex-row">
