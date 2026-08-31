@@ -146,7 +146,8 @@ export type AssignableOrder = {
   warTitle: string;
   ticker: string;
   colourSlot: number;
-  priceUsd: number;
+  /** The dollar price, or null for an order priced in SOL. */
+  priceUsd: number | null;
   status: string;
 };
 
@@ -170,7 +171,7 @@ export async function assignableOrders(limit = 100): Promise<AssignableOrder[]> 
     war_title: string;
     ticker: string;
     colour_slot: number;
-    amount_usd: number;
+    amount_usd: number | null;
     status: string;
   }>(
     `SELECT o.id, w.title AS war_title, t.ticker, t.colour_slot, o.amount_usd, o.status

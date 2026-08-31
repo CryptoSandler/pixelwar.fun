@@ -161,6 +161,49 @@ describe("createOrder", () => {
   );
 
   it(
+    "records no dollar price at all, rather than a filler one",
+    { timeout: 20_000 },
+    async () => {
+      // Migration 016. A 1 in a money column is indistinguishable from a real
+      // price to anybody who sums it later; NULL says "never priced in
+      // dollars", which is the truth about every order since admission moved
+      // to SOL.
+      const w = await war();
+      const result = await createOrder(orderInput({ warId: w.id }));
+      if (!result.ok) throw new Error(`expected ok, got ${result.reason}`);
+
+      const [row] = await query<{ amount_usd: number | null; amount_lamports: string | null }>(
+        `SELECT amount_usd, amount_lamports FROM entry_orders WHERE id = $1`,
+        [result.order.id],
+      );
+
+      expect(row.amount_usd).toBeNull();
+      // And the column that DOES price it is populated, so this is not just
+      // an order with no price at all.
+      expect(row.amount_lamports).toBe("25000000");
+      expect(result.order.amountUsd).toBeNull();
+      expect(result.order.amountLamports).toBe(25_000_000n);
+    },
+  );
+
+  it(
+    "leaves a real dollar price alone where one was genuinely charged",
+    { timeout: 20_000 },
+    async () => {
+      // The other half of migration 016, and the reason it did not backfill:
+      // an order written before the change was really asked for that many
+      // dollars, and NULLing it would destroy the only record of it.
+      const w = await war();
+      const result = await createOrder(orderInput({ warId: w.id }));
+      if (!result.ok) throw new Error("expected ok");
+      await execute(`UPDATE entry_orders SET amount_usd = 25 WHERE id = $1`, [result.order.id]);
+
+      const reread = await orderById(result.order.id);
+      expect(reread?.amountUsd).toBe(25);
+    },
+  );
+
+  it(
     "hands out the lowest free flag, in order, without anybody choosing",
     { timeout: 20_000 },
     async () => {

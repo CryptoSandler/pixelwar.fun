@@ -42,12 +42,15 @@ export type Order = {
    */
   amountLamports: bigint;
   /**
-   * The dollar figure this order was recorded with. NOT a price anybody is
-   * charged since migration 015 — kept because `amount_usd` is still NOT NULL
-   * and because orders placed before the change are the record of what those
-   * payers were actually asked for.
+   * What this order was asked for in dollars, or NULL for every order priced
+   * in SOL — which is all of them since migration 015. Migration 016 made the
+   * column nullable so a SOL order says "never priced in dollars" instead of
+   * carrying a filler 1, which is indistinguishable from a real price to
+   * anybody who sums the column later.
+   *
+   * Orders from before the change keep their real figure. It was true.
    */
-  amountUsd: number;
+  amountUsd: number | null;
   payerPubkey: string | null;
   referencePubkey: string;
   ipHash: string | null;
@@ -98,7 +101,7 @@ type OrderRow = {
   id: string;
   war_id: string;
   war_token_id: string;
-  amount_usd: number;
+  amount_usd: number | null;
   amount_lamports: string | null;
   payer_pubkey: string | null;
   reference_pubkey: string;
@@ -306,9 +309,10 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         orderId,
         input.warId,
         tokenId,
-        // Record-keeping only — `amount_usd` is still NOT NULL and its CHECK
-        // refuses zero. What the payer is charged is the lamports beside it.
-        war.entry_price_usd,
+        // NULL, not a number: this order has no dollar price, and saying so
+        // is the point of migration 016. What the payer is charged is the
+        // lamports beside it.
+        null,
         war.entry_price_sol,
         input.payerPubkey ?? null,
         input.referencePubkey,

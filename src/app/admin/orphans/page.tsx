@@ -360,7 +360,9 @@ function AssignForm({
           </option>
           {orders.map((order) => (
             <option key={order.id} value={order.id}>
-              {`${order.ticker} · slot ${order.colourSlot} · ${order.priceUsd} USD · ${order.status} · ${order.warTitle} · ${order.id}`}
+              {`${order.ticker} · slot ${order.colourSlot}${
+                order.priceUsd === null ? "" : ` · ${order.priceUsd} USD`
+              } · ${order.status} · ${order.warTitle} · ${order.id}`}
             </option>
           ))}
         </select>
