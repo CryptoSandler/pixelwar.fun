@@ -155,6 +155,86 @@ describe("registering", () => {
   });
 });
 
+describe("a USDC transfer to the shared wallet is not a registration", () => {
+  /**
+   * `PAYMENT_WALLET` is the address bidoor.lol collects on too — one wallet,
+   * two products. Bidoor takes bids in USDC, which is an SPL transfer; this
+   * verifier reads NATIVE lamports out of `preBalances`/`postBalances`. The
+   * claim under test is that those are different enough that a bid cannot be
+   * presented here as a registration fee.
+   *
+   * The test is written before anything is changed, because the answer
+   * decides whether a reference key on the registration transfer is a
+   * blocker for switching the fee on or merely an improvement to recovery.
+   */
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+  /**
+   * What a bid actually looks like: USDC moves between token accounts, and
+   * the only native lamports that move are the network fee, paid by the
+   * bidder. `PAYMENT_WALLET`'s own SOL balance does not change — a token
+   * account is a different account.
+   */
+  function usdcBid(options: { walletInKeys: boolean }): SolanaTransaction {
+    const keys = [
+      { pubkey: PAYER, signer: true },
+      { pubkey: "BidderTokenAccount111111111111111111111111", signer: false },
+      { pubkey: "RecipientTokenAccount1111111111111111111111", signer: false },
+      ...(options.walletInKeys ? [{ pubkey: RECIPIENT, signer: false }] : []),
+    ];
+    return {
+      slot: 1,
+      blockTime: Math.floor((Date.now() - 60_000) / 1000),
+      transaction: { message: { accountKeys: keys } },
+      meta: {
+        err: null,
+        // 500 USDC arriving for the recipient — a large, real credit.
+        preTokenBalances: [
+          { accountIndex: 1, mint: USDC, owner: PAYER, uiTokenAmount: { amount: "500000000" } },
+          { accountIndex: 2, mint: USDC, owner: RECIPIENT, uiTokenAmount: { amount: "0" } },
+        ],
+        postTokenBalances: [
+          { accountIndex: 1, mint: USDC, owner: PAYER, uiTokenAmount: { amount: "0" } },
+          { accountIndex: 2, mint: USDC, owner: RECIPIENT, uiTokenAmount: { amount: "500000000" } },
+        ],
+        // Native: only the bidder's fee leaves. Nothing reaches the wallet.
+        preBalances: options.walletInKeys ? [1_000_000_000, 2_039_280, 2_039_280, 890_880] : [1_000_000_000, 2_039_280, 2_039_280],
+        postBalances: options.walletInKeys ? [999_995_000, 2_039_280, 2_039_280, 890_880] : [999_995_000, 2_039_280, 2_039_280],
+      },
+    };
+  }
+
+  it("refuses a USDC bid whose accountKeys never mention the wallet", async () => {
+    expect(
+      await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(usdcBid({ walletInKeys: false })) }),
+    ).toMatchObject({ ok: false, reason: "verification_failed" });
+    expect(await isRegistered(PAYER)).toBe(false);
+  });
+
+  it("refuses a USDC bid even when the wallet IS an account key", async () => {
+    // The sharper case: the wallet appears in the transaction and the token
+    // balances show 500 USDC credited to it. The native reader must still see
+    // a lamport delta of zero and refuse, because token balances are not what
+    // it reads and a fee denominated in SOL is not paid in USDC.
+    const result = await register({
+      signature: `sig-${randomUUID()}`,
+      fetchTransaction: paid(usdcBid({ walletInKeys: true })),
+    });
+    expect(result).toMatchObject({ ok: false, reason: "verification_failed" });
+    if (result.ok) throw new Error("unreachable");
+    expect(result.message).toContain("did not send SOL");
+    expect((await query(`SELECT 1 FROM registrations`)).length).toBe(0);
+  });
+
+  it("still accepts a real SOL transfer, so the refusals above are not a wall", async () => {
+    // The control. Without it both tests pass against a verifier that refuses
+    // everything, which is exactly the shape a broken verifier takes.
+    expect(
+      await register({ signature: `sig-${randomUUID()}`, fetchTransaction: paid(transfer()) }),
+    ).toMatchObject({ ok: true });
+  });
+});
+
 describe("a payment signature is not a credential", () => {
   /**
    * THE AUDIT'S FINDING C-1, kept as a test so it cannot come back.

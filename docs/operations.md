@@ -404,23 +404,36 @@ carries a Solana Pay reference account**, because that is pixelwar's money by
 construction. Until that exists, expect pixelwar's payments to show up in
 bidoor's unmatched pile.
 
-**3. THE REGISTRATION VERIFIER CANNOT TELL A BID FROM A FEE, AND THIS ONE IS
-OPEN.** `verifySolTransfer` accepts any native SOL transfer to
-`PAYMENT_WALLET` above the fee within 24 hours. A bidoor bid is exactly that.
-So somebody who bid on bidoor can paste that signature into
-`POST /api/register` and register on pixelwar without paying pixelwar
-anything — once per bid, since `registrations.signature` is UNIQUE. The
-anti-sybil property in DESIGN.md §1a ("thirty identities is thirty funded
-wallets") survives, because the bidder did fund a wallet and did spend; what
-does not survive is "the fee was paid to us for this".
+**3. A BIDOOR BID CANNOT REGISTER ON PIXELWAR — TESTED, NOT ASSUMED.** This
+was written here as an open blocker on the strength of "any transfer to the
+shared wallet clears the fee check". That was wrong in the one detail that
+decides it: **bidoor takes bids in USDC**, which is an SPL transfer between
+token accounts, and `verifySolTransfer` reads NATIVE lamports out of
+`preBalances`/`postBalances`. A USDC transfer moves no SOL to
+`PAYMENT_WALLET` — a token account is a different account — so the reader
+sees a lamport delta of zero and answers `no_transfer`.
 
-**The fix, when it is wanted, is the mechanism the checkout already has**: mint
-a reference key per registration, put it in the transfer as a read-only
-account, and require `readSolTransfer` to see it. That makes a registration
-payment identifiable as one — which also gives registration the recovery pass
-it currently lacks, and gives bidoor a clean rule to filter on. It is a client
-change, a verifier change and a migration, so it is written down here rather
-than done quietly.
+`registration.test.ts` proves it in the shape that could have gone wrong: a
+transaction whose token balances credit 500 USDC to `PAYMENT_WALLET`, with the
+wallet itself among the account keys, is refused with "did not send SOL", and
+a real SOL transfer in the same file still registers — the control, without
+which both refusals would also pass against a verifier that refuses
+everything.
 
-**Until then**: a shared wallet means the amount alone decides, and 0.003 SOL
-is under any plausible bid. Decide this before the fee is switched on.
+**So the reference key on a registration transfer is an IMPROVEMENT, not a
+blocker.** What it would buy, and why it is still worth doing later:
+
+- **Recovery.** A registration payment whose payer closed the tab is currently
+  a hand-filed case, because there is nothing on the transfer to find it by.
+  A reference key gives registration the same recovery pass the checkout has.
+- **A clean rule for bidoor.** "Ignore transfers carrying a reference" is
+  simpler for the other side than reasoning about denominations.
+- **Denomination independence.** The refusal above holds because bidoor bids
+  in USDC and we charge in SOL. If bidoor ever takes SOL bids, that stops
+  being true the same day, with nothing in this repo changing. **That is the
+  trigger to revisit** — not a date, an event.
+
+**One more fact about the wallet, recorded because it dates the whole
+question**: at the time of writing, `7ozy…UVgi` does not exist on mainnet — it
+has never received anything. So none of this is historical clean-up; it is
+about payments neither product has taken yet.
