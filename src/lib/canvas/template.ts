@@ -70,3 +70,82 @@ export function clampTemplate(at: Point, template: TemplateSize, board: Size): P
 export function templateTooLarge(template: TemplateSize): boolean {
   return template.width > TEMPLATE_MAX_SIDE || template.height > TEMPLATE_MAX_SIDE;
 }
+
+/**
+ * The most a stored template may weigh, as a data URL.
+ *
+ * `sessionStorage` is about 5MB per origin in every current browser, and it
+ * is shared with anything else this origin ever wants to keep. Two megabytes
+ * leaves room and is generous for a template: base64 costs about a third on
+ * top of the file, so this is roughly a 1.5MB picture, and a template is a
+ * small square.
+ *
+ * CHECKED BEFORE THE TEMPLATE IS ACCEPTED, not when saving fails. A picture
+ * that appears on the board and then quietly does not come back after a
+ * reload is exactly the defect this whole change exists to fix; refusing it
+ * up front, with a message that says to make it smaller, is the only honest
+ * order to do it in.
+ */
+export const TEMPLATE_MAX_DATA_URL_BYTES = 2 * 1024 * 1024;
+
+/** What survives a reload. Deliberately small and deliberately not the bitmap. */
+export type StoredTemplate = {
+  /** The picture itself, as a data URL, so it needs nothing from the network. */
+  dataUrl: string;
+  x: number;
+  y: number;
+  opacity: number;
+};
+
+export function templateDataUrlTooLarge(dataUrl: string): boolean {
+  return dataUrl.length > TEMPLATE_MAX_DATA_URL_BYTES;
+}
+
+/**
+ * Reads back what was stored, or nothing.
+ *
+ * EVERY FIELD IS RE-VALIDATED, and `sessionStorage` being same-tab and
+ * same-origin is not a reason to skip it. The value can have been written by
+ * an older version of this code with a different shape, by a half-finished
+ * write, or by a person with a console open. A restore that trusts the blob
+ * puts an arbitrary string into an `<img>`-shaped hole.
+ *
+ * THE POSITION IS CLAMPED AGAINST THE BOARD BEING RESTORED ONTO, not the one
+ * it was saved from. Wars are not all the same size, so a template placed at
+ * (150, 150) in a 200x200 war would otherwise come back completely off the
+ * edge of a 100x100 one and look like it had vanished.
+ */
+export function readStoredTemplate(raw: string | null, board: Size): StoredTemplate | null {
+  if (!raw) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const value = parsed as Partial<StoredTemplate>;
+  const { dataUrl, x, y, opacity } = value;
+
+  // Only a data URL, and only one that claims to be an image. This string is
+  // about to become an `<img>`'s src: `javascript:` and `http:` are both
+  // things a hand-written entry could contain, and neither is a template.
+  if (typeof dataUrl !== "string" || !/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) {
+    return null;
+  }
+  if (templateDataUrlTooLarge(dataUrl)) return null;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (!Number.isFinite(opacity) || opacity! <= 0 || opacity! > 1) return null;
+
+  // Clamped with the STORED template's own size unknown at this point — the
+  // bitmap has not been decoded yet — so the caller clamps again once it has.
+  // This bound only keeps a wild number out of the DOM.
+  return {
+    dataUrl,
+    x: Math.round(Math.max(-board.width, Math.min(board.width, x!))),
+    y: Math.round(Math.max(-board.height, Math.min(board.height, y!))),
+    opacity: opacity!,
+  };
+}
