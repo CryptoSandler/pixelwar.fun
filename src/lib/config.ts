@@ -85,3 +85,25 @@ function positiveInt(raw: string | undefined, fallback: number): number {
   const parsed = raw?.trim() ? Number.parseInt(raw, 10) : NaN;
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
+
+/**
+ * How many minutes before a war ends that nobody new may pick a side.
+ *
+ * ZERO IS THE DEFAULT AND ZERO MEANS NO LOCK, and that is the decision rather
+ * than a placeholder. Whether a war closes its sides at all is a rule about
+ * what winning means — the kind this project keeps out of the schema and in
+ * `docs/operations.md`, beside the 24-token cap, so an operator can read it
+ * and change it. Shipping the mechanism switched off leaves that decision
+ * where it belongs instead of making it by defaulting.
+ *
+ * A GARBAGE VALUE READS AS OFF, NOT AS SOME LOCK. `positiveInt` cannot serve
+ * this one: it rejects 0, and 0 is the value that has to be expressible. And
+ * a typo here must fail towards "the rule is not in force" — switching on a
+ * one-way promise about a war because somebody wrote `sixty` is the failure
+ * this parse exists to avoid.
+ */
+export function sidesLockMinutes(): number {
+  const raw = process.env.PAINT_SIDES_LOCK_MINUTES?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}

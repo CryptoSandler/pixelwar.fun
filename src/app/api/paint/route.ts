@@ -20,6 +20,12 @@ const STATUS: Record<string, number> = {
   // about the API — they are on the other side. A conflict is exactly what
   // this is.
   wrong_allegiance: 409,
+  // 409 for the same reason `wrong_allegiance` is: the request is well-formed
+  // and the caller is not confused about the API. They are on the wrong side
+  // of a deadline this war has already passed, which is a conflict with the
+  // state of the world and not a bad request. Deliberately NOT 403 — nothing
+  // about this caller is forbidden, and nothing they do can open it.
+  sides_locked: 409,
   out_of_bounds: 400,
 };
 

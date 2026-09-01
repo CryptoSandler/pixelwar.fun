@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { subnetBurst } from "../config";
+import { sidesLockMinutes, subnetBurst } from "../config";
 import { transaction } from "../db";
 import type { War } from "../wars/lifecycle";
 import { PALETTE_SIZE } from "../wars/palette";
@@ -21,6 +21,7 @@ export type PaintFailure =
   | "unknown_token"
   | "unknown_colour"
   | "wrong_allegiance"
+  | "sides_locked"
   | "banned"
   | "not_registered"
   | "cooldown";
@@ -175,15 +176,25 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
     // accept this paint. Checked as two separate wall-clock comparisons
     // rather than folded into one "not live" answer, because "come back
     // later" and "this is over" are different messages to a caller.
+    //
+    // `sides_locked` is derived here, from the same clock and in the same
+    // read, for the reason CLAUDE.md gives: a status is never an input. "The
+    // last window" is `now() >= ends_at - N`, and the moment it becomes a
+    // column an operator sets, an operator can put a war into a last window
+    // its own deadline contradicts.
+    const lockMinutes = sidesLockMinutes();
     const warRow = await client.query<{
       status: string;
       not_started: boolean;
       ended: boolean;
+      sides_locked: boolean;
       cooldown_seconds: number;
     }>(
-      `SELECT status, (starts_at > now()) AS not_started, (ends_at <= now()) AS ended, cooldown_seconds
+      `SELECT status, (starts_at > now()) AS not_started, (ends_at <= now()) AS ended,
+              (ends_at <= now() + ($2 || ' minutes')::interval) AS sides_locked,
+              cooldown_seconds
          FROM wars WHERE id = $1`,
-      [war.id],
+      [war.id, String(lockMinutes)],
     );
     const current = warRow.rows[0];
     if (!current) {
@@ -273,6 +284,30 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
        RETURNING war_token_id`,
       [war.id, painterKey, tokenId],
     );
+
+    // THE LAST WINDOW CLOSES THE SIDES, AND THE INSERT ABOVE IS WHAT KNOWS.
+    //
+    // A returned row means the conflict did not fire, which means this
+    // painter had no allegiance a moment ago — they are joining this war for
+    // the first time, right now. That is the one act the last window forbids;
+    // everybody who already picked a side goes on painting untouched.
+    //
+    // WHY THE SCARCITY IS HERE AND NOT ON PAINT ITSELF. Every mechanic that
+    // makes the final minutes worth more concentrates writes at the moment
+    // concurrency peaks, and `docs/operations.md` measures what that costs:
+    // one row lock on `wars` held for five round trips, `1 / (5 x round-trip
+    // time)`, "nothing about connection pools, instance count or CPU changes
+    // it". This rule can only ever turn a paint into a refusal, so it cannot
+    // raise the rate under any input — and it refuses HERE, above the
+    // `last_seq` update, so it never queues behind that lock either.
+    // `sides-lock.test.ts` asserts the sequence does not move.
+    //
+    // IT THROWS RATHER THAN RETURNS, exactly as the cooldown gates below do
+    // and for the same reason: the allegiance row is already inserted, and a
+    // plain return would COMMIT the very side this rule just refused.
+    if (lockMinutes > 0 && current.sides_locked && claimed.rows[0]) {
+      throw new SidesLockedError(lockMinutes);
+    }
 
     let allegiance = claimed.rows[0]?.war_token_id;
     if (!allegiance) {
@@ -377,6 +412,20 @@ export async function paintPixel(input: PaintInput): Promise<PaintResult> {
         message: `Wait ${error.retryAfterSeconds} second${error.retryAfterSeconds === 1 ? "" : "s"} before painting again.`,
       };
     }
+    if (error instanceof SidesLockedError) {
+      return {
+        ok: false as const,
+        reason: "sides_locked" as const,
+        // States the rule and its size, and stops. No scolding, and nothing
+        // about being too late — the same discipline `wrong_allegiance` is
+        // held to. It also does not promise this is how wars work: it says
+        // "this war", because whether the next one closes its sides is an
+        // operator's setting and copy must not claim otherwise.
+        message:
+          `Sides closed for the last ${error.lockMinutes} minutes of this war. ` +
+          `This one is fought with the armies it has.`,
+      };
+    }
     throw error;
   });
 }
@@ -386,5 +435,20 @@ class CooldownError extends Error {
   constructor(readonly retryAfterSeconds: number) {
     super("cooldown");
     this.name = "CooldownError";
+  }
+}
+
+/**
+ * Thrown for the same reason `CooldownError` is, and it matters more here.
+ *
+ * By the time this fires, `war_painters` already holds the row that says this
+ * painter joined — the INSERT is how the rule knows they are new. Returning a
+ * result would commit it, and the next paint would sail through against an
+ * allegiance the last window had already refused.
+ */
+class SidesLockedError extends Error {
+  constructor(readonly lockMinutes: number) {
+    super("sides_locked");
+    this.name = "SidesLockedError";
   }
 }

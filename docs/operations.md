@@ -35,6 +35,57 @@ is about to type a number.
 cap can rise to the new palette size with nothing else to change, because
 `flagColourForSlot` already wraps at `PALETTE_SIZE` rather than at a literal.
 
+## Closing the sides: `PAINT_SIDES_LOCK_MINUTES`, and it ships OFF
+
+**The mechanism exists; the policy is the owner's and has not been decided.
+The default is `0`, which means no lock, and that is a decision rather than a
+placeholder.**
+
+| Setting | Default | What it means |
+| --- | --- | --- |
+| `PAINT_SIDES_LOCK_MINUTES` | `0` | Minutes before `ends_at` in which nobody NEW may pick a side. `0` disables the rule entirely. |
+
+**What it does.** Inside the window, a painter who has never painted in this
+war is refused with `sides_locked` (HTTP 409). A painter who already has an
+allegiance is untouched and paints normally. Nothing else changes: not the
+cooldown, not scoring, not the deadline.
+
+**Why the scarcity is over joining rather than over painting, and this is the
+whole reason the setting has this shape.** A war's ending is most of why
+anybody is watching, and every obvious way to make the final minutes count
+for more *concentrates paint* at the moment concurrency peaks — which is
+exactly what "The write ceiling is ~40 paints per second, per war" below says
+this system cannot absorb. A spike there does not degrade, it queues on one
+row lock, and the war stalls for everybody at the only moment that matters.
+
+This rule can only ever turn a paint into a refusal, so it cannot raise the
+rate under any input, and it refuses above the `last_seq` update so it never
+queues behind that lock either. `sides-lock.test.ts` asserts the sequence
+does not move on a refusal — that is the property the design was chosen for,
+and it is checked rather than argued.
+
+Its second effect is the one that pays for it: the deadline pushes
+recruitment EARLIER. The armies form before the window or they do not form.
+
+**THE OPEN DECISION, and it is one-way once made: does a war ANNOUNCE the
+lock?** "Sides close an hour before the end" is a promise in copy that cannot
+be withdrawn quietly after the first war. Not announcing it is worse — a
+painter meets a 409 nobody warned them about. The neutral surface, honest in
+both futures, is a *countdown* in the paint bar inside a warning window
+("Sides lock in 04:12"): a countdown is a fact about this war, not a promise
+about the next one. **That surface is deliberately not built**, because
+building the announcement would decide the question. Turn the setting on and
+the refusal works today, unannounced; decide to announce and the countdown is
+the batch that follows.
+
+**A garbage value reads as OFF, not as some lock** — a typo must not switch on
+a rule about what winning means. See `sidesLockMinutes` in `lib/config.ts`.
+
+**When this rule expires:** it does not, but the number is a guess until the
+first real war. Watch the last hour of one and see whether the ending needed
+help at all — the momentum signal in the sidebar may already be doing this
+job, and if it is, the honest setting stays `0`.
+
 ## Ban terms: how long is a ban, by default
 
 **The admin panel offers a fixed term (24 hours) and never writes a ban with
