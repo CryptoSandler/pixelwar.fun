@@ -20,7 +20,7 @@ import { execute, query } from "../db";
  *
  * Fixing that from the event log needs indexes on `(war_id, painted_at)` and
  * `(war_id, idx, seq)` — two more b-trees maintained inside the paint
- * transaction, which `docs/operations.md` measures a ~40 paints per second
+ * transaction, which `docs/operations.md` measures a per-war paints-per-second
  * ceiling for and which is serialised on a row lock. A display signal does
  * not get to make the write path slower.
  *

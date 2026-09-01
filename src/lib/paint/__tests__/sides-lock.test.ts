@@ -43,7 +43,7 @@ afterEach(() => {
  * Holds the `wars` row lock on its own connection, and hands back a release.
  *
  * This is the instrument the throughput claim needs. `UPDATE wars SET
- * last_seq = last_seq + 1` is the statement the ~40 paints per second ceiling
+ * last_seq = last_seq + 1` is the statement the per-war throughput ceiling
  * is made of, and anything that reaches it while somebody else holds the row
  * WAITS. So: take the lock here, and a paint that never touches it answers
  * immediately while a paint that does cannot answer at all.

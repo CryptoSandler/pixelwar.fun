@@ -11,9 +11,10 @@
 --
 -- Doing it exactly from the event history needs indexes on `(war_id,
 -- painted_at)` and `(war_id, idx, seq)` — two more b-trees maintained inside
--- the paint transaction, which `docs/operations.md` measures a ~40 paints per
--- second ceiling for and which is serialised on a row lock. Momentum is a
--- display signal. It does not get to make the write path slower.
+-- the paint transaction, which `docs/operations.md` measures a per-war
+-- paints-per-second ceiling for and which is serialised on a row lock.
+-- Momentum is a display signal. It does not get to make the write path
+-- slower.
 --
 -- So it is read from a periodic snapshot of a number the paint path ALREADY
 -- maintains transactionally: `token_pixel_counts.owned`. Momentum is

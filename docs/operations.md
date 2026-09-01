@@ -54,7 +54,7 @@ cooldown, not scoring, not the deadline.
 whole reason the setting has this shape.** A war's ending is most of why
 anybody is watching, and every obvious way to make the final minutes count
 for more *concentrates paint* at the moment concurrency peaks — which is
-exactly what "The write ceiling is ~40 paints per second, per war" below says
+exactly what "The write ceiling is ~15 paints per second, per war" below says
 this system cannot absorb. A spike there does not degrade, it queues on one
 row lock, and the war stalls for everybody at the only moment that matters.
 
@@ -239,9 +239,15 @@ scratch:**
 Both are decisions about how fast a human must hear, and that number is not
 knowable until real money has been through the queue once.
 
-## The write ceiling is ~40 paints per second, per war
+## The write ceiling is ~15 paints per second, per war
 
-**Measured, and it is architectural rather than a setting.** Every paint takes
+> **The number was ~40 until 2026-09-01.** It was a projection resting on an
+> assumed 5 ms round trip, and the round trip is 14-16 ms because the
+> functions and the database are in different regions. See "The number that
+> matters in production" below for the measurement and the method. The shape
+> of the ceiling did not change; only the constant did.
+
+**Architectural rather than a setting.** Every paint takes
 a row lock on its war — `UPDATE wars SET last_seq = last_seq + 1` — and holds
 it for **five more round trips** before COMMIT. Throughput per war is
 therefore `1 / (5 x round-trip time)`, and nothing about connection pools,
@@ -283,18 +289,105 @@ would trade a throughput ceiling for silently lost pixels.
 
 ### The number that matters in production
 
-The table above was measured at 173ms per round trip, which is this
-developer's latency to Neon and **not** the deployment's. Derived from
-production rather than assumed: `robots.txt` (static, no database) answers in
-0.14s and `/api/leaderboard` (four queries) answers in 0.12-0.13s — the
-queries are indistinguishable from a static file, so the round trip is on the
-order of 5ms.
+> **THIS IS A DERIVATION, NOT A MEASUREMENT OF PAINT.** Measured 2026-09-01.
+> Nothing here observed a paint under load. What was measured is the round
+> trip from a deployed function to Neon; the ceiling is then arithmetic on top
+> of it. **Replace it with the first real war** — see "How the first real war
+> replaces this number" below.
 
-**That projects to roughly 40 paints per second per war**, which is about
-1,200 active painters on a 30-second cooldown. It is a projection from a
-derived round trip, not a measurement of paint under load on Vercel; the
-preview deployment is behind SSO and was deliberately not exposed to measure
-it. The first real war measures it for free.
+**The ceiling is roughly 15 paints per second per war, not 40.** The 40 was
+wrong, the reason is known, and it is worth more than the number.
+
+**What was measured.** Two endpoints on one deployed preview, same region,
+same session, differing only in how many sequential database round trips they
+make. Everything that is not a database round trip — the hop to the edge, the
+function invocation, TLS, JSON serialisation — is common to both and cancels
+in the difference.
+
+| Probe | Pair | Extra queries | Median difference | Implied round trip |
+| --- | --- | --- | --- | --- |
+| A | `/api/diff?since=head-1` vs `since=999999` | 1, an index scan on `pixel_events_pkey` costing **0.064 ms** by `EXPLAIN ANALYZE` | 13.7 ms | **13.7 ms** |
+| B | `/api/leaderboard` vs `/api/diff?since=999999` | 4 aggregations and a LATERAL join | 55.1 ms | **13.8 ms** |
+
+Two probes with completely different query shapes agreeing to within 0.3% is
+the result. A is the trustworthy one — its extra query is free, so its
+difference is network and almost nothing else. B is round trip **plus** mean
+query cost, so B ≥ A by construction; that they are equal says server-side
+execution is negligible beside the network, which is the same thing the
+`EXPLAIN` says.
+
+**Interval, and it is a spread rather than a confidence interval.** Two runs
+80 and 60 samples deep, interleaved one endpoint at a time so drift lands on
+both series: run medians of 13.8 ms and 16.1 ms, p25/p75 spread 9.4–18.1 ms.
+So the round trip is **14–16 ms** and the ceiling `1 / (5 × RTT)` is
+**12–15 paints per second per war** — about 400 active painters on a
+30-second cooldown, not the 1,200 previously claimed.
+
+**Why the old number was three times too high, and this is the actionable
+part.** It assumed a 5 ms round trip, inferred from `/api/leaderboard`
+answering about as fast as a static file. That inference was too coarse to
+see what the difference method sees: **the functions run in `iad1`
+(us-east-1, Virginia) and the Neon project is in `aws-us-east-2` (Ohio).**
+Every one of those five round trips crosses regions. 14 ms is the ordinary
+figure for that hop, and the measurement matches it almost exactly.
+
+**So the first lever is not code.** Co-locating the functions with the
+database — moving either side — attacks all five round trips at once, and
+nothing else on the list does. That is a change to make deliberately and
+measure, not a thing to assume; it is recorded here as the first thing to try
+rather than as a decision already taken.
+
+**Counting caveat, in the honest direction.** `1 / (5 × RTT)` is this
+document's own formula and counts the five statements after the sequence
+update. The lock is actually held until COMMIT, and COMMIT is a sixth round
+trip, so the true figure is nearer `1 / (6 × RTT)` — **12/s at 13.7 ms**. The
+five-trip number is kept for continuity with the table above and should be
+read as the optimistic end.
+
+**What this still does not tell you.** Whether a real crowd ever approaches
+it, what Neon's pooler does at that concurrency, and whether throughput
+degrades gracefully or collapses. Those need paint under load, and paint under
+load needs painters — the registration gate, the per-IP cooldown and the
+subnet burst cap all sit in front of a synthetic load generator, and taking
+them down would have meant setting secrets on a shared environment. That was
+deliberately not done.
+
+### How the first real war replaces this number
+
+**The war measures it for free, but only if somebody writes the number down.**
+Nothing currently logs it, so this is what to do rather than what to read.
+
+**The number to compute:** peak sustained paints per second, in one war.
+
+    -- Busiest single second the war ever had, per war.
+    SELECT war_id,
+           date_trunc('second', painted_at) AS second,
+           count(*) AS paints
+      FROM pixel_events
+     GROUP BY 1, 2
+     ORDER BY paints DESC
+     LIMIT 20;
+
+`pixel_events` already records every paint with `painted_at`, so **the data is
+being collected today and no code has to change to get it.** Take the median
+of the top handful rather than the single best second, which can be a burst
+the pooler happened to absorb.
+
+**Read it against three things, not one:**
+
+1. **This derivation.** If the busiest second is far under 12/s, the ceiling
+   was never approached and the number stays a derivation — say so rather than
+   claiming it was confirmed.
+2. **Refusals.** A war at its ceiling shows up as latency, not as errors, so
+   the absence of 5xx proves nothing. The tell is paint latency climbing while
+   the rate stays flat — the same signature the load test found.
+3. **`ABUSE_RATE_PER_MINUTE`**, which is 120 (2/s) and was set as a guess
+   against a ceiling that was itself wrong. The first war recalibrates both,
+   and they are now known to be six times apart rather than twenty.
+
+**When it is replaced, delete this section's derivation rather than adding to
+it.** Two numbers for one quantity, one measured and one derived, is how the
+40 survived being wrong for as long as it did.
 
 ### Trigger for revisiting
 
