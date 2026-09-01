@@ -119,6 +119,11 @@ describe("POST /api/cron/reconcile", () => {
       // were swept. A count rather than silence, so a sweeper that stops
       // working is visible in the same log that watches everything else.
       noncesSwept: 0,
+      // The next addition, and it got the scrutiny this comment demands. A
+      // count of momentum snapshots aged out: no ids, no painter keys, no
+      // addresses. The only thing it hints at is that a board was busy, which
+      // is already public — the board is the product.
+      snapshotsSwept: 0,
       backlog: { open: 0, oldestAgeHours: 0, stale: false },
       // Null because no war is live in this test. That it is PRESENT and null
       // rather than absent is the contract reconcile.yml checks with

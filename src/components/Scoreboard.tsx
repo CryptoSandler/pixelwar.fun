@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
 import { flagColourForSlot } from "../lib/wars/palette";
 import type { RailToken } from "./TokenRail";
@@ -27,6 +28,15 @@ import type { RailToken } from "./TokenRail";
  * is not at risk — brass is the accent and no flag is brass, because no token
  * colour clears the palette distance the accent had to.
  *
+ * THE BAR IS THE ROW'S BACKGROUND, not a track beside it. It was a track,
+ * until the momentum number needed a column and the measurement said there
+ * was no width for both: 252px of row, and with four things in it the track
+ * resolved to two pixels and the ticker went to an ellipsis. As a background
+ * it costs nothing, and dominance reads down the whole sidebar rather than in
+ * a column of stubby lines. The tint is capped at `ROW_FILL_ALPHA`, which is
+ * a measured ceiling — see chrome.ts for the number that would take the
+ * ticker under DESIGN.md §9's body floor.
+ *
  * ONE COMPONENT, NOT TWO. This sat above a `TokenRail` that rendered the
  * identical tokens with the identical chips and a second click target for
  * the identical action: the rail was "which token am I painting for" and the
@@ -35,10 +45,10 @@ import type { RailToken } from "./TokenRail";
  * `TokenRail` is gone.
  *
  * SCALED TO THE LEADER, not to the board. Early in a war every token owns a
- * fraction of a percent, and bars drawn against 40,000 cells are all zero
+ * fraction of a percent, and fills drawn against 40,000 cells are all zero
  * width — the scoreboard would be blank for the hours when watching it is
- * most interesting. The percentage beside the bar carries the absolute truth;
- * the bar carries the race.
+ * most interesting. The percentage on the right carries the absolute truth;
+ * the fill carries the race.
  */
 export function Scoreboard({
   tokens,
@@ -86,8 +96,13 @@ export function Scoreboard({
         // broken rather than losing. A war's first hour is entirely made of
         // this case.
         const shareText = share === 0 ? "0%" : share < 0.1 ? "<0.1%" : `${share.toFixed(1)}%`;
-        const width = leader > 0 ? Math.max(token.owned > 0 ? 2 : 0, (token.owned / leader) * 100) : 0;
         const selected = token.id === selectedId;
+        // The race, as the row's own background rather than a track beside
+        // it. Proportional to the LEADER and not to the board, because the
+        // question a scoreboard answers is "who is ahead of whom" — against
+        // 40,000 cells every bar in a young war is a hairline and they all
+        // look equal. The share on the right is the absolute number.
+        const fill = leader > 0 ? Math.max(token.owned > 0 ? 1.5 : 0, (token.owned / leader) * 100) : 0;
 
         return (
           <li key={token.id}>
@@ -96,6 +111,7 @@ export function Scoreboard({
               onClick={() => onSelect(token.id)}
               aria-pressed={selected}
               className="score-row"
+              style={{ "--row-flag": flag, "--row-fill": `${fill}%` } as CSSProperties}
             >
               <span className="flex items-center gap-1.5">
                 {/* I2: every chip carries the outline for the surface it is
@@ -129,42 +145,6 @@ export function Scoreboard({
                   />
                 ) : null}
                 <span className="ticker">{token.ticker}</span>
-                {/*
-                  WHICH WAY IT IS MOVING, and this is for the side that is
-                  losing. A rank tells a community it is behind; it does not
-                  tell them they are being taken apart right now, which is the
-                  thing that brings people back to defend. Only shown when
-                  there is movement — a zero here would be noise on every row
-                  of a quiet board.
-
-                  Not a colour. DESIGN.md I5 keeps the accent for actions, and
-                  red/green would be a second colour language on a screen
-                  whose colours already mean tokens. The sign carries it.
-                */}
-                {token.net !== 0 ? (
-                  <span
-                    className="numeric shrink-0 text-[11px]"
-                    title={`${token.net > 0 ? "Took" : "Lost"} ${Math.abs(token.net)} pixels in the last 10 minutes`}
-                  >
-                    {/* THE ROW NOW CARRIES TWO BARE INTEGERS — this and the
-                        painter count — and a `title` is not reliably
-                        announced, so read aloud they would run together as
-                        "minus three, twelve". `sr-only` is already how this
-                        repo labels a control whose visible form is a glyph
-                        (PaintPalette, JoinFlow); it costs one span and it is
-                        the difference between a signal and a mystery number.
-                        Sighted readers get the sign, which is the only thing
-                        on this row that is signed. */}
-                    <span className="sr-only">
-                      {token.net > 0 ? "Took " : "Lost "}
-                      {Math.abs(token.net)} pixels in the last 10 minutes:{" "}
-                    </span>
-                    <span aria-hidden>
-                      {token.net > 0 ? "+" : "−"}
-                      {Math.abs(token.net)}
-                    </span>
-                  </span>
-                ) : null}
                 {token.painters > 0 ? (
                   <span className="numeric shrink-0 text-[11px]" title={`${token.painters} painters`}>
                     {token.painters}
@@ -193,11 +173,48 @@ export function Scoreboard({
                 ) : null}
               </span>
 
-              {/* The race. `aria-hidden` because the bar is a second rendering
-                  of the number already announced beside it, and a screen
-                  reader that reads both says everything twice. */}
-              <span aria-hidden className="score-track">
-                <span className="score-fill" style={{ width: `${width}%`, background: flag }} />
+              {/*
+                WHICH WAY IT IS MOVING, and this is for the side that is
+                losing. A rank tells a community it is behind; it does not
+                tell them they are being taken apart right now, which is the
+                thing that brings people back to defend.
+
+                ITS OWN GRID COLUMN, always rendered even when empty. Two
+                reasons, and the second is not cosmetic: a conditional grid
+                child shifts every column after it, so a row with no movement
+                would put its bar where the next row puts its number. And a
+                signed number that starts at a different offset on every row
+                is not a column of numbers, it is scatter.
+
+                Not a colour. DESIGN.md I5 keeps the accent for actions, and
+                red/green would be a second colour language on a screen whose
+                colours already mean tokens. The sign carries it.
+              */}
+              <span
+                className="numeric text-[11px] tabular-nums"
+                title={
+                  token.net
+                    ? `${token.net > 0 ? "Took" : "Lost"} ${Math.abs(token.net)} pixels in the last 10 minutes`
+                    : undefined
+                }
+              >
+                {token.net ? (
+                  <>
+                    {/* The row carries several bare integers and a `title` is
+                        not reliably announced, so read aloud they would run
+                        together. `sr-only` is already how this repo labels a
+                        control whose visible form is a glyph (PaintPalette,
+                        JoinFlow). */}
+                    <span className="sr-only">
+                      {token.net > 0 ? "Took " : "Lost "}
+                      {Math.abs(token.net)} pixels in the last 10 minutes:{" "}
+                    </span>
+                    <span aria-hidden>
+                      {token.net > 0 ? "+" : "\u2212"}
+                      {Math.abs(token.net)}
+                    </span>
+                  </>
+                ) : null}
               </span>
 
               <span className="numeric text-[12px] tabular-nums">{shareText}</span>

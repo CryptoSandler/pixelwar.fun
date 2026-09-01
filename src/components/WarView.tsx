@@ -44,7 +44,7 @@ type LeaderboardToken = {
   placed: number;
   painters?: number;
   sworn?: number;
-  net?: number;
+  net?: number | null;
 };
 
 const LEADERBOARD_POLL_MS = 2000;
@@ -219,7 +219,7 @@ export function WarView({
               owned: token.owned,
               painters: token.painters ?? 0,
               sworn: token.sworn ?? 0,
-              net: token.net ?? 0,
+              net: token.net ?? null,
             })),
           );
         })

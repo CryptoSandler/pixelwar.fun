@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { json, NO_STORE } from "../../../../lib/http";
 import { expireStaleOrders } from "../../../../lib/payments/orders";
 import { currentAbuseSignal } from "../../../../lib/paint/abuse";
+import { pruneTokenSnapshots } from "../../../../lib/canvas/momentum";
 import { pruneOathNonces } from "../../../../lib/paint/oath";
 import { unmatchedBacklog } from "../../../../lib/payments/orphans";
 import { recoverUnclaimedOrders } from "../../../../lib/payments/recover";
@@ -161,6 +162,11 @@ async function reconcile(request: Request): Promise<Response> {
   // number here is: work nobody can see is work nobody notices stopping.
   const noncesSwept = await pruneOathNonces();
 
+  // The same housekeeping argument one line up, for the same reason. A
+  // 72-hour war with 24 tokens leaves about 104,000 momentum snapshots
+  // behind, and nothing else in the system would ever remove them.
+  const snapshotsSwept = await pruneTokenSnapshots();
+
   const backlog = await unmatchedBacklog();
 
   // "Something odd is happening on the board", carried on the same request
@@ -178,6 +184,7 @@ async function reconcile(request: Request): Promise<Response> {
       recovered: recovered.length,
       filed: filed.length,
       noncesSwept,
+      snapshotsSwept,
       // Counts and an age, never ids — this body reaches a CI log retained
       // for ninety days and world-readable on a public repository, and an
       // order id is the handle on somebody's payment.

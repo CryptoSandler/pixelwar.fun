@@ -255,51 +255,58 @@ button.swatch:hover:not(:disabled),
  */
 .score-row {
   display: grid;
+  /* THREE COLUMNS, AND THE RACE IS BEHIND THEM RATHER THAN BESIDE THEM.
+     MEASURED: this row is 252px inside a 280px sidebar, and after the
+     identity (120px), the share (52px) and the gaps there are 56px left.
+     Identity, momentum, an 8px race track and the share do not fit — with all
+     four the tracks resolved to `120px 40px 2px 52px`, the track was a
+     two-pixel sliver and the ticker had already been pushed into its own
+     ellipsis ("HEEB..."), which DESIGN.md §9 forbids.
+     So the race stopped competing for width and became the row's background:
+     a rectangle proportional to the share, edge to edge, in the token's own
+     flag colour. It costs no width, and dominance now reads down the whole
+     sidebar rather than in a column of stubby tracks. Still `aria-hidden` in
+     effect — it is painted, not announced — because it is the same
+     information as the number on the right. */
   grid-template-columns: 7.5rem 1fr 3.25rem;
+
+  /* The fill. `--row-fill` is the share as a percentage and `--row-flag` the
+     token's colour; both are set per row from the component, because only it
+     knows them. A hard stop rather than a gradient: this is a bar, and a
+     fade would make the edge — which IS the measurement — unreadable.
+     14% is `ROW_FILL_ALPHA` in chrome.ts, where the contrast measurement that
+     chose it lives. Do not raise it here without reading that comment: at 22%
+     the black token takes the ticker under DESIGN.md §9's body floor. */
   align-items: center;
   gap: 0.5rem;
   width: 100%;
   padding: 0.3rem 0.4rem;
   text-align: left;
-  background: transparent;
   border: 2px solid transparent;
+
+  /* LONGHAND, NEVER `background:`, ON THIS ELEMENT OR ANY RULE THAT TARGETS
+     IT. The shorthand resets `background-image` to `none`, so a later
+     `background: transparent` — which is what was here — silently deletes the
+     fill. It renders as a row with no bar and nothing to debug: no error, no
+     warning, and every contrast test still passing, because the tint it was
+     measuring was never painted. The hover and selected rules below use
+     `background-color` for the same reason. */
+  background-color: transparent;
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--row-flag, transparent) 14%, transparent) 0 var(--row-fill, 0%),
+    transparent var(--row-fill, 0%) 100%
+  );
 }
 
 .score-row:hover:not(:disabled) {
-  background: var(--chrome-control);
+  background-color: var(--chrome-control);
 }
 
 /* Selection is brass on the CONTROL, never on the chip (DESIGN.md I5). */
 .score-row[aria-pressed="true"] {
-  background: var(--chrome-control);
+  background-color: var(--chrome-control);
   border-color: var(--chrome-accent);
-}
-
-/* The track is a recessed channel, said with the bevel the design already
-   has rather than with a shadow invented for it. `bevel-in` on the element
-   itself would cost 2px on all four sides of a 0.6rem bar; these are the same
-   two tones, one pixel, on the two sides that read as depth. */
-.score-track {
-  display: block;
-  height: 0.6rem;
-  background: var(--chrome-readout);
-  border-top: 1px solid var(--bevel-dark);
-  border-left: 1px solid var(--bevel-dark);
-  border-bottom: 1px solid var(--bevel-light);
-  border-right: 1px solid var(--bevel-light);
-}
-
-/**
- * The fill is a step, not a slide. DESIGN.md §6: a leaderboard reorder is a
- * 2-frame step at ~120ms, and `steps(2)` is that rule expressed rather than
- * described. Under reduced motion the guarded block at the foot of this file
- * collapses the duration and the bar simply appears at its new width — the
- * information is identical, only the travel is gone.
- */
-.score-fill {
-  display: block;
-  height: 100%;
-  transition: width 120ms steps(2, end);
 }
 
 .ticker {

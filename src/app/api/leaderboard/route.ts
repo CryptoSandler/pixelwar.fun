@@ -1,7 +1,7 @@
 import { query } from "../../../lib/db";
 import { json } from "../../../lib/http";
 import { recentActivity } from "../../../lib/canvas/activity-feed";
-import { territoryMomentum } from "../../../lib/canvas/momentum";
+import { snapshotTokenCounts, territoryMomentum } from "../../../lib/canvas/momentum";
 import { armyCounts } from "../../../lib/paint/allegiance";
 import { warBySlug } from "../../../lib/wars/lifecycle";
 
@@ -47,9 +47,14 @@ export async function GET(request: Request): Promise<Response> {
   // just been overtaken, beside the paint that overtook them.
   const activity = await recentActivity(war.id, war.width);
 
-  // Which way the board is moving, on the same poll for the same reason. A
-  // bounded range scan on the events primary key — see `territoryMomentum`
-  // for what it counts and what it deliberately misses.
+  // Which way the board is moving, on the same poll for the same reason.
+  //
+  // THE SNAPSHOT IS TAKEN HERE, and this is the only place it is taken. It is
+  // lazy for the reason `expireStaleOrders` is — "so no route can forget to"
+  // — and it belongs on this route specifically because a snapshot is only
+  // worth writing while somebody is watching the board, and this poll IS
+  // somebody watching the board. It is a no-op on all but one poll a minute.
+  await snapshotTokenCounts(war.id);
   const momentum = await territoryMomentum(war.id);
 
   return json(
@@ -67,8 +72,15 @@ export async function GET(request: Request): Promise<Response> {
         placed: row.placed,
         painters: armies.get(row.id)?.painters ?? 0,
         sworn: armies.get(row.id)?.sworn ?? 0,
-        /** Pixels changing hands in the last ten minutes. A signal, not a ledger. */
-        net: momentum.get(row.id)?.net ?? 0,
+        /**
+         * Pixels changing hands in the last ten minutes.
+         *
+         * `null`, not zero, when there is no snapshot in range — a war nobody
+         * has watched for half an hour has nothing to diff against. Zero
+         * means "nothing moved" and would be a claim; null means "not known"
+         * and renders nothing.
+         */
+        net: momentum.get(row.id)?.net ?? null,
       })),
       activity: activity.map((event) => ({
         seq: event.seq,

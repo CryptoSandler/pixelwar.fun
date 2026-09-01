@@ -222,6 +222,30 @@ export const CHIP_OUTLINE: Record<keyof typeof CHIP_SURFACES, string> = {
 };
 
 /**
+ * How much of a token's flag colour tints its own scoreboard row.
+ *
+ * THE ROW IS THE BAR NOW. The race used to be an 8px track in its own grid
+ * column; measured, that row is 252px inside a 280px sidebar and there was no
+ * room for identity, momentum, track and share at once — the track resolved
+ * to two pixels and the ticker was pushed into an ellipsis. A background fill
+ * proportional to the share costs no width at all, and reads dominance across
+ * the whole sidebar better than a row of stubby tracks did.
+ *
+ * 0.14 IS A MEASURED CEILING, NOT A TASTE. The row carries `INK` on
+ * `CHROME_SURFACES.panel`, which is 11.51:1 bare and must stay above
+ * `BODY_TEXT_CONTRAST`. Compositing each of the twenty-four palette colours
+ * over the panel at this alpha, the worst case is #000000 at **8.42:1** —
+ * 1.42 of margin. It fails at 0.22, where black lands on 6.90 and goes under
+ * the floor. The chip outline is never the binding constraint here: it is
+ * near-black on a light tint and its worst distance is 249 against a floor of
+ * 60.
+ *
+ * `chrome.test.ts` asserts the ceiling holds for every palette colour, so
+ * raising this number turns red rather than quietly dimming a ticker.
+ */
+export const ROW_FILL_ALPHA = 0.14;
+
+/**
  * Contrast a chip outline must reach against the surface behind it.
  *
  * Deliberately lower than `CHROME_TOKEN_DISTANCE`: the outline is not trying

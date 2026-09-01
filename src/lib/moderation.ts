@@ -373,7 +373,17 @@ export async function revertRegion(input: {
     for (const row of rows) perToken.set(row.war_token_id, (perToken.get(row.war_token_id) ?? 0) + 1);
     for (const [tokenId, count] of perToken) {
       await client.query(
-        `UPDATE token_pixel_counts SET owned = GREATEST(0, owned - $3)
+        `UPDATE token_pixel_counts
+             SET owned = GREATEST(0, owned - $3),
+                 -- COUNTED SEPARATELY SO IT IS NOT READ AS A DEFEAT. The
+                 -- momentum signal diffs owned over ten minutes; without
+                 -- this, clearing a community's vandalism would show that
+                 -- community losing ground to a rival, and would put a
+                 -- moderator's action on a public scoreboard. See
+                 -- territoryMomentum, which adds this back out. (No
+                 -- backticks in here: this is a JS template literal and one
+                 -- would end the string.)
+                 removed_by_moderation = removed_by_moderation + $3
           WHERE war_id = $1 AND war_token_id = $2`,
         [warId, tokenId, count],
       );

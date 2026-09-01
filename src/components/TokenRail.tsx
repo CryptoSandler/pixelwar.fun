@@ -15,8 +15,17 @@ export type RailToken = {
   painters: number;
   /** How many of them proved a wallet holding it. */
   sworn: number;
-  /** Pixels changing hands in the last ten minutes: positive is taking, negative is losing. */
-  net: number;
+  /**
+   * Pixels changing hands in the last ten minutes: positive is taking,
+   * negative is losing, and `null` is NOT KNOWN.
+   *
+   * The three states are distinct on purpose. Zero is a claim — "nothing
+   * moved" — and the signal can only make it when it has a snapshot from ten
+   * minutes ago to compare against. On the server render, and on a war nobody
+   * has watched for half an hour, it does not, and a zero there would quietly
+   * say a raid is not happening while one is.
+   */
+  net: number | null;
 };
 
 export function TokenRail({

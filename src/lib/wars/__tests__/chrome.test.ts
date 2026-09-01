@@ -9,6 +9,7 @@
  * No database, so no per-test timeout is needed.
  */
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PALETTE, CANVAS_GROUND, rgbDistance } from "../palette";
 import {
@@ -27,6 +28,7 @@ import {
   MUTED_INK_INVERSE,
   MUTED_INK_SURFACES,
   READOUT_TEXT_CONTRAST,
+  ROW_FILL_ALPHA,
   contrastRatio,
   CHROME_SURFACES,
   CHROME_TOKEN_DISTANCE,
@@ -336,3 +338,59 @@ function composite(over: string, under: string, alpha: number): string {
   );
   return `#${mixed.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
+
+describe("I7 — a tinted scoreboard row still carries its own text", () => {
+  /**
+   * The race bar became the row's BACKGROUND, so every scoreboard row is now
+   * a surface that did not exist when these invariants were written: the
+   * panel with one of twenty-four saturated colours composited over it. The
+   * ticker sits on that surface, and the ticker is what DESIGN.md §9 says
+   * carries token identity when colour cannot — so it may not become hard to
+   * read in order to make a bar prettier.
+   *
+   * This is the same shape of failure the first brass had: a colour chosen
+   * against one test (does it look like a token?) that fails a second,
+   * unrelated one (can you read the text on it?). Nothing about tinting a row
+   * would have flagged it.
+   */
+  const composite = (fg: string, bg: string, alpha: number) => {
+    const channels = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+    const mixed = channels(fg).map((c, i) => c * alpha + channels(bg)[i] * (1 - alpha));
+    return `#${mixed.map((c) => Math.round(c).toString(16).padStart(2, "0")).join("")}`;
+  };
+
+  it("keeps the ticker above the body floor for every token in the palette", () => {
+    for (const token of PALETTE) {
+      const tinted = composite(token, CHROME_SURFACES.panel, ROW_FILL_ALPHA);
+      expect(
+        contrastRatio(INK, tinted),
+        `${token} at ${ROW_FILL_ALPHA} takes the row's ink under the body floor`,
+      ).toBeGreaterThanOrEqual(BODY_TEXT_CONTRAST);
+    }
+  });
+
+  it("keeps every chip outline visible on the tint it is drawn over", () => {
+    // The chip is drawn on the tinted row, not on the bare panel, and the
+    // outline is the only thing separating a token's own colour from a
+    // background made of that same colour.
+    for (const token of PALETTE) {
+      const tinted = composite(token, CHROME_SURFACES.panel, ROW_FILL_ALPHA);
+      expect(
+        rgbDistance(CHIP_OUTLINE.panel, tinted),
+        `the panel chip outline disappears on a row tinted with ${token}`,
+      ).toBeGreaterThanOrEqual(OUTLINE_SURFACE_DISTANCE);
+    }
+  });
+
+  it("is a ceiling, and says so where the number lives", () => {
+    // The number is defended by the two tests above; this asserts the reason
+    // is still beside it. A ceiling whose argument has been deleted is an
+    // arbitrary constant, and the next person optimises it.
+    const source = readFileSync(new URL("../chrome.ts", import.meta.url), "utf8")
+      .replace(/[*/]/g, " ")
+      .replace(/\s+/g, " ");
+    expect(source).toContain("MEASURED CEILING, NOT A TASTE");
+    expect(source).toContain("8.42");
+    expect(source).toContain("It fails at 0.22");
+  });
+});

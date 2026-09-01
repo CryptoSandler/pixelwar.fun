@@ -97,15 +97,13 @@ export default async function Page() {
           owned: owned.get(token.id) ?? 0,
           painters: armies.get(token.id)?.painters ?? 0,
           sworn: armies.get(token.id)?.sworn ?? 0,
-          // ZERO HERE IS HONEST, and it is the one number on this row that
-          // is. Momentum is a ten-minute window over `pixel_events`, and the
-          // server has nothing to say about it that is cheaper than the poll
-          // which arrives two seconds later. The difference from `owned`
-          // above is that a wrong zero there was a claim about the BOARD —
-          // visible, and contradicted by the pixels next to it — where a zero
-          // here reads as "quiet right now", which is what an unknown
-          // momentum honestly is.
-          net: 0,
+          // NULL, NOT ZERO, and the distinction is the whole point of the
+          // type. Zero says "nothing moved in the last ten minutes", which is
+          // a claim this render cannot make: momentum is a diff against a
+          // snapshot, the snapshot is taken on the leaderboard poll, and that
+          // poll has not happened yet. Null renders nothing and the number
+          // appears two seconds later when it is actually known.
+          net: null,
         }))}
       />
     );
