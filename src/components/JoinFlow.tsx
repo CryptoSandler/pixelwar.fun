@@ -219,9 +219,39 @@ export function JoinFlow({ war }: { war: JoinWar }) {
 
         {token ? (
           <div className="bevel-in mt-2 flex items-center gap-3 p-3" style={{ background: "var(--chrome-readout)" }}>
-            {token.logoUrl ? (
+            {/*
+              THROUGH OUR OWN ORIGIN, NEVER THE UPSTREAM URL. This was
+              `src={token.logoUrl}`, which announced every visitor's browser
+              to whatever host the token's deployer chose — the exact thing
+              `dexscreener.ts` refuses to do and says why ("a tracking beacon
+              on our audience"). The proxy also means the logo no longer
+              depends on DexScreener having an enhanced profile: it asks the
+              token's own Metaplex account first.
+
+              THE MINT, NOT A URL. `/api/token-logo` takes a mint and does its
+              own resolution; there is no parameter a caller can point at a
+              host. It answers 404 when there is no logo we will serve, and
+              an <img> that 404s renders nothing — which is the same fallback
+              to the flag colour this screen had before.
+            */}
+            {token.contract ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={token.logoUrl} alt="" aria-hidden width={32} height={32} />
+              <img
+                src={`/api/token-logo/${encodeURIComponent(token.contract)}`}
+                alt=""
+                aria-hidden
+                width={32}
+                height={32}
+                // A 404 IS THE ORDINARY ANSWER HERE, so it has to look like
+                // nothing rather than like a hole. Before the proxy, a token
+                // with no logo rendered no <img> at all; now the element is
+                // always present and a failed load would leave a reserved
+                // 32x32 gap beside the ticker. Hiding on error restores
+                // exactly the old layout for the majority case.
+                onError={(event) => {
+                  event.currentTarget.style.display = "none";
+                }}
+              />
             ) : null}
             <div className="min-w-0">
               <p className="text-[15px] font-medium">
