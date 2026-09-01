@@ -97,6 +97,21 @@ export async function preflight(input: {
   const needed = input.lamports + fee;
   if (balance < needed) {
     const short = needed - balance;
+    /**
+     * ONE LINE, AND NOT THE WALLET.
+     *
+     * A refusal is now the commonest thing this endpoint does — the first
+     * rehearsal on production stopped exactly here — and nothing recorded
+     * WHY. The verdict is not stored anywhere, so an hour later the only
+     * evidence was two rows in a counter and a person's memory of a screen.
+     *
+     * The shortfall is here because it is what tells "off by a network fee"
+     * from "empty wallet", which are different problems. The payer is not,
+     * and neither is their balance: the reason is diagnostic, the identity is
+     * not, and a log that names who is short of money is a log nobody should
+     * be able to read casually.
+     */
+    console.warn(`preflight: refused insufficient_funds, short by ${short} lamports`);
     return {
       ok: false,
       reason: "insufficient_funds",
@@ -124,6 +139,22 @@ export async function preflight(input: {
   }
 
   if (simulation?.value?.err) {
+    /**
+     * The chain's own account of what went wrong, kept server-side.
+     *
+     * The comment below has always said the logs are "for our server, which
+     * is where they go" — and until now they went nowhere, which made that
+     * sentence a promise the code did not keep. They are the only thing that
+     * tells a real defect from a payer's own problem when a simulation fails.
+     *
+     * Still no payer here. Program logs are the chain's text about its own
+     * execution and can name accounts it touched; that is the chain talking,
+     * not us recording who somebody is, and it never leaves the server.
+     */
+    console.warn(
+      `preflight: refused simulation_failed, err ${JSON.stringify(simulation.value.err)}`,
+      simulation.value.logs ?? [],
+    );
     return {
       ok: false,
       reason: "simulation_failed",

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ASSUMED_FEE_LAMPORTS, messageOf, preflight } from "../preflight";
 import { MultipleSignersError, requireSingleSigner } from "../send";
 import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
@@ -22,6 +22,73 @@ function rpc(answers: Record<string, unknown>, asked: string[] = []) {
     return answers[method];
   };
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("what a refusal writes down", () => {
+  /**
+   * The first rehearsal on production stopped at exactly one of these and
+   * nothing recorded why: the verdict is not stored, so an hour later the
+   * only evidence was two rows in a counter. These assert the line exists —
+   * and, just as hard, that it does not name the person.
+   */
+  it("records the shortfall, and never the payer", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await preflight({
+      transactionBase64: "AA==",
+      payer: PAYER,
+      lamports: 10_000_000n,
+      rpc: rpc({ getBalance: { value: 9_000_000 }, getFeeForMessage: { value: 5_000 } }),
+    });
+
+    const line = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(line).toContain("insufficient_funds");
+    // The number that tells "off by a network fee" from "empty wallet".
+    expect(line).toContain("1005000");
+    // The identity, which is nobody's business in a log.
+    expect(line).not.toContain(PAYER);
+  });
+
+  it("records the chain's own error when a simulation fails, still without the payer", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await preflight({
+      transactionBase64: "AA==",
+      payer: PAYER,
+      lamports: 1n,
+      rpc: rpc({
+        getBalance: { value: 900_000_000 },
+        getFeeForMessage: { value: 5_000 },
+        simulateTransaction: { value: { err: { InstructionError: [0, "Custom"] }, logs: ["Program failed"] } },
+      }),
+    });
+
+    const line = warn.mock.calls.map((call) => JSON.stringify(call)).join("\n");
+    expect(line).toContain("simulation_failed");
+    // The diagnosis, which the payer never sees and we always need.
+    expect(line).toContain("InstructionError");
+    expect(line).toContain("Program failed");
+    expect(line).not.toContain(PAYER);
+  });
+
+  it("says nothing at all when the check passes", async () => {
+    // A log line per successful payment would be noise that hides the ones
+    // that matter.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await preflight({
+      transactionBase64: "AA==",
+      payer: PAYER,
+      lamports: 1n,
+      rpc: rpc({
+        getBalance: { value: 900_000_000 },
+        getFeeForMessage: { value: 5_000 },
+        simulateTransaction: { value: { err: null } },
+      }),
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
 
 describe("can this payer afford it", () => {
   it("passes when the balance covers the amount and the fee", async () => {
