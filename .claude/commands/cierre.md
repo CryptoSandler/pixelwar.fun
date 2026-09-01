@@ -7,13 +7,19 @@ description: Close a batch — prove it works before it gets merged.
 A batch is not closed because the work feels finished. It is closed when every claim
 below has output sitting next to it.
 
-Two rules govern this whole file:
+Three rules govern this whole file:
 
 - **Paste real output.** Never summarise it, never retype it from memory, never describe
   it ("tests pass"). The output is the evidence; a description of the output is not.
 - **A step that cannot run is a blocked close, not a skipped step.** Say which step is
   blocked and why, and stop. Reporting a blocked close is a result. Reporting success
   without it is a lie.
+- **Evidence lands in `~/proyectos/evidencia/<repo>/<date>-<batch>/`, never in `/tmp` and
+  never in a per-session scratchpad.** A close cites its evidence, and a citation into a
+  directory the OS empties — or into a scratchpad addressable only by the session that is
+  already over — is a citation nobody can follow. One subdirectory per repository, with a
+  `README.md` naming what each artifact is. Build output and private keys are not evidence.
+  `~/.claude/GATES.md` has the incident.
 
 ## 1. What changed
 
@@ -46,7 +52,32 @@ aborts, that is a blocked close (see rule 2). Do not work around it by running a
 Paste the parts that are not about your change too. A pre-existing failure you inherited is
 information the reader needs; hiding it makes the next batch debug it from scratch.
 
-## 3. One line per claim
+## 3. Read the captures yourself
+
+A batch that ran Playwright produced screenshots. **They are evidence for you, not a
+deliverable for the owner.** Handing over a directory of PNGs moves the work of looking
+onto the person who asked for the batch, and "the captures are in `test-results/`" is a
+close that verified nothing.
+
+Before writing the report, for **every** capture the run produced:
+
+1. **Open it.** Actually open it — a file that exists is not a file that was looked at.
+2. **Describe it in one line.** What is on the screen, in words. A capture you cannot
+   describe is one you did not read.
+3. **Contrast it against `DESIGN.md` and against the copy the page is supposed to say.**
+   The document is open while you do it, per *"every verdict cites the written norm"*.
+
+**Any deviation is a finding of this close**, and goes in §5 with everything else that did
+not make it — whether or not a test went red over it. The reason a screenshot exists at all
+is to catch what no assertion thought to check: a broken layout, a wrapped heading, English
+copy on a Spanish surface, a placeholder that shipped.
+
+**Captures are not offered as the owner's gate.** One exception, and only one: an
+**aesthetic batch**, where what changed is how something looks and the owner's eye is the
+acceptance criterion. Even there the gate is **the preview URL** — the real page, in their
+browser, at their viewport — and never a directory of files.
+
+## 4. One line per claim
 
 For every "this works" you are about to write, one line, with the evidence beside it:
 
@@ -56,13 +87,13 @@ For every "this works" you are about to write, one line, with the evidence besid
 
 Rules for this table:
 
-- A claim with no evidence column does not go in the table. It goes in §4.
+- A claim with no evidence column does not go in the table. It goes in §5.
 - "The tests pass" is not a claim about the feature. Name what the feature now does.
 - Evidence is a test name, a command's output, or a URL you actually loaded. Not a file
   path you edited, and not a description of the code you wrote — code is the thing being
   tested, so it cannot be its own evidence.
 
-## 4. What did not make it
+## 5. What did not make it
 
 Explicit list, no euphemisms. Anything in scope at the start of the batch that is not in
 the diff, plus anything you found along the way and left alone:
@@ -73,7 +104,7 @@ the diff, plus anything you found along the way and left alone:
 
 An empty section is a valid answer only if you can say "nothing was left out" and mean it.
 
-## 5. Commit
+## 6. Commit
 
 ```bash
 git add <explicit paths>
@@ -97,7 +128,7 @@ survives in the public history. A wrong author or a present trailer is fixed wit
 `git commit --amend --reset-author --no-verify` (or `git rebase` for more than one commit)
 *before* the push, never after.
 
-## 6. Prove the push landed
+## 7. Prove the push landed
 
 ```bash
 git rev-parse HEAD
@@ -112,5 +143,6 @@ hope.
 
 ## Closing report
 
-The batch close is those six things, in order, in one message: the diff stat, the three
-outputs, the claims table, what was left out, the author check, and the two SHAs.
+The batch close is those seven things, in order, in one message: the diff stat, the three
+outputs, what the captures showed, the claims table, what was left out, the author check,
+and the two SHAs.
