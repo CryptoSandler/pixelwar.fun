@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { activityBounds, openingViewport } from "../lib/canvas/activity";
 import type { BoardImage } from "../lib/canvas/board-image";
+import type { TemplateOverlay } from "./TemplateControl";
 import { CHROME_SURFACES } from "../lib/wars/chrome";
 import {
   ZOOM_LIMITS,
@@ -28,6 +29,7 @@ export function Board({
   onPaint,
   onHover,
   onView,
+  template,
 }: {
   image: BoardImage;
   version: number;
@@ -43,6 +45,15 @@ export function Board({
    * links from.
    */
   onView: (view: Viewport) => void;
+  /**
+   * The community's own sketch, laid over the board.
+   *
+   * Null when nobody has picked one, which is the ordinary case. The bitmap
+   * never leaves this browser: it is read from the visitor's disk with
+   * `createImageBitmap` and drawn here, and nothing in this component or
+   * anywhere below it uploads or stores it.
+   */
+  template: TemplateOverlay | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // The opening viewport is decided once, from the first board that arrives,
@@ -182,6 +193,29 @@ export function Board({
 
     ctx.drawImage(bitmapCanvas, originX, originY, image.width * scale, image.height * scale);
 
+    /**
+     * THE TEMPLATE GOES HERE: over the paint, under the grid.
+     *
+     * Under the grid on purpose. The grid is what somebody counts cells with,
+     * and a template drawn on top of it hides the very lines they are using
+     * to work out which cell they are about to paint.
+     *
+     * `imageSmoothingEnabled` is already false for the board itself and that
+     * matters just as much here: a template is read cell by cell, and a
+     * smoothed edge invents colours that are not in it.
+     */
+    if (template) {
+      ctx.globalAlpha = template.opacity;
+      ctx.drawImage(
+        template.bitmap,
+        originX + template.x * scale,
+        originY + template.y * scale,
+        template.bitmap.width * scale,
+        template.bitmap.height * scale,
+      );
+      ctx.globalAlpha = 1;
+    }
+
     // DESIGN.md §4: 1px grid at 8x and above, and nothing below it.
     //
     // Drawn at exactly one device pixel regardless of zoom or DPR — a grid
@@ -212,7 +246,7 @@ export function Board({
 
       ctx.stroke();
     }
-  }, [image, version, viewport, resizeTick]);
+  }, [image, version, viewport, resizeTick, template]);
 
   function screen() {
     const canvas = canvasRef.current!;

@@ -212,6 +212,15 @@ function FinishedBoard({ war }: { war: FinishedWar }) {
   // The deep link still works: `Board` reads the URL itself, so a link to a
   // place in a war frames that place on the war's own result.
   return (
-    <Board image={image} version={1} onPaint={() => {}} onHover={() => {}} onView={() => {}} />
+    <Board
+      image={image}
+      version={1}
+      onPaint={() => {}}
+      onHover={() => {}}
+      onView={() => {}}
+      // No template on a finished board: there is nothing left to paint from
+      // it, and the result is the thing being shown.
+      template={null}
+    />
   );
 }

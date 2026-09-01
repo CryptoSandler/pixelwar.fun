@@ -14,6 +14,7 @@ import type { Viewport } from "../lib/canvas/viewport";
 import { leaderOf } from "../lib/canvas/standings";
 import { SwearOath } from "./SwearOath";
 import { WarClock } from "./WarClock";
+import { TemplateControl, type TemplateOverlay } from "./TemplateControl";
 import { WarHud } from "./WarHud";
 import { useCanvasStream } from "../hooks/useCanvasStream";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
@@ -102,6 +103,9 @@ export function WarView({
   // Where the board is looking, so the readout can offer a link back to it.
   // Null until the first board has framed itself.
   const [view, setView] = useState<Viewport | null>(null);
+  // The community's own sketch. Lives here rather than in `Board` so the rail
+  // can drive it; never leaves this tab either way.
+  const [template, setTemplate] = useState<TemplateOverlay | null>(null);
   // The last pixel the pointer was actually over — distinct from `hovered`,
   // which the HUD needs to go blank the instant the pointer leaves the
   // canvas. `target` does NOT clear on pointer-leave: it is what the paint
@@ -495,6 +499,13 @@ export function WarView({
             {layer === "token" ? "Showing territory" : "Show territory"}
           </button>
 
+          {/* IN THE RAIL, BESIDE THE OTHER THING THAT CHANGES WHAT THE BOARD
+              SHOWS. "Show territory" and a template are the same kind of
+              control — neither paints anything, both change what you are
+              looking at — so they sit together rather than the template
+              becoming a fourth zone of the screen. */}
+          <TemplateControl board={war} template={template} onChange={setTemplate} />
+
         </aside>
 
         {/* Margins in service of the canvas: the board takes every pixel the
@@ -510,6 +521,7 @@ export function WarView({
                 onPaint={paintAt}
                 onHover={handleHover}
                 onView={setView}
+                template={template}
               />
             ) : (
               /* Full ink, not muted. The board ground carries MUTED_INK_INVERSE
