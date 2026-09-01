@@ -107,12 +107,24 @@ An empty section is a valid answer only if you can say "nothing was left out" an
 ## 6. Commit
 
 ```bash
+git status
+git diff -- <each path you are about to stage>
 git add <explicit paths>
 ```
 
 By path, never `git add -A` and never `git add .`. Other sessions work in these
-directories and the tree may hold changes that are not yours. Run `git status` first and
-account for every file you are about to stage.
+directories and the tree may hold changes that are not yours.
+
+**Read the diff of every path you are about to stage, not just the list of paths.**
+Restricting a commit to one file does not restrict it to your work: the file may already
+hold somebody else's uncommitted change, and `git status` reports the filename identically
+either way. If a path carries work that is not this batch's, **either the message declares
+it or the hunk stays out** — `git add -p` leaves the rest in the tree for whoever wrote it.
+
+Measured 2026-09-01: five repositories each took a one-file commit, `git status` was read
+in every one, and four of them silently carried an unrelated section that had been sitting
+uncommitted in every working tree. The commits were right about the path and wrong about
+the contents. `~/.claude/GATES.md` has it.
 
 Commits are authored by `CryptoSandler` and carry **no trailers** — no `Co-Authored-By`,
 no `Generated with`. Check before pushing:
