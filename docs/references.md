@@ -233,7 +233,7 @@ find nothing in common but the concepts.
 | rplace | Reporting a *player* | Nobody to report. Our report is about a region of canvas |
 | rplace | WebGL renderer, pick framebuffer, 3D and mesh renderers | 40,000 pixels is four orders of magnitude below where Canvas2D struggles. Inverse-transforming a click is three lines |
 | rplace | Spectating, quests, badges, premium page, sounds | Retention machinery for a permanent canvas. A 48–72h war does not have a retention problem |
-| wplace | Charges that stack | Stacking lets one organised group bank a burst and flip a region at the deadline. A flat per-war cooldown is more legible and harder to game |
+| wplace | Charges that stack | Stacking lets one organised group bank a burst and flip a region at the deadline. A flat per-war cooldown is more legible and harder to game. **Re-confirmed 2026-09-01, and the reason grew teeth:** "bank a burst and flip a region at the deadline" is the exact threat the last window (batch 4) was built against, and `docs/operations.md` measures why it cannot be absorbed — one row lock on `wars` per paint, held for five round trips, so a banked burst does not degrade, it queues, and the war stalls for everybody. A charge pool is the one mechanic that multiplies the peak this system is least able to take. See "The charge pool was considered and rejected" below |
 | wplace | Paid colours, Droplets, cosmetics store | Our colour is not for sale by the pixel — it is the token's identity, bought once at entry. Selling colour twice would muddle the product |
 | wplace | Alliances | The token is the team. A second grouping layer on top of 24 tokens is noise |
 | both | Permanent canvas | Wars end. That is the product |
@@ -286,8 +286,8 @@ as the first thing to reach for, not built now.
 **Why this section exists.** Everything above was read before the canvas was
 built, and it is research. This is a different claim: it names, for each
 mechanic shipped in this round, whether it came from a reference, from this
-repository, or from nowhere but us. Six months from now "we took the charge
-pool from wplace" should be a recorded fact rather than a rumour, and — the
+repository, or from nowhere but us. Six months from now "we took the last
+window from r/place" should be a recorded fact rather than a rumour, and — the
 half that matters more — the mechanics with **no upstream** should be
 identifiable, because those are the ones no amount of reading can check.
 
@@ -302,19 +302,44 @@ learned from; an implementation cannot be taken.
 | Deep links to a place on the board | Genre-standard; both references carry canvas coordinates in the URL. Ours is built on `openingViewport`/`clampToBoard`, which already existed. | Observed |
 | Template overlay, client-only | **This file, item 5 of "Changes this research makes to the spec"** — specified before this round began, and client-only there too. | Our own spec |
 | Endgame rule in the last window | r/place's final act (the 2022 "whiteout"). The mechanic taken is *"the last window plays by a different rule"*, not that particular rule. | Widely reported; not observed by us |
-| Charge pool, N charges regenerating every T | wplace. **The numbers are UNVERIFIED** — see the gathering table above: wplace's charge and palette figures came from a third-party FAQ because painting is behind a login we did not create. Ours are our own choice, not theirs. | **Unverified** |
 | In-page replay from history | r/place's timelapse, which is a post-hoc video. Ours is served from `pixel_events` and is the same data the diff protocol already carries. | Widely reported |
 | Result card per token | Ours. It depends on `token_pixel_counts`, which depends on attribution being separate from colour. | n/a |
 
-### The one number nobody should quote from here
+### The charge pool was considered and rejected
 
-**The charge pool's N and T are ours and are not measured against wplace's.**
-The temptation is to write "wplace uses N, so we use N", and the table above
-is the reason that sentence cannot be written honestly: the source for
-wplace's numbers is a fan FAQ, and this file has said so since it was written.
-Whatever N and T end up being, the argument for them lives in
-`docs/operations.md` beside the write ceiling they have to respect — not here,
-and not in a memory of somebody else's product.
+**Decided 2026-09-01. The flat per-war cooldown stays. There is no charge
+pool, and stacking charges are not a mechanic this product has.** The entry
+lives here rather than only in "Don't adopt" because for one batch this file
+said BOTH things at once, and the shape of that mistake is worth keeping.
+
+**The contradiction.** "Don't adopt" has rejected stacking charges since this
+file was written, on the grounds that they let a group "bank a burst and flip
+a region at the deadline". The attribution table below listed a charge pool as
+a mechanic of this round, with N and T still to be chosen. Two tables, one
+document, opposite answers — and the second one was added later by somebody
+reading the research and not the rejection.
+
+**Why the rejection wins, and it is not seniority.** The stated reason turned
+out to be the same threat batch 4 spent a whole batch on. `docs/operations.md`
+measures what a deadline burst costs: every paint takes a row lock on `wars`
+and holds it for five more round trips, so throughput is `1 / (5 x round-trip
+time)` and a burst does not degrade — it queues, and the war stalls for
+everybody at the one moment anybody is watching. Batch 4's whole design
+criterion was that the last window must not accelerate writing. A charge pool
+is the mechanic that multiplies exactly that peak. Shipping both would have
+been building a brake and an accelerator in consecutive batches.
+
+**The lesson that outlives the decision, and it is why this section kept its
+place rather than being deleted.** The old heading here was "The one number
+nobody should quote from here", and it was about N and T: wplace's charge
+figures come from a fan FAQ because painting is behind a login we did not
+create, so quoting them would have been laundering a rumour into a spec. That
+warning was correct and is now moot, which is the tell. **A norm written to
+protect a number that no longer exists is a norm about a mechanic nobody
+decided to build.** The general form: when this file explains how to choose a
+value carefully, check first that anything chose to need the value.
+
+`charge-pool-rejected.test.ts` asserts this stays decided.
 
 ### What is ours, and has no upstream to check against
 
