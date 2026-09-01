@@ -8,11 +8,15 @@ export type RailToken = {
   ticker: string;
   name: string;
   colourSlot: number;
+  /** The token's own logo, from the search that admitted it. Null when it had none. */
+  logoUrl: string | null;
   owned: number;
   /** Painters who fight for this token in this war. */
   painters: number;
   /** How many of them proved a wallet holding it. */
   sworn: number;
+  /** Pixels changing hands in the last ten minutes: positive is taking, negative is losing. */
+  net: number;
 };
 
 export function TokenRail({

@@ -1,15 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Board } from "./Board";
 import { PaintButton } from "./PaintButton";
 import { ActivityFeed, type FeedEvent } from "./ActivityFeed";
 import type { RailToken } from "./TokenRail";
+import { EmptyBoardRoster } from "./EmptyBoardRoster";
 import { Scoreboard } from "./Scoreboard";
+import { WarSummary } from "./WarSummary";
 import type { ProxyCluster } from "../lib/payments/cluster";
 import { Register } from "./Register";
 import { WalletButton } from "./WalletButton";
+import { activityBounds } from "../lib/canvas/activity";
 import type { Viewport } from "../lib/canvas/viewport";
 import { leaderOf } from "../lib/canvas/standings";
 import { SwearOath } from "./SwearOath";
@@ -36,10 +39,12 @@ type LeaderboardToken = {
   name: string;
   ticker: string;
   colourSlot: number;
+  logoUrl: string | null;
   owned: number;
   placed: number;
   painters?: number;
   sworn?: number;
+  net?: number;
 };
 
 const LEADERBOARD_POLL_MS = 2000;
@@ -89,6 +94,41 @@ export function WarView({
     sworn: boolean;
   } | null>(null);
   const { image, version, applyLocal } = useCanvasStream(war.slug, layer);
+
+  /**
+   * Whether a single pixel has ever been painted — asked of the BOARD, not of
+   * the scoreboard.
+   *
+   * The scoreboard cannot answer it. `page.tsx` renders every token with
+   * `owned: 0` because the server has no counts to hand it, so
+   * `tokens.every(t => t.owned === 0)` is true on EVERY first load, including
+   * a war with forty thousand pixels on it. Gating the roster on that would
+   * flash a "nobody holds a pixel yet" panel over a finished-looking board
+   * for the two seconds until the first poll corrected it.
+   *
+   * `activityBounds` reads the bytes the canvas actually draws, which is the
+   * only authority on the question. It works on either layer: an unpainted
+   * cell is 0 in both.
+   *
+   * LATCHED, so the scan stops the moment paint is seen. A war spends its
+   * first minutes blank and the rest of its life not, and rescanning 40,000
+   * bytes every 1.5 seconds forever to re-answer a question that has already
+   * been settled is the kind of cost nobody ever goes back and finds. The
+   * one state it deliberately will not return to is a board cleared to
+   * nothing by moderation: putting the recruiting panel back over a board
+   * somebody is in the middle of moderating is worse than leaving it off.
+   */
+  const paintSeen = useRef(false);
+  const [boardBlank, setBoardBlank] = useState(false);
+  useEffect(() => {
+    if (paintSeen.current || !image) return;
+    const blank = activityBounds(image.slots, image.width, image.height) === null;
+    if (!blank) paintSeen.current = true;
+    setBoardBlank(blank);
+    // `version` is the mutation signal: BoardImage is written in place, so
+    // React cannot see it change on its own. Same reason the Board's own draw
+    // effect carries it.
+  }, [image, version]);
   const [tokens, setTokens] = useState<RailToken[]>(initialTokens);
   const [selectedId, setSelectedId] = useState<string | null>(initialTokens[0]?.id ?? null);
   /**
@@ -175,9 +215,11 @@ export function WarView({
               ticker: token.ticker,
               name: token.name,
               colourSlot: token.colourSlot,
+              logoUrl: token.logoUrl ?? null,
               owned: token.owned,
               painters: token.painters ?? 0,
               sworn: token.sworn ?? 0,
+              net: token.net ?? 0,
             })),
           );
         })
@@ -433,6 +475,7 @@ export function WarView({
                 action — the sidebar asking the same question twice. The row
                 IS the selector. */}
             <h2 className="section-label">Board</h2>
+            <WarSummary tokens={tokens} boardPixels={war.width * war.height} />
             <Scoreboard
               tokens={tokens}
               boardPixels={war.width * war.height}
@@ -515,14 +558,20 @@ export function WarView({
 
           <div className="board-frame relative min-h-0 flex-1">
             {image ? (
-              <Board
-                image={image}
-                version={version}
-                onPaint={paintAt}
-                onHover={handleHover}
-                onView={setView}
-                template={template}
-              />
+              <>
+                <Board
+                  image={image}
+                  version={version}
+                  onPaint={paintAt}
+                  onHover={handleHover}
+                  onView={setView}
+                  template={template}
+                />
+                {/* Only while the board is genuinely untouched, and that is
+                    read off the board itself — see `boardBlank` above for why
+                    the scoreboard is the wrong place to ask. */}
+                {boardBlank ? <EmptyBoardRoster tokens={tokens} /> : null}
+              </>
             ) : (
               /* Full ink, not muted. The board ground carries MUTED_INK_INVERSE
                  at 6.54:1, under DESIGN.md §9's body floor of 7 — see

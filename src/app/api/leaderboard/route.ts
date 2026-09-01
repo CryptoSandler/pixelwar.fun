@@ -1,6 +1,7 @@
 import { query } from "../../../lib/db";
 import { json } from "../../../lib/http";
 import { recentActivity } from "../../../lib/canvas/activity-feed";
+import { territoryMomentum } from "../../../lib/canvas/momentum";
 import { armyCounts } from "../../../lib/paint/allegiance";
 import { warBySlug } from "../../../lib/wars/lifecycle";
 
@@ -18,10 +19,11 @@ export async function GET(request: Request): Promise<Response> {
     name: string;
     ticker: string;
     colour_slot: number;
+    logo_url: string | null;
     owned: number;
     placed: number;
   }>(
-    `SELECT t.id, t.name, t.ticker, t.colour_slot,
+    `SELECT t.id, t.name, t.ticker, t.colour_slot, t.logo_url,
             COALESCE(c.owned, 0)  AS owned,
             COALESCE(c.placed, 0) AS placed
        FROM war_tokens t
@@ -45,6 +47,11 @@ export async function GET(request: Request): Promise<Response> {
   // just been overtaken, beside the paint that overtook them.
   const activity = await recentActivity(war.id, war.width);
 
+  // Which way the board is moving, on the same poll for the same reason. A
+  // bounded range scan on the events primary key — see `territoryMomentum`
+  // for what it counts and what it deliberately misses.
+  const momentum = await territoryMomentum(war.id);
+
   return json(
     {
       tokens: rows.map((row) => ({
@@ -52,10 +59,16 @@ export async function GET(request: Request): Promise<Response> {
         name: row.name,
         ticker: row.ticker,
         colourSlot: row.colour_slot,
+        // The identity people actually recognise. The first server render had
+        // it and this poll dropped it, so a logo appeared and then vanished
+        // two seconds later.
+        logoUrl: row.logo_url,
         owned: row.owned,
         placed: row.placed,
         painters: armies.get(row.id)?.painters ?? 0,
         sworn: armies.get(row.id)?.sworn ?? 0,
+        /** Pixels changing hands in the last ten minutes. A signal, not a ledger. */
+        net: momentum.get(row.id)?.net ?? 0,
       })),
       activity: activity.map((event) => ({
         seq: event.seq,

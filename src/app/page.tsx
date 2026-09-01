@@ -1,7 +1,7 @@
 import { armyCounts } from "../lib/paint/allegiance";
 import { classifyEndpoints } from "../lib/payments/cluster";
 import { paymentWallet, registrationFeeLamports, solanaRpcUrls } from "../lib/payments/config";
-import { queryOne } from "../lib/db";
+import { query, queryOne } from "../lib/db";
 import { activeTokens, currentWar, lastFinishedWar } from "../lib/wars/lifecycle";
 import { Intermission, type FinishedWar } from "../components/Intermission";
 import { WarView } from "../components/WarView";
@@ -44,6 +44,28 @@ export default async function Page() {
     const tokens = await activeTokens(war.id);
     const armies = await armyCounts(war.id);
 
+    /**
+     * WHAT EACH TOKEN HOLDS, ON THE SERVER RENDER.
+     *
+     * This used to be hard-coded to zero on the reasoning that the poll fills
+     * it in two seconds. It does — and for those two seconds the sidebar said
+     * "Pixels 0" and "nobody holds a pixel yet" over a board with forty
+     * thousand pixels on it, on every single load. A first paint that is
+     * wrong and then silently corrects itself is worse than a slow one: the
+     * visitor who bounces at 1.5 seconds only ever saw the lie.
+     *
+     * One query, on a page that is already `force-dynamic` and already makes
+     * several. Read from `token_pixel_counts` by ATTRIBUTED token, the same
+     * source `/api/leaderboard` and the winner query below use — the colour
+     * on the board says nothing about who owns a pixel since the palette was
+     * freed.
+     */
+    const counts = await query<{ war_token_id: string; owned: number }>(
+      `SELECT war_token_id, owned FROM token_pixel_counts WHERE war_id = $1`,
+      [war.id],
+    );
+    const owned = new Map(counts.map((row) => [row.war_token_id, row.owned]));
+
     const receiving = paymentWallet();
 
     return (
@@ -71,9 +93,19 @@ export default async function Page() {
           ticker: token.ticker,
           name: token.name,
           colourSlot: token.colourSlot,
-          owned: 0,
+          logoUrl: token.logoUrl,
+          owned: owned.get(token.id) ?? 0,
           painters: armies.get(token.id)?.painters ?? 0,
           sworn: armies.get(token.id)?.sworn ?? 0,
+          // ZERO HERE IS HONEST, and it is the one number on this row that
+          // is. Momentum is a ten-minute window over `pixel_events`, and the
+          // server has nothing to say about it that is cheaper than the poll
+          // which arrives two seconds later. The difference from `owned`
+          // above is that a wrong zero there was a claim about the BOARD —
+          // visible, and contradicted by the pixels next to it — where a zero
+          // here reads as "quiet right now", which is what an unknown
+          // momentum honestly is.
+          net: 0,
         }))}
       />
     );

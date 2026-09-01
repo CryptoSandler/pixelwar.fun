@@ -278,3 +278,50 @@ as the first thing to reach for, not built now.
    with our own text.
 8. **Ended wars get an explicit frozen state** with its own copy, rather than
    a paint endpoint that simply starts refusing.
+
+---
+
+## Provenance of the mechanics round, 2026-09-01
+
+**Why this section exists.** Everything above was read before the canvas was
+built, and it is research. This is a different claim: it names, for each
+mechanic shipped in this round, whether it came from a reference, from this
+repository, or from nowhere but us. Six months from now "we took the charge
+pool from wplace" should be a recorded fact rather than a rumour, and — the
+half that matters more — the mechanics with **no upstream** should be
+identifiable, because those are the ones no amount of reading can check.
+
+**Nothing was copied.** No assets, no code, no copy, no palette, no colour
+value. The boundary is the one stated at the top of this file and in
+[Licensing](#licensing-why-we-read-rather-than-fork): a mechanic can be
+learned from; an implementation cannot be taken.
+
+| Mechanic | Where it came from | Confidence in the source |
+| --- | --- | --- |
+| Empty-board roster, momentum signal | Ours. Neither reference has an ownership layer, so neither can have either. | n/a |
+| Deep links to a place on the board | Genre-standard; both references carry canvas coordinates in the URL. Ours is built on `openingViewport`/`clampToBoard`, which already existed. | Observed |
+| Template overlay, client-only | **This file, item 5 of "Changes this research makes to the spec"** — specified before this round began, and client-only there too. | Our own spec |
+| Endgame rule in the last window | r/place's final act (the 2022 "whiteout"). The mechanic taken is *"the last window plays by a different rule"*, not that particular rule. | Widely reported; not observed by us |
+| Charge pool, N charges regenerating every T | wplace. **The numbers are UNVERIFIED** — see the gathering table above: wplace's charge and palette figures came from a third-party FAQ because painting is behind a login we did not create. Ours are our own choice, not theirs. | **Unverified** |
+| In-page replay from history | r/place's timelapse, which is a post-hoc video. Ours is served from `pixel_events` and is the same data the diff protocol already carries. | Widely reported |
+| Result card per token | Ours. It depends on `token_pixel_counts`, which depends on attribution being separate from colour. | n/a |
+
+### The one number nobody should quote from here
+
+**The charge pool's N and T are ours and are not measured against wplace's.**
+The temptation is to write "wplace uses N, so we use N", and the table above
+is the reason that sentence cannot be written honestly: the source for
+wplace's numbers is a fan FAQ, and this file has said so since it was written.
+Whatever N and T end up being, the argument for them lives in
+`docs/operations.md` beside the write ceiling they have to respect — not here,
+and not in a memory of somebody else's product.
+
+### What is ours, and has no upstream to check against
+
+- **Attribution separate from colour.** A pixel's owner is a token; the colour
+  on it is the painter's free choice. Neither reference has an ownership layer
+  at all, which is why the territory layer, the momentum signal and the result
+  card have no prior art to be measured against.
+- **Tokens as factions**, with logos, tickers and a paid admission.
+- **Sworn wallets**: a caste proved by holding the token being fought for.
+- **The intermission**: a finished war with a winner, standing between wars.

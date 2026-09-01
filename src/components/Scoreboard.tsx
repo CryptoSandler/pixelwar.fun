@@ -110,7 +110,61 @@ export function Scoreboard({
                     outlineOffset: "-1px",
                   }}
                 />
+                {/* THE LOGO IS THE IDENTITY, and it is the thing neither
+                    r/place nor wplace can have: their bands are anonymous
+                    colour, ours are communities with a mark people already
+                    recognise. It sits before the ticker because it is read
+                    faster than a word. Decorative — the ticker beside it is
+                    the accessible name — and it fails to nothing when a token
+                    has no logo or the host is down. */}
+                {token.logoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={token.logoUrl}
+                    alt=""
+                    aria-hidden
+                    width={14}
+                    height={14}
+                    className="shrink-0"
+                  />
+                ) : null}
                 <span className="ticker">{token.ticker}</span>
+                {/*
+                  WHICH WAY IT IS MOVING, and this is for the side that is
+                  losing. A rank tells a community it is behind; it does not
+                  tell them they are being taken apart right now, which is the
+                  thing that brings people back to defend. Only shown when
+                  there is movement — a zero here would be noise on every row
+                  of a quiet board.
+
+                  Not a colour. DESIGN.md I5 keeps the accent for actions, and
+                  red/green would be a second colour language on a screen
+                  whose colours already mean tokens. The sign carries it.
+                */}
+                {token.net !== 0 ? (
+                  <span
+                    className="numeric shrink-0 text-[11px]"
+                    title={`${token.net > 0 ? "Took" : "Lost"} ${Math.abs(token.net)} pixels in the last 10 minutes`}
+                  >
+                    {/* THE ROW NOW CARRIES TWO BARE INTEGERS — this and the
+                        painter count — and a `title` is not reliably
+                        announced, so read aloud they would run together as
+                        "minus three, twelve". `sr-only` is already how this
+                        repo labels a control whose visible form is a glyph
+                        (PaintPalette, JoinFlow); it costs one span and it is
+                        the difference between a signal and a mystery number.
+                        Sighted readers get the sign, which is the only thing
+                        on this row that is signed. */}
+                    <span className="sr-only">
+                      {token.net > 0 ? "Took " : "Lost "}
+                      {Math.abs(token.net)} pixels in the last 10 minutes:{" "}
+                    </span>
+                    <span aria-hidden>
+                      {token.net > 0 ? "+" : "−"}
+                      {Math.abs(token.net)}
+                    </span>
+                  </span>
+                ) : null}
                 {token.painters > 0 ? (
                   <span className="numeric shrink-0 text-[11px]" title={`${token.painters} painters`}>
                     {token.painters}
