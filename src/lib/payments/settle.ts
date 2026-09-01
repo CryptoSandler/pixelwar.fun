@@ -1373,6 +1373,61 @@ async function verificationAttempts(
   return { count: Number(row?.count ?? 0), lastAttempt: row?.last_attempt ?? null };
 }
 
+/**
+ * The pre-flight's own limit, deliberately NOT the verifier's.
+ *
+ * THE RETRY THIS EXISTS FOR: somebody is told they need 0.004 more SOL, they
+ * top the wallet up in another tab, and they come back. That is the pre-flight
+ * working — the whole point of the check is to send them away and have them
+ * return — and a limiter tuned for "stop somebody burning RPC quota against
+ * one order" refuses it. `VERIFY_LIMITS` carries a three-second floor between
+ * attempts and a ten-per-ten-minutes cap that a person checking a balance,
+ * funding, and checking again can genuinely hit.
+ *
+ * So: five per minute per wallet, which is a person retrying and not a script,
+ * with no minimum gap at all. Funding a wallet takes longer than a minute
+ * more often than not, and this limit resets faster than that.
+ *
+ * The per-address ceiling is separate and higher: one host may legitimately
+ * carry several people, and the thing being protected is RPC quota rather
+ * than any one wallet.
+ */
+export function preflightLimits(): { perKey: number; perIp: number; windowMinutes: number } {
+  const perKey = Number.parseInt(process.env.PREFLIGHT_RATE_LIMIT_MAX ?? "", 10);
+  return {
+    perKey: Number.isInteger(perKey) && perKey > 0 ? perKey : 5,
+    perIp: 20,
+    windowMinutes: 1,
+  };
+}
+
+export async function preflightRateLimited(
+  key: string,
+  ipHash: string | null,
+): Promise<VerifyRateLimitResult> {
+  const { perKey, perIp, windowMinutes } = preflightLimits();
+
+  const byKey = await verificationAttempts("order_id", key, windowMinutes);
+  if (byKey.count >= perKey) {
+    return {
+      limited: true,
+      message: "Checked this a few times in a row. Wait a moment and try again.",
+    };
+  }
+
+  if (ipHash) {
+    const byIp = await verificationAttempts("ip_hash", ipHash, windowMinutes);
+    if (byIp.count >= perIp) {
+      return {
+        limited: true,
+        message: "Too many checks from this address just now. Wait a moment and try again.",
+      };
+    }
+  }
+
+  return { limited: false };
+}
+
 /** Whether a fresh verification attempt against this order, from this caller, should be refused. */
 export async function verifyRateLimited(
   orderId: string,

@@ -2,7 +2,7 @@ import { identify, json, NO_STORE, refuseForeignOrigin } from "../../../lib/http
 import { classifyEndpoints } from "../../../lib/payments/cluster";
 import { solanaRpcUrls } from "../../../lib/payments/config";
 import { preflight, type PreflightFailure } from "../../../lib/payments/preflight";
-import { recordVerificationAttempt, verifyRateLimited } from "../../../lib/payments/settle";
+import { preflightRateLimited, recordVerificationAttempt } from "../../../lib/payments/settle";
 import { validateAddress } from "../../../lib/tokens/addresses";
 
 export const dynamic = "force-dynamic";
@@ -88,9 +88,12 @@ export async function POST(request: Request): Promise<Response> {
   const cookie: Record<string, string> = caller.setCookie ? { "set-cookie": caller.setCookie } : {};
 
   // Two RPC calls per request against the same quota every checkout shares,
-  // so it is metered like every other path that spends it.
+  // so it is metered — but on ITS OWN limit, not the verifier's. The retry
+  // this endpoint exists to cause ("you need more SOL" → fund → come back) is
+  // exactly what the verifier's three-second floor and ten-per-ten-minutes cap
+  // would refuse. See `preflightLimits`.
   const key = `preflight:${checkedPayer.canonical}`;
-  const limited = await verifyRateLimited(key, caller.ipHash);
+  const limited = await preflightRateLimited(key, caller.ipHash);
   if (limited.limited) {
     return json(
       { error: "Checking too often. Wait a moment and try again." },

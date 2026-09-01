@@ -45,6 +45,34 @@ short is told by their own wallet that this site may be trying to rob them.
 They do not send a support message; they leave, and they tell people. A
 sentence of ours costs one RPC call and prevents that entirely.
 
+### The pre-flight here is FAIL-OPEN, and that is a decision
+
+**If the pre-flight cannot run — the RPC node is down, the request times out,
+the answer is unreadable — the payment proceeds and the wallet opens.** Only a
+definite "no" (not enough funds, or a simulation the chain rejected) stops the
+flow.
+
+**Why.** The pre-flight is a courtesy, not a control: it exists to turn
+Phantom's "may be malicious" into a sentence, and nothing about it protects
+the product. Blocking on its absence would invent an outage out of our own
+caution — a payer with a perfectly good balance, refused because OUR node was
+unreachable, on a payment that would have gone through. And Phantom simulates
+the transaction anyway: with our check skipped, the worst case is the
+behaviour we had before this endpoint existed, which is exactly the failure
+mode we are willing to fall back to.
+
+**nftraffle chose the opposite and is also right.** There the pre-flight is
+FAIL-CLOSED: no answer means no signature. The difference is what a wrong
+guess costs on each side. There a failed transaction burns a mint slot and the
+inventory is finite, so proceeding blind can cost somebody an allocation that
+cannot be handed back; here a failed transaction costs the network fee and the
+person tries again. Same mechanism, opposite default, because the consequence
+of being wrong is not symmetric.
+
+**Do not "harmonise" these two without re-reading that paragraph.** A divergence
+that was decided reads exactly like a divergence that was forgotten, which is
+why it is written down here.
+
 **If this warning appears when the pre-flight passed**, something in the
 transaction changed between the check and the signature — a stale blockhash, a
 balance spent elsewhere in another tab. Re-run the flow before suspecting
