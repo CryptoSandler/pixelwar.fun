@@ -576,6 +576,39 @@ Never imply a pixel is permanent. Overpainting is the game — the leaderboard
 counts pixels **held**, not pixels **placed**, and the copy must never suggest
 otherwise.
 
+### A refusal the screen never announced is a defect, not a message
+
+**A rule that can refuse a painter must be visible on the screen before it
+refuses anybody.** The last window is the case this was written for: turning
+`PAINT_SIDES_LOCK_MINUTES` above zero requires the countdown **"Sides lock in
+mm:ss"** in [WarClock.tsx](src/components/WarClock.tsx), shipped in the same
+batch. Never a 409 without an announcement.
+
+This is a rule about ORDER, and the order is the whole point. The mechanism
+and the announcement are separable — the mechanism shipped first, switched
+off, deliberately — and a batch that turns the setting on without building the
+countdown is not "most of the feature". It is the only version of the feature
+that is worse than nothing: a painter meets a refusal nobody warned them
+about, in a game where the refusal is invisible until it fires.
+
+**mm:ss and not hh:mm:ss**, because it is only shown once the window is close
+enough to be worth acting on. A countdown to something four hours away is
+chrome; §5's clock already carries the war's own deadline.
+
+**Why a countdown rather than a sentence.** "Sides close an hour before the
+end" is a promise about how wars work, and the setting is per-deployment, so
+it is a promise the product cannot keep on its own. A countdown states a fact
+about the war in front of you and claims nothing about the next one — the
+same distinction the rest of this section draws between what is true now and
+what is permanent.
+
+**This one cannot be fully enforced by a test**, in the same way and for the
+same reason as I2: a test can assert this paragraph still exists, and
+`copy-announcement.test.ts` does. It cannot see the value of an environment
+variable in a deployment. **That the countdown ships with the switch is a rule
+reviewers enforce**, and the operator-facing half of it is in
+[docs/operations.md](docs/operations.md).
+
 ---
 
 ## 9. Accessibility

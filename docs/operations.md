@@ -67,16 +67,29 @@ and it is checked rather than argued.
 Its second effect is the one that pays for it: the deadline pushes
 recruitment EARLIER. The armies form before the window or they do not form.
 
-**THE OPEN DECISION, and it is one-way once made: does a war ANNOUNCE the
-lock?** "Sides close an hour before the end" is a promise in copy that cannot
-be withdrawn quietly after the first war. Not announcing it is worse — a
-painter meets a 409 nobody warned them about. The neutral surface, honest in
-both futures, is a *countdown* in the paint bar inside a warning window
-("Sides lock in 04:12"): a countdown is a fact about this war, not a promise
-about the next one. **That surface is deliberately not built**, because
-building the announcement would decide the question. Turn the setting on and
-the refusal works today, unannounced; decide to announce and the countdown is
-the batch that follows.
+**TURNING THIS ON REQUIRES THE COUNTDOWN, IN THE SAME BATCH. This is a
+condition on the setting, not a suggestion.**
+
+Raising `PAINT_SIDES_LOCK_MINUTES` above zero is only allowed together with
+the **"Sides lock in mm:ss"** countdown in `components/WarClock.tsx`, shipped
+in the same batch. **Never a 409 without an announcement.** DESIGN.md §8
+carries the design half of this rule and a test asserts both halves are still
+written down.
+
+The question this settles was left open when the mechanism shipped: does a war
+announce the lock? It does. "Sides close an hour before the end" was rejected
+as the wording — it is a promise about how wars work, and the setting is
+per-deployment, so it is a promise the product cannot keep on its own. A
+countdown states a fact about the war in front of the painter and claims
+nothing about the next one.
+
+**What that means for an operator, concretely.** The setting is not a knob you
+may turn on a live deployment today, because today there is no countdown to
+turn on with it. It is a knob that becomes available the day the countdown
+ships. Until then, `0` is not a placeholder — it is the only correct value,
+and it is set explicitly in Production and Preview rather than left to the
+code's default, so that reading the environment answers the question instead
+of requiring somebody to go and read `config.ts`.
 
 **A garbage value reads as OFF, not as some lock** — a typo must not switch on
 a rule about what winning means. See `sidesLockMinutes` in `lib/config.ts`.
