@@ -5,15 +5,15 @@ import { activityBounds, openingViewport } from "../lib/canvas/activity";
 import type { BoardImage } from "../lib/canvas/board-image";
 import { CHROME_SURFACES } from "../lib/wars/chrome";
 import {
+  ZOOM_LIMITS,
   type Viewport,
   clampToBoard,
   isTap,
   panBy,
   pixelAt,
+  viewportFromParams,
   zoomAt,
 } from "../lib/canvas/viewport";
-
-const ZOOM_LIMITS = { min: 1, max: 48 };
 
 /**
  * Zoom at which the pixel grid appears. DESIGN.md §4: below this the grid is
@@ -27,11 +27,22 @@ export function Board({
   version,
   onPaint,
   onHover,
+  onView,
 }: {
   image: BoardImage;
   version: number;
   onPaint: (x: number, y: number) => void;
   onHover: (point: { x: number; y: number } | null, scale: number) => void;
+  /**
+   * Where the view is now, for anything that needs to name this place — the
+   * readout's "copy link" is the only caller today.
+   *
+   * Separate from `onHover` because hover is a POINTER fact and this is a
+   * VIEW fact. On a touchscreen there is no hover at all, and a link built
+   * from the hovered pixel would be dead on exactly the devices people share
+   * links from.
+   */
+  onView: (view: Viewport) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // The opening viewport is decided once, from the first board that arrives,
@@ -62,6 +73,13 @@ export function Board({
   // every screen-to-board conversion drifts by the difference.
   const [resizeTick, setResizeTick] = useState(0);
 
+  // Reported rather than lifted: the viewport is this component's own state,
+  // and moving it to the parent would put every pan and pinch through a
+  // re-render of the whole screen. The parent gets a copy when it changes.
+  useEffect(() => {
+    onView(viewport);
+  }, [viewport, onView]);
+
   // Observe the canvas element itself, not the window: a sidebar opening or
   // closing resizes this box without ever firing a window resize event.
   useEffect(() => {
@@ -86,13 +104,40 @@ export function Board({
     const canvas = canvasRef.current;
     if (!canvas || canvas.clientWidth === 0) return;
     framed.current = true;
+
+    /**
+     * A LINK WINS OVER THE AUTO-FRAME, and it wins HERE rather than anywhere
+     * else, because this is the one moment the view is decided. Framing on
+     * the activity is a guess about what somebody wants to look at; a link is
+     * that person telling us. It runs inside the same `framed` latch, so a
+     * link cannot be re-applied two seconds later and yank the view back from
+     * somebody who has already started panning.
+     *
+     * READ FROM `window.location`, not from `useSearchParams`. The board is
+     * client-only and this effect never runs on the server, so the hook would
+     * buy nothing and cost a Suspense boundary around a component that has no
+     * business having one.
+     *
+     * A malformed or off-board link falls through to the ordinary framing —
+     * `viewportFromParams` returns null and the board opens as it always did,
+     * rather than showing an error about a URL nobody typed on purpose.
+     */
+    const asked =
+      typeof window === "undefined"
+        ? null
+        : viewportFromParams(
+            Object.fromEntries(new URLSearchParams(window.location.search)),
+            image,
+          );
+
     setViewport(
       clampToBoard(
-        openingViewport({
-          bounds: activityBounds(image.slots, image.width, image.height),
-          board: image,
-          screen: { width: canvas.clientWidth, height: canvas.clientHeight },
-        }),
+        asked ??
+          openingViewport({
+            bounds: activityBounds(image.slots, image.width, image.height),
+            board: image,
+            screen: { width: canvas.clientWidth, height: canvas.clientHeight },
+          }),
         image,
       ),
     );

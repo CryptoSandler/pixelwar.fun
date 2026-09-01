@@ -208,5 +208,10 @@ function FinishedBoard({ war }: { war: FinishedWar }) {
     );
   }
 
-  return <Board image={image} version={1} onPaint={() => {}} onHover={() => {}} />;
+  // No interaction on a finished board, so all three callbacks are no-ops.
+  // The deep link still works: `Board` reads the URL itself, so a link to a
+  // place in a war frames that place on the war's own result.
+  return (
+    <Board image={image} version={1} onPaint={() => {}} onHover={() => {}} onView={() => {}} />
+  );
 }

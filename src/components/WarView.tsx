@@ -10,6 +10,7 @@ import { Scoreboard } from "./Scoreboard";
 import type { ProxyCluster } from "../lib/payments/cluster";
 import { Register } from "./Register";
 import { WalletButton } from "./WalletButton";
+import type { Viewport } from "../lib/canvas/viewport";
 import { leaderOf } from "../lib/canvas/standings";
 import { SwearOath } from "./SwearOath";
 import { WarClock } from "./WarClock";
@@ -98,6 +99,9 @@ export function WarView({
   const [colourSlot, setColourSlot] = useState<number>(initialTokens[0]?.colourSlot ?? 1);
   const [cooldownUntil, setCooldownUntil] = useState<string | null>(null);
   const [hovered, setHovered] = useState<{ x: number; y: number } | null>(null);
+  // Where the board is looking, so the readout can offer a link back to it.
+  // Null until the first board has framed itself.
+  const [view, setView] = useState<Viewport | null>(null);
   // The last pixel the pointer was actually over — distinct from `hovered`,
   // which the HUD needs to go blank the instant the pointer leaves the
   // canvas. `target` does NOT clear on pointer-leave: it is what the paint
@@ -105,7 +109,6 @@ export function WarView({
   // moment the mouse moves off the canvas toward the button, making it
   // unclickable by mouse. `target` survives that trip.
   const [target, setTarget] = useState<{ x: number; y: number } | null>(null);
-  const [scale, setScale] = useState(3);
   const [warEnded, setWarEnded] = useState(false);
   // Seeded from the war's own status: a war the server already knows is
   // scheduled has not started regardless of what any earlier paint attempt
@@ -281,9 +284,15 @@ export function WarView({
     [selectedId, colourSlot, layer, tokens, warEnded, warNotStarted, inFlight, war.slug, applyLocal],
   );
 
-  const handleHover = useCallback((point: { x: number; y: number } | null, nextScale: number) => {
+  // THE ZOOM NO LONGER COMES THROUGH HERE. It used to: `handleHover` carried
+  // the scale, so the readout's "3.0x" was whatever the last pointer move
+  // reported. That was invisible until deep links arrived — a link that opens
+  // the board at 20x fires no pointer event, so the readout sat on its
+  // initial 3.0 until somebody happened to move the mouse, telling them a
+  // zoom they were demonstrably not at. `view` is reported by the board
+  // itself whenever the viewport changes, which is the honest source.
+  const handleHover = useCallback((point: { x: number; y: number } | null) => {
     setHovered(point);
-    setScale(nextScale);
     if (point) setTarget(point);
   }, []);
 
@@ -491,11 +500,17 @@ export function WarView({
         {/* Margins in service of the canvas: the board takes every pixel the
             rail does not, and is the only thing that grows. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 p-3">
-          <WarHud hovered={hovered} scale={scale} />
+          <WarHud hovered={hovered} view={view} board={war} />
 
           <div className="board-frame relative min-h-0 flex-1">
             {image ? (
-              <Board image={image} version={version} onPaint={paintAt} onHover={handleHover} />
+              <Board
+                image={image}
+                version={version}
+                onPaint={paintAt}
+                onHover={handleHover}
+                onView={setView}
+              />
             ) : (
               /* Full ink, not muted. The board ground carries MUTED_INK_INVERSE
                  at 6.54:1, under DESIGN.md §9's body floor of 7 — see
