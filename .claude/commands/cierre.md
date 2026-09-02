@@ -56,6 +56,29 @@ Five rules govern this whole file:
   Substituting an explicit ref forever leaves one repository where a documented check can
   never answer, which is the condition this rule exists to refuse.
 
+**A shared file in ANOTHER repository is patched in a throwaway worktree, never in its
+checkout.** `~/proyectos/<repo>` is somebody's working tree: it may hold their uncommitted
+work, it is on whatever branch they are on, and a commit there lands on that branch.
+
+```bash
+W="$(mktemp -d)/<repo>-rules"
+git -C ~/proyectos/<repo> worktree add "$W" main
+# edit in "$W", read the diff, commit, push
+git -C ~/proyectos/<repo> worktree remove "$W"
+```
+
+Measured 2026-09-01: a session patching shared rules committed `d1e91e0` into a checkout
+another session was working in, on *that* session's branch. It became their `HEAD`, they had
+not made it, and it broke `npm run build` on a branch whose author never ran the gates on it
+— found when their own close failed for a reason that was not theirs.
+
+`main` explicitly, not whatever `HEAD` is. Remove the worktree when done. **Every guard above
+still applies inside it** — diff read per path, one commit per repository, `+0000` checked
+before the push. A worktree changes where the work happens, not what the close owes.
+
+If a foreign commit is already at the tip of your branch, it is not yours to rewrite: keep
+it, fix what it broke in a commit of your own that says so, and tell whoever wrote it.
+
 ## 1. What changed
 
 ```bash
@@ -286,6 +309,29 @@ the offsets are history other people have fetched and the fix becomes a force-pu
 that arrives carrying published `-0300` is left alone and reported.
 
 **And the rewrite goes in the report.** It is invisible afterwards, and the shas moved.
+
+**A documentation commit does not spend a deployment.** Three defences, because any one is
+forgettable:
+
+- **`[vercel skip]` in the message** of any commit whose diff stays inside `docs/`,
+  `.claude/`, a rules file or an evidence directory. Vercel reads it and builds nothing.
+- **The project skips the build itself**, for whoever forgets — every project on the team
+  carries an Ignored Build Step set 2026-09-02:
+
+      git diff --quiet HEAD^ HEAD -- ":(exclude)docs" ":(exclude).claude"
+
+  Exit 0 skips. A missing `HEAD^` builds, which is the safe direction. It covers `docs/` and
+  `.claude/` only: a root-level `DESIGN.md` or `DECISIONES.md` still builds, and `[vercel
+  skip]` is what covers those.
+- **One push per batch, never one per commit.** Ten commits pushed together are one
+  deployment; pushed one at a time they are ten. Group the commits, run the gates, push once
+  at the end.
+
+Measured 2026-09-02: the team's **100 deployments/day** — hobby plan, shared by all six
+projects — ran out on rule-and-documentation commits (26 milliondollarpage, 22 drakes, 20
+pixelwar, 17 kolscanhispano, 8 nftraffle, 7 bidoor-lol). Nothing could ship for 24 hours.
+The quota is invisible until you ask for a deployment: the project's flags all read clean.
+`~/.claude/GATES.md` has the incident.
 
 ## 7. Prove the push landed
 
