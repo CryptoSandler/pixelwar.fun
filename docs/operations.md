@@ -54,7 +54,7 @@ cooldown, not scoring, not the deadline.
 whole reason the setting has this shape.** A war's ending is most of why
 anybody is watching, and every obvious way to make the final minutes count
 for more *concentrates paint* at the moment concurrency peaks — which is
-exactly what "The write ceiling is ~15 paints per second, per war" below says
+exactly what "The write ceiling, and the co-location that lifted it" below says
 this system cannot absorb. A spike there does not degrade, it queues on one
 row lock, and the war stalls for everybody at the only moment that matters.
 
@@ -162,7 +162,7 @@ with its primary key. So:
 
 **Neon's `branch_logical_size_limit` on this project is 512 MB**, and every
 branch — `production`, `tests`, `preview` — carries its own copy. At the
-measured ceiling of ~15 paints per second a saturated 72-hour war is about 3.9
+pre-co-location ceiling of ~15 paints per second a saturated 72-hour war was about 3.9
 million events, which does not fit. A realistic war is far smaller, but the
 point stands: **this table is the only one in the schema that can fill the
 database on its own, and nobody owns it.**
@@ -313,13 +313,16 @@ scratch:**
 Both are decisions about how fast a human must hear, and that number is not
 knowable until real money has been through the queue once.
 
-## The write ceiling is ~15 paints per second, per war
+## The write ceiling, and the co-location that lifted it
 
-> **The number was ~40 until 2026-09-01.** It was a projection resting on an
-> assumed 5 ms round trip, and the round trip is 14-16 ms because the
-> functions and the database are in different regions. See "The number that
-> matters in production" below for the measurement and the method. The shape
-> of the ceiling did not change; only the constant did.
+> **The number has been ~40, then ~15, and is now higher again — twice for the
+> same reason.** ~40 was a projection resting on an assumed 5 ms round trip.
+> Measuring it on 2026-09-01 gave 15-16 ms and a ceiling of ~12-15/s, because
+> the functions were in `iad1` and the database in `us-east-2`. Moving the
+> functions to `cle1` the same day removed that hop. See "The number that
+> matters in production" below for both measurements and the method. **The
+> shape of the ceiling never changed; only the constant did, and it is a
+> property of where the two halves are sitting rather than of the code.**
 
 **Architectural rather than a setting.** Every paint takes
 a row lock on its war — `UPDATE wars SET last_seq = last_seq + 1` — and holds
@@ -369,8 +372,30 @@ would trade a throughput ceiling for silently lost pixels.
 > of it. **Replace it with the first real war** — see "How the first real war
 > replaces this number" below.
 
-**The ceiling is roughly 15 paints per second per war, not 40.** The 40 was
-wrong, the reason is known, and it is worth more than the number.
+**Two measurements, before and after co-locating the functions with the
+database, taken the same day with the same script against production.**
+
+| | Functions in `iad1` (us-east-1) | Functions in `cle1` (us-east-2) |
+| --- | --- | --- |
+| Probe A, 1 free query | 16.25 ms | 3.33 ms, then 0.54 ms |
+| Probe B, 4 queries / 4 | 15.52 ms | 2.45 ms, then 1.84 ms |
+| Round trip | **15-16 ms** | **about 2 ms** |
+| Ceiling `1 / (5 × RTT)` | **12-13 / s** | **roughly 80-110 / s** |
+
+**The before column is solid and the after column is not, and the reason is
+the method rather than the network.** Before, one round trip was 16 ms against
+a per-sample jitter of ~15 ms, so both probes resolved it and agreed to 0.3%.
+After, one round trip is ~2 ms against the same jitter, and probe A — which
+divides a single query difference by 1 — returned 3.33 ms and then 0.54 ms on
+consecutive runs, and once came out BELOW probe B, which cannot happen if
+either is measuring what it claims. Probe B divides by four and stayed within
+0.6 ms across both runs, so it is the number to quote.
+
+**What is safe to say:** the cross-region hop is gone, the round trip fell by
+roughly a factor of six, and the ceiling is now several times higher than the
+paint path is ever likely to need. **What is not safe to say is which number
+between 50 and 110 it is** — that is below the resolution of a measurement
+taken from a laptop in São Paulo, and it needs the first real war.
 
 **What was measured.** Two endpoints on one deployed preview, same region,
 same session, differing only in how many sequential database round trips they
@@ -390,12 +415,13 @@ query cost, so B ≥ A by construction; that they are equal says server-side
 execution is negligible beside the network, which is the same thing the
 `EXPLAIN` says.
 
-**Interval, and it is a spread rather than a confidence interval.** Two runs
-80 and 60 samples deep, interleaved one endpoint at a time so drift lands on
-both series: run medians of 13.8 ms and 16.1 ms, p25/p75 spread 9.4–18.1 ms.
-So the round trip is **14–16 ms** and the ceiling `1 / (5 × RTT)` is
-**12–15 paints per second per war** — about 400 active painters on a
-30-second cooldown, not the 1,200 previously claimed.
+**Interval, and it is a spread rather than a confidence interval.** Runs of
+60, 80 and 220 samples, interleaved one endpoint at a time so drift lands on
+every series equally. Before the move: run medians of 13.8, 15.5 and 16.1 ms
+with a p25/p75 spread of 9.4–18.6 ms. After: probe B medians of 2.45 and
+1.84 ms, with a spread that crosses zero — which is the honest signal that the
+difference is now at the floor of what this method can see, not that the round
+trip is sometimes negative.
 
 **Why the old number was three times too high, and this is the actionable
 part.** It assumed a 5 ms round trip, inferred from `/api/leaderboard`
@@ -405,11 +431,25 @@ see what the difference method sees: **the functions run in `iad1`
 Every one of those five round trips crosses regions. 14 ms is the ordinary
 figure for that hop, and the measurement matches it almost exactly.
 
-**So the first lever is not code.** Co-locating the functions with the
-database — moving either side — attacks all five round trips at once, and
-nothing else on the list does. That is a change to make deliberately and
-measure, not a thing to assume; it is recorded here as the first thing to try
-rather than as a decision already taken.
+**So the first lever was not code, and it was pulled.** Co-locating the
+functions with the database attacks all five round trips at once, and nothing
+else on the revisit list does. `vercel.json` now pins `regions: ["cle1"]`,
+which is us-east-2 — the same AWS region as the Neon project. The before and
+after are the table above, measured rather than assumed.
+
+**KEEP THE TWO TOGETHER IF EITHER MOVES.** The whole gain is that they are in
+one region. Moving the Neon project, or dropping the `regions` pin from
+`vercel.json` so functions fall back to the default, silently restores a 16 ms
+hop and a ceiling six times lower — with no error and no failed deploy.
+**`function-region.test.ts` is what stops it being silent**: it asserts the pin
+is present and equal to the region the database is in, and it asserts this
+paragraph still explains why, because a three-word pin nobody can find a reason
+for is a pin somebody deletes as clutter. The live tell is `x-vercel-id` —
+its second field is the function region, and it must be `cle1`.
+
+**The rule is the pairing, not the string.** If the Neon project ever moves,
+the pin and that test move with it in the same batch. Neither is "cle1
+forever"; both are "the functions are wherever the database is".
 
 **Counting caveat, in the honest direction.** `1 / (5 × RTT)` is this
 document's own formula and counts the five statements after the sequence
