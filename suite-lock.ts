@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { closeSync, constants, ftruncateSync, openSync, readFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 /**
  * One measuring suite at a time, on this whole machine.
@@ -69,7 +70,60 @@ const WAIT_CAP_MS = 45 * 60 * 1_000;
 /** Fast enough to start promptly, slow enough not to spin. */
 const POLL_MS = 5_000;
 
-export type Holder = { repo: string; pid: number; startedAt: string };
+export type Holder = { repo: string; cwd: string; pid: number; startedAt: string };
+
+/**
+ * Which REPOSITORY this run belongs to — not which directory it is sitting in.
+ *
+ * `basename(process.cwd())` was the first answer and it is wrong in the one
+ * case that matters most: a throwaway worktree reports its own folder. Measured
+ * 2026-09-02, a run in `~/proyectos/cinders-b22` announced itself as holding
+ * the lock for `cinders-b22`, and the reader of that message has no way to know
+ * that is `drakes.fun`. A lock that names the wrong project sends somebody
+ * looking in the wrong repository, which is the exact failure the name is there
+ * to prevent.
+ *
+ * THE ORIGIN REMOTE IS THE ANSWER, because it is the same string from every
+ * checkout and every worktree of one repository — which is also why two
+ * checkouts of the same project correctly report the same name: they ARE the
+ * same project, and the `cwd` beside it says which copy.
+ *
+ * The fallbacks descend rather than guess: the MAIN working tree (a worktree's
+ * `--git-common-dir` points at the real repository's `.git`, so its parent is
+ * that repository's directory), and finally the directory, which is what a
+ * folder with no git at all can honestly say.
+ */
+export function repoNameFrom(
+  remote: string | null,
+  gitCommonDir: string | null,
+  cwd: string,
+): string {
+  const fromRemote = (remote ?? "").trim().replace(/\/+$/, "");
+  if (fromRemote !== "") return basename(fromRemote).replace(/\.git$/, "");
+
+  const common = (gitCommonDir ?? "").trim();
+  // `.git` in the main working tree, `<main>/.git/worktrees/<name>` in a
+  // worktree — `--git-common-dir` gives the first even from inside the second.
+  if (common.endsWith(".git")) return basename(dirname(common));
+
+  return basename(cwd);
+}
+
+function git(args: string[]): string | null {
+  try {
+    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return null;
+  }
+}
+
+export function repoName(): string {
+  return repoNameFrom(
+    git(["config", "--get", "remote.origin.url"]),
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    process.cwd(),
+  );
+}
 export type SuiteLock = { release: () => void; skipped: boolean };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -103,7 +157,8 @@ function describe(holder: Holder | null): string {
   const since = Number.isNaN(Date.parse(holder.startedAt))
     ? holder.startedAt
     : `${Math.round((Date.now() - Date.parse(holder.startedAt)) / 1_000)}s ago`;
-  return `${holder.repo} (pid ${holder.pid}, started ${since})`;
+  const where = holder.cwd && basename(holder.cwd) !== holder.repo ? ` in ${holder.cwd}` : "";
+  return `${holder.repo}${where} (pid ${holder.pid}, started ${since})`;
 }
 
 /**
@@ -125,7 +180,7 @@ export async function takeSuiteLock(
   const capMs = options.capMs ?? WAIT_CAP_MS;
   const pollMs = options.pollMs ?? POLL_MS;
   const announce = options.announce ?? ((message: string) => console.log(message));
-  const repo = options.repo ?? basename(process.cwd());
+  const repo = options.repo ?? repoName();
 
   const flags = lockFlags();
   if (flags === null) {
@@ -175,7 +230,15 @@ export async function takeSuiteLock(
     }
 
     // Ours. Say who we are, for whoever waits behind us.
-    const holder: Holder = { repo, pid: process.pid, startedAt: new Date().toISOString() };
+    const holder: Holder = {
+      repo,
+      // The checkout, beside the repository, because two worktrees of one
+      // project are one repository and two directories, and the reader needs
+      // both to go and look.
+      cwd: process.cwd(),
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+    };
     ftruncateSync(fd, 0);
     writeSync(fd, JSON.stringify(holder), 0);
 
