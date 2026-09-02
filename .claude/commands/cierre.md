@@ -310,24 +310,42 @@ that arrives carrying published `-0300` is left alone and reported.
 
 **And the rewrite goes in the report.** It is invisible afterwards, and the shas moved.
 
-**A documentation commit does not spend a deployment.** Three defences, because any one is
-forgettable:
+**A documentation commit does not spend a deployment.** Two defences, because the third one
+turned out not to exist:
 
-- **`[vercel skip]` in the message** of any commit whose diff stays inside `docs/`,
-  `.claude/`, a rules file or an evidence directory. Vercel reads it and builds nothing.
-- **The project skips the build itself**, for whoever forgets — every project on the team
-  carries an Ignored Build Step set 2026-09-02:
+- **The project skips the build itself. This is the defence.** Every project carries an
+  Ignored Build Step:
 
       git diff --quiet HEAD^ HEAD -- ":(exclude)docs" ":(exclude).claude" ":(exclude,glob)*.md"
 
   Exit 0 skips. A missing `HEAD^` builds, which is the safe direction. `,glob` is
   load-bearing: without it `*` matches `/` and the pattern would exclude every `.md` at every
-  depth instead of the repository's root-level ones. Verified — `9c1518c` (DECISIONES.md +
-  docs/padron.md) SKIP, `.claude/`-only SKIP, a commit touching `src/` BUILD. A `.md` living
-  under `src/` or `e2e/` still builds; `[vercel skip]` covers that by hand.
+  depth instead of the repository's root-level ones.
+
+  **The excluded set is aligned with `.vercelignore`, where the repository has one.** A
+  directory that is never uploaded cannot change what is served, so it belongs in the
+  exclusions — `drakes` therefore also excludes `scripts` and `migrations`. **A repository
+  with no `.vercelignore` uploads everything**, so nothing extra is provably unserved and the
+  exclusions stay as above. Widening them without that file is guessing, and a skipped build
+  that should have run ships nothing while looking like success.
+
+- **~~`[vercel skip]` in the message.~~ It does not work.** Measured 2026-09-02 in `drakes`:
+  `577a5dd` carried the marker, touched only `docs/` and `scripts/`, and **built anyway** —
+  a real `READY` deployment. What had been skipping builds all along was the ignore command.
+  The marker is fine as a note to a human about what a commit contains; **no close may treat
+  it as the reason a build will not run.** The only thing that decides is the ignore command,
+  and the only way to know is to look at the deployment afterwards.
+
 - **One push per batch, never one per commit.** Ten commits pushed together are one
   deployment; pushed one at a time they are ten. Group the commits, run the gates, push once
   at the end.
+
+**Verify against two real commits, never one.** One that should skip and one that should
+build: comparing a docs-only commit against another docs-only commit proves only that the
+command agrees with itself. Measured for this repository on 2026-09-02:
+
+    SKIPS   681750f (.claude/ only)
+    BUILDS  98a45cb (src/)
 
 Measured 2026-09-02: the team's **100 deployments/day** — hobby plan, shared by all six
 projects — ran out on rule-and-documentation commits (26 milliondollarpage, 22 drakes, 20
