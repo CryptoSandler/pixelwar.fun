@@ -99,6 +99,77 @@ first real war. Watch the last hour of one and see whether the ending needed
 help at all — the momentum signal in the sidebar may already be doing this
 job, and if it is, the honest setting stays `0`.
 
+## No replay is served, and `pixel_events` is not a publishable artifact
+
+**Decided 2026-09-01. Nothing serves a replay, timelapse or scrubber, and
+`pixel_events` must never be handed to a client as one.** DESIGN.md §5a
+carries the reasoning; this is the operator-facing half.
+
+**What an operator needs to know in one sentence:** the current board is
+moderated, and the event log is not. `revertRegion` clears `pixels` and
+*appends* clearing events; it never deletes the original ones. So the log
+still contains every pixel that was taken down, and anything that renders the
+log renders those pixels again.
+
+**This binds exports too, not just a UI.** Dumping `pixel_events` for a
+partner, an announcement, an NFT of the board's history or a "best wars of the
+season" reel is the same act as building the player. The rule is about the
+data leaving, not about the component.
+
+**A war with zero moderation clears is the only honest exception anybody has
+found, and it is NOT in force.** `count(*) FILTER (WHERE colour_slot = 0)`
+tells the two apart. It is written down so it does not have to be rediscovered;
+adopting it would mean promising that a war with a single clear never gets a
+replay, and that promise has not been made.
+
+## `pixel_events` has no retention, and this is the pending decision
+
+**Nothing prunes `pixel_events`. Not the reconcile sweep, not a migration, not
+a job — verified by grep across `src/`, not assumed.** The spec says it is
+"append-only and never pruned while a war is live" and is silent on afterwards,
+which is how it ended up with no owner at all.
+
+**This section is a proposal with a price, not an intention, and nothing here
+is implemented.**
+
+| Question | Proposed answer |
+| --- | --- |
+| Owner | The reconcile sweep, `/api/cron/reconcile`, beside `pruneOathNonces` and `pruneTokenSnapshots` — the two prunes it already runs, for the reason its own comment gives: *"a table that only grows is a slow leak"*. |
+| What is pruned | `pixel_events` for a war that has ended **and can no longer be revived**. Never for a live war: the diff protocol reads this table. |
+| When | 30 days after `ended_at`, which is also the proposed revive horizon. |
+| What survives | `pixels` — the final board — and `token_pixel_counts`. The result screen reads those, so pruning the log does not cost the finished board or the standings. |
+
+**The blocker, and it is the reason this is a decision rather than a task.**
+`reviveWar` accepts any ended war, with no horizon, forever. "After the war can
+no longer be revived" is therefore not a condition that exists yet — it has to
+be *created*, and creating it is a product decision: after N days an ended war
+is final and an operator can no longer bring it back. Pruning before that
+horizon exists would delete the history of a war somebody may still revive,
+and the diff protocol would then serve a board whose log has holes.
+
+**The price, with the arithmetic shown.** Measured on the preview branch:
+1,868 rows occupy 835 KB all-in, 447 bytes per row — inflated, because page
+overhead dominates a table that small. At scale the row is nearer 190 bytes
+with its primary key. So:
+
+| Events in one war | Storage |
+| --- | --- |
+| 100,000 | 19 – 45 MB |
+| 1,000,000 | 190 – 450 MB |
+
+**Neon's `branch_logical_size_limit` on this project is 512 MB**, and every
+branch — `production`, `tests`, `preview` — carries its own copy. At the
+measured ceiling of ~15 paints per second a saturated 72-hour war is about 3.9
+million events, which does not fit. A realistic war is far smaller, but the
+point stands: **this table is the only one in the schema that can fill the
+database on its own, and nobody owns it.**
+
+**What it costs to defer:** nothing until the first busy war, and then it is an
+incident rather than a task — a full branch is a database that refuses writes,
+which means it refuses paint. **What it costs to decide:** one product call on
+the revive horizon, after which the prune is ten lines beside two that already
+exist.
+
 ## Ban terms: how long is a ban, by default
 
 **The admin panel offers a fixed term (24 hours) and never writes a ban with

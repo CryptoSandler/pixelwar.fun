@@ -779,10 +779,22 @@ GitHub repository and the Vercel environment.
 ## 17. Deferred
 
 EVM chains and entry by burn; card payments; accounts; passkeys as the
-anti-sybil upgrade; timelapse and replay, which `pixel_events` already
-supports; alliances between tokens; an NFT or an X bot for results; tiered or
-auctioned colour pricing; larger canvases and simultaneous wars; seasons with a
-historical ranking; Solana Mobile Wallet Adapter and deep-link wallets; sound.
+anti-sybil upgrade; alliances between tokens; an NFT or an X bot for results;
+tiered or auctioned colour pricing; larger canvases and simultaneous wars;
+seasons with a historical ranking; Solana Mobile Wallet Adapter and deep-link
+wallets; sound.
+
+**CORRECTED 2026-09-01 — timelapse and replay were on the list above, with the
+words "which `pixel_events` already supports". That was true when this was
+written and is false now, and the difference matters.** `revertRegion` was
+added after this document: it clears the board by `DELETE`ing from `pixels`
+and *appending* clearing events, so `pixel_events` still holds every pixel a
+moderator removed. A replay generated from that log republishes exactly what
+moderation took down. Replay is now a decided NO with a rule attached — see
+DESIGN.md §5a, "There is no replay, and it may never be built from
+`pixel_events`". This line is corrected in place rather than deleted, because
+somebody reading only the spec would otherwise build the thing it once
+authorised.
 
 ## 18. File layout
 

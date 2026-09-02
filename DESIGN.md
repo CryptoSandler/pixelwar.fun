@@ -309,6 +309,45 @@ renderer. The zoom, pan, pinch and device-pixel grid all live there already
 and a copy would drift. The server refuses paints on an ended war regardless;
 this only stops the click being offered.
 
+### There is no replay, and it may never be built from `pixel_events`
+
+**Decided 2026-09-01. A replay, timelapse or scrubber of a war is not built,
+and if one is ever built it may NOT be generated from raw `pixel_events`.**
+
+**The reason is moderation, and it is a fact about today's code rather than a
+risk.** `revertRegion` in [moderation.ts](src/lib/moderation.ts) does not
+delete history. It `DELETE`s from `pixels` — the current board — and then
+*appends* clearing events with `colour_slot = 0` and `war_token_id = NULL`.
+The original events are still there, in order, with their timestamps. Nothing
+anywhere in `src/` ever deletes from `pixel_events`.
+
+So a replay rendered from that log **redraws every pixel a moderator removed,
+in sequence, on a public page, and then shows it being wiped.** The board is
+clean; the log is not. The worked example this project already uses for what
+gets removed is in `abuse.ts` — *"whether that picture is a logo or a swastika
+is a question only eyes answer"*. That is the thing that would play back.
+
+**This overrules the spec, which is stale on exactly this point.** Section 17
+of [the spec](docs/superpowers/specs/2026-08-24-pixelwar-design.md) listed
+"timelapse and replay, which `pixel_events` already supports" as deferred
+work. That was true on 2026-08-24 and `revertRegion` is later. It is corrected
+there rather than left to be found by whoever builds this.
+
+**The only honest way out that anybody has found is recorded, NOT adopted.**
+A war with no moderation clears at all has a log that matches its board, and
+`count(*) FILTER (WHERE colour_slot = 0)` distinguishes them in one line. That
+is written down so the next person does not have to rediscover it — it is
+**not** a rule, it is not a promise, and nothing is gated on it today. The
+alternatives were both rejected: skipping every event in a moderated rectangle
+also erases innocent paint and makes the replay lie about what happened, and
+replaying everything publishes what was removed.
+
+**What a test can hold, and what it cannot.** `no-replay.test.ts` asserts this
+paragraph still exists, that the spec's line stays corrected, and that no
+replay route or player component has appeared. It cannot judge whether some
+future thing is "a replay". **That is a rule reviewers enforce**, like I2 and
+like the announcement rule in §8.
+
 ## 6. Motion
 
 Motion is a sprite, not an animation. Steps, not curves.
