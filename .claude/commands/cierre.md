@@ -173,6 +173,44 @@ survives in the public history. A wrong author or a present trailer is fixed wit
 `git commit --amend --reset-author --no-verify` (or `git rebase` for more than one commit)
 *before* the push, never after.
 
+**Every commit about to be published is stamped `+0000` — checked, not assumed.** The
+habit (`TZ=UTC git commit`) is a thing to remember, and remembering is what it stopped
+doing: four commits reached a shared `main` on 2026-09-02 stamped `-0300` from a session
+that had the rule and did not apply it. Verify the upstream can answer first, then read the
+dates **unpiped** — rule five:
+
+```bash
+git rev-parse --abbrev-ref @{u}                        # must name a branch, not fail
+git log origin/<branch>..HEAD --format='%h %ai | %ci'  # read every line yourself
+```
+
+**Both dates, because git stamps two.** An author offset and a committer offset, and they
+part company routinely — a rebase or an `--amend` rewrites one and leaves the other. A check
+that reads only `%ad` passes a commit carrying local time in `%cd`.
+
+If a line is not `+0000`, fix it **before** the push. One commit:
+
+```bash
+GIT_COMMITTER_DATE="@$(git log -1 --format=%ct) +0000" \
+  git commit --amend --no-edit --date="@$(git log -1 --format=%at) +0000"
+```
+
+Several:
+
+```bash
+git rebase origin/<branch> --exec 'GIT_COMMITTER_DATE="@$(git log -1 --format=%ct) +0000" git commit --amend --no-edit --date="@$(git log -1 --format=%at) +0000"'
+```
+
+`@<epoch> +0000` and never a formatted date: the epoch *is* the instant, so this changes the
+offset and moves nothing in time. Rehearsed on a scratch repository before being written
+down — `+0900` and `-0300` both became `+0000` with the epoch unchanged.
+
+**Never on a commit already published.** The window is exactly "local and unpushed"; past it
+the offsets are history other people have fetched and the fix becomes a force-push. A branch
+that arrives carrying published `-0300` is left alone and reported.
+
+**And the rewrite goes in the report.** It is invisible afterwards, and the shas moved.
+
 ## 7. Prove the push landed
 
 ```bash
