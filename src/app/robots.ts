@@ -33,6 +33,17 @@ import type { MetadataRoute } from "next";
  * TO LAUNCH: change `disallow` to `allow` here, drop the `robots` block from
  * `metadata` in `layout.tsx`, and drop the `X-Robots-Tag` entry from
  * `next.config.ts`. All three, or the site stays invisible while looking open.
+ *
+ * **BUT NOT YET, AND THAT IS THE PART THIS COMMENT USED TO BE MISSING.** For
+ * the whole life of the project this file said exactly HOW to open the doors
+ * and nothing whatever about WHEN, so "are we ready" had no answer anybody
+ * could check and the lever had no preconditions beside it.
+ *
+ * They are now in `docs/launch.md`, in two columns: what has to be true, and
+ * what the owner has to do about it. **Read it before touching the three
+ * lines above.** The first entry is the one nothing in this repository can
+ * discharge — a dress rehearsal on production with real money, which has
+ * never been run.
  */
 export default function robots(): MetadataRoute.Robots {
   return {
