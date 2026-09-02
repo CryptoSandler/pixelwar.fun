@@ -2,6 +2,25 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /**
+   * The share card's two typefaces, forced into the deployed function.
+   *
+   * `app/og/[slug]/route.tsx` reads them with `readFile` from a path built at
+   * runtime out of `process.cwd()`. Next's tracer follows literal requires and
+   * static imports; it does not follow a path assembled from `join`, so
+   * without this entry the fonts exist in the repository, exist in every local
+   * run, and are ABSENT from the deployment — where the route throws ENOENT on
+   * its first request and the card 500s. That failure cannot be reproduced by
+   * any amount of local testing, which is the whole reason this is written
+   * down rather than discovered.
+   *
+   * A relative `readFile` would not fix it; the tracer's problem is that it
+   * cannot see the string, not where the string points.
+   */
+  outputFileTracingIncludes: {
+    "/og/[slug]": ["./src/app/og/fonts/*.ttf"],
+  },
+
+  /**
    * Layer 3 of the pre-launch noindex — see `src/app/robots.ts` for the whole
    * story and the launch checklist.
    *

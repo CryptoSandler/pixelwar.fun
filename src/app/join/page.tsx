@@ -89,6 +89,20 @@ export default async function JoinPage() {
       ) : (
         <JoinFlow war={{ slug: war.slug, title: war.title, maxTokens: war.maxTokens }} />
       )}
+
+      {/*
+        THE TERMS, REACHABLE FROM THE SCREEN THAT ASKS FOR MONEY. `/rules` says
+        what overpaying does, what a late payment does, and that there are no
+        automatic refunds — every one of them a branch this flow can actually
+        take. A payer who meets one of those branches for the first time on the
+        failure screen was never told; a link here is the cheapest way that
+        stops being true.
+      */}
+      <p className="muted text-[13px]">
+        <Link href="/rules" className="underline underline-offset-2">
+          What entering buys, and what happens if a payment goes wrong
+        </Link>
+      </p>
     </Cabinet>
   );
 }

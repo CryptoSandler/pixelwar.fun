@@ -107,3 +107,52 @@ export function sidesLockMinutes(): number {
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
+
+/**
+ * This deployment's public origin, as a URL, for the absolute links metadata
+ * has to carry.
+ *
+ * A CARD'S IMAGE URL MUST BE ABSOLUTE. A crawler is not on our origin, so
+ * `og:image` pointing at `/og/demo` resolves against nothing and the card
+ * unfurls with no picture — the failure this whole batch exists to prevent,
+ * arriving silently, on the one surface nobody looks at while developing.
+ * Next resolves relative metadata against `metadataBase`, so this is what
+ * that is set from.
+ *
+ * IT RESOLVES IN THE SAME ORDER `siteOrigin` IN `http.ts` DOES, and the two
+ * are separate on purpose rather than by oversight: that one answers "did
+ * this POST come from us", takes a `Request`, and falls back to the Host
+ * header because a same-origin check with no request context is meaningless.
+ * This one runs in `generateMetadata`, where there is no request to fall back
+ * to. Merging them would mean giving the security check a request-free path,
+ * which is the direction that costs something.
+ *
+ * `VERCEL_PROJECT_PRODUCTION_URL` before `VERCEL_URL`: the second is the
+ * per-deployment hostname, which changes on every push and would pin a
+ * share card to a deployment rather than to the site.
+ *
+ * Localhost is the last resort and it is honest — a card built on it is
+ * useless to a crawler, and that is exactly what a local deployment is.
+ */
+export function publicOrigin(): URL {
+  const candidates = [
+    process.env.SITE_URL?.trim(),
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim(),
+    process.env.VERCEL_URL?.trim(),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      // Vercel supplies a bare hostname; SITE_URL is documented as a full URL.
+      // Accepting both here beats a deployment where the card silently has no
+      // image because somebody wrote the value in the other shape.
+      return new URL(candidate.includes("://") ? candidate : `https://${candidate}`);
+    } catch {
+      // Malformed: fall through to the next candidate rather than throwing and
+      // taking down every page's metadata over a typo in a variable.
+    }
+  }
+
+  return new URL("http://localhost:3105");
+}

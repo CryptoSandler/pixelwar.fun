@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { IBM_Plex_Mono, Jost } from "next/font/google";
 import "./globals.css";
 import { WalletProvider } from "../components/WalletProvider";
+import { publicOrigin } from "../lib/config";
 import {
   ACCENT,
   CHROME_SURFACES,
@@ -82,6 +83,23 @@ const chrome = {
 } as CSSProperties;
 
 export const metadata: Metadata = {
+  /**
+   * What every relative URL in this application's metadata resolves against.
+   *
+   * WITHOUT IT THE SHARE CARDS SILENTLY HAVE NO IMAGE. `openGraph.images` is
+   * written as `/og/<slug>` on the pages that have one, and a crawler is not
+   * on our origin — a relative `og:image` resolves against nothing at its end,
+   * so the card unfurls as text. Next warns about a missing `metadataBase` in
+   * development and falls back to localhost, which is a URL that works on the
+   * developer's machine and nowhere else: the failure looks fine locally and
+   * only exists in production, which is the worst shape a failure can take.
+   *
+   * `publicOrigin` resolves SITE_URL first and the deployment's own hostname
+   * after it — see `lib/config.ts` for why the production hostname beats the
+   * per-deployment one.
+   */
+  metadataBase: publicOrigin(),
+
   title: "pixelwar.fun",
   /**
    * Deliberately promises nothing about price or architecture.

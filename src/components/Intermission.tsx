@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Board } from "./Board";
+import { FrozenBoard } from "./FrozenBoard";
 import { WalletButton } from "./WalletButton";
-import { BoardImage } from "../lib/canvas/board-image";
 import { CHIP_OUTLINE } from "../lib/wars/chrome";
-import { flagColourForSlot, rgba } from "../lib/wars/palette";
+import { flagColourForSlot } from "../lib/wars/palette";
 
 /**
  * The screen between wars: a result, not an invitation.
@@ -93,16 +92,48 @@ export function Intermission({
                 {finished.winner.ticker}
               </p>
               <p className="muted text-[13px]">
-                <span className="numeric">{finished.winner.owned}</span> pixels held at the end
+                {/* Grouped, like every other rendering of this number. The
+                    result page and the share card both print "11,412" and
+                    this printed "11412" — the same figure, on two screens
+                    that now link to each other, in two formats. */}
+                <span className="numeric">{finished.winner.owned.toLocaleString("en-US")}</span>{" "}
+                pixels held at the end
                 of {finished.title}.
               </p>
+              {/*
+                THE LINK IS THE POINT OF THE ARCHIVE EXISTING. `/wars/[slug]`
+                is where a result stops being the thing that happens to be on
+                the front page and becomes a URL a community can post — with
+                its own share card, which `/` cannot have because `/` is a
+                different war every week. Without a link from here the page
+                is reachable only by typing it, which is the failure CLAUDE.md
+                calls "every new module names its caller": two finished
+                functions and no route to them is not a feature.
+              */}
+              <Link href={`/wars/${finished.slug}`} className="btn-secondary mt-1 px-3 py-1.5 text-center">
+                See the full result
+              </Link>
             </section>
           ) : null}
 
+          {/* "200×200" was here until 2026-09-02 and had stopped being true:
+              board size is per war (`wars.width`, `wars.height`), so the one
+              sentence explaining the product was quoting a number the war
+              behind it need not have. A sentence that describes every war is
+              worth more here than a number that describes some of them. */}
           <p className="muted mt-auto text-[13px]">
-            A war is a timed fight for a shared 200×200 canvas. Communities take a slot and a flag
+            A war is a timed fight for one shared canvas. Communities take a slot and a flag
             colour; anyone paints, in any colour, and the scoreboard counts the pixels each token
             holds.
+          </p>
+
+          <p className="flex flex-wrap gap-x-3 gap-y-1">
+            <Link href="/wars" className="muted text-[13px] underline underline-offset-2">
+              Every war that has finished
+            </Link>
+            <Link href="/rules" className="muted text-[13px] underline underline-offset-2">
+              Rules
+            </Link>
           </p>
         </aside>
 
@@ -123,7 +154,7 @@ export function Intermission({
 
           <div className="board-frame relative min-h-0 flex-1">
             {finished ? (
-              <FinishedBoard war={finished} />
+              <FrozenBoard slug={finished.slug} width={finished.width} height={finished.height} />
             ) : (
               <div className="grid h-full place-items-center px-6 text-center">
                 <p className="text-[13px] text-[var(--chrome-ink-inverse)]">
@@ -169,58 +200,5 @@ function NextWar({ opensAt, title }: { opensAt: string; title: string | null }) 
       </p>
       {title ? <p className="muted text-[13px]">{title}</p> : null}
     </section>
-  );
-}
-
-/**
- * The finished board, read-only.
- *
- * Reuses `Board` with its two callbacks made no-ops rather than growing a
- * second renderer: every pixel of the zoom, pan, pinch and device-pixel-grid
- * work already lives there, and a copy would drift from it. Painting is
- * refused by the server for an ended war anyway — this only stops the click
- * being offered.
- */
-function FinishedBoard({ war }: { war: FinishedWar }) {
-  const [image, setImage] = useState<BoardImage | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/canvas?war=${encodeURIComponent(war.slug)}`)
-      .then((response) => (response.ok ? response.arrayBuffer() : null))
-      .then((bytes) => {
-        if (cancelled || !bytes) return;
-        const next = new BoardImage(war.width, war.height, rgba());
-        next.setBase(new Uint8Array(bytes));
-        setImage(next);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [war.slug, war.width, war.height]);
-
-  if (!image) {
-    return (
-      <div className="grid h-full place-items-center text-[13px] text-[var(--chrome-ink-inverse)]">
-        Loading the board...
-      </div>
-    );
-  }
-
-  // No interaction on a finished board, so all three callbacks are no-ops.
-  // The deep link still works: `Board` reads the URL itself, so a link to a
-  // place in a war frames that place on the war's own result.
-  return (
-    <Board
-      image={image}
-      version={1}
-      onPaint={() => {}}
-      onHover={() => {}}
-      onView={() => {}}
-      // No template on a finished board: there is nothing left to paint from
-      // it, and the result is the thing being shown.
-      template={null}
-    />
   );
 }

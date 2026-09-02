@@ -218,6 +218,41 @@ export async function reviveWar(warId: string, endsAt: Date): Promise<ReviveResu
 }
 
 /**
+ * Every war that finished with something on it, newest first.
+ *
+ * ONE DEFINITION OF "FINISHED", AND THIS IS IT. Three screens ask this
+ * question now — the intermission, the archive at `/wars`, and the result
+ * page — and the answer has three parts that are easy to get subtly
+ * different: ended, actually stopped, and not empty.
+ *
+ * **Not empty is the part that carries a policy rather than a fact.** A
+ * finished board with no pixels is not a result; it is an empty grid under a
+ * heading that claims to be one, which is worse than showing nothing. It also
+ * keeps a war that never really ran — a test fixture, an aborted schedule, a
+ * board that was cleared by moderation — out of the archive and off the front
+ * page, which it would otherwise reach simply by being the most recent thing
+ * to end. Two production wars titled "Fixture war" have already been found in
+ * this project's database, so that is a defence against something that has
+ * happened rather than something imagined.
+ *
+ * Ordered by `ended_at` and not by `ends_at`, because a war can be ended
+ * early by the kill switch or revived and re-ended — `ends_at` is the
+ * deadline it was aiming at, and `ended_at` is when it actually stopped.
+ */
+export async function finishedWars(limit = 50): Promise<War[]> {
+  const rows = await query<WarRow>(
+    `SELECT ${WAR_COLUMNS.split(", ").map((c) => `w.${c}`).join(", ")} FROM wars w
+      WHERE w.status = 'ended'
+        AND w.ended_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM pixels p WHERE p.war_id = w.id)
+      ORDER BY w.ended_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+  return rows.map(toWar);
+}
+
+/**
  * The most recently finished war, for the screen shown between wars.
  *
  * A finished board with a winner on it is the best piece of marketing this
@@ -225,26 +260,14 @@ export async function reviveWar(warId: string, endsAt: Date): Promise<ReviveResu
  * a war ended, the home page stopped showing anything at all. This is what
  * the intermission renders.
  *
- * Ordered by `ended_at` and not by `ends_at`, because a war can be ended
- * early by the kill switch or revived and re-ended — `ends_at` is the
- * deadline it was aiming at, and `ended_at` is when it actually stopped.
+ * DELEGATES RATHER THAN REPEATING THE PREDICATE. It used to carry its own
+ * copy of the three-part WHERE above, and the archive would have made that
+ * two copies of a rule with a policy inside it — the exact shape that drifts
+ * silently, because both copies keep answering *something* and only one of
+ * them is right.
  */
 export async function lastFinishedWar(): Promise<War | null> {
-  // ONLY A WAR WITH SOMETHING ON IT. A finished board with no pixels is not
-  // a result — it is an empty grid under a heading that claims to be one,
-  // which is worse than showing nothing. This also keeps a war that never
-  // really ran (a test fixture, an aborted schedule, a board that was
-  // cleared) from becoming the site's front page by being the most recent
-  // thing to end.
-  const row = await queryOne<WarRow>(
-    `SELECT ${WAR_COLUMNS.split(", ").map((c) => `w.${c}`).join(", ")} FROM wars w
-      WHERE w.status = 'ended'
-        AND w.ended_at IS NOT NULL
-        AND EXISTS (SELECT 1 FROM pixels p WHERE p.war_id = w.id)
-      ORDER BY w.ended_at DESC
-      LIMIT 1`,
-  );
-  return row ? toWar(row) : null;
+  return (await finishedWars(1))[0] ?? null;
 }
 
 /**

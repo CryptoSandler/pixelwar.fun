@@ -1,12 +1,61 @@
+import type { Metadata } from "next";
 import { armyCounts } from "../lib/paint/allegiance";
 import { classifyEndpoints } from "../lib/payments/cluster";
 import { paymentWallet, registrationFeeLamports, solanaRpcUrls } from "../lib/payments/config";
-import { query, queryOne } from "../lib/db";
+import { query } from "../lib/db";
+import { finalStandings, shareOfBoard, winnerOf } from "../lib/wars/archive";
 import { activeTokens, currentWar, lastFinishedWar } from "../lib/wars/lifecycle";
 import { Intermission, type FinishedWar } from "../components/Intermission";
 import { WarView } from "../components/WarView";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * The front page's share card, which is a moving target by construction.
+ *
+ * `/` IS A DIFFERENT WAR EVERY WEEK, and that is exactly why `/wars/[slug]`
+ * exists beside it: a link to `/` unfurls with whatever is running now, and a
+ * link to a war unfurls with that war forever. Both are wanted. This is the
+ * first one.
+ *
+ * The card points at the live war when there is one and at the last finished
+ * war otherwise — the same two states the page itself renders, so the picture
+ * a link shows is the picture a visitor lands on.
+ *
+ * NOTHING HERE PROMISES ANYTHING. The description is built from facts about a
+ * specific war (its size, its leader, its count) and falls back to the
+ * layout's own deliberately neutral sentence when there is no war to describe.
+ * See the comment on `metadata.description` in `layout.tsx`: "free", "no
+ * account" and "no wallet" are one-way promises this product has not made and
+ * a share card is the most-copied surface it has.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const live = await currentWar();
+  const war = live?.status === "live" ? live : await lastFinishedWar();
+  if (!war) return {};
+
+  const winner = winnerOf(await finalStandings(war.id));
+  const ended = war.status === "ended";
+
+  const title = ended ? `Result — ${war.title}` : `${war.title} — live now`;
+  const description = winner
+    ? `${winner.ticker} ${ended ? "took" : "leads"} the board with ${winner.owned.toLocaleString("en-US")} pixels, ${shareOfBoard(winner.owned, war).toFixed(1)}% of a ${war.width}\u00d7${war.height} canvas.`
+    : `A ${war.width}\u00d7${war.height} canvas with no pixel held yet.`;
+
+  const image = {
+    url: `/og/${war.slug}`,
+    width: 1200,
+    height: 630,
+    alt: `${war.title}: the board${winner ? `, ${ended ? "won" : "led"} by ${winner.ticker}` : ""}.`,
+  };
+
+  return {
+    title,
+    description,
+    openGraph: { title, description, type: "website", url: "/", images: [image] },
+    twitter: { card: "summary_large_image", title, description, images: [image] },
+  };
+}
 
 /**
  * The home page, in its three states.
@@ -113,19 +162,16 @@ export default async function Page() {
   let result: FinishedWar | null = null;
 
   if (finished) {
-    // The winner is whoever holds the most pixels at the end. Read from
-    // `token_pixel_counts`, which counts by ATTRIBUTED token — the colour on
-    // the board says nothing about who owns a pixel since the palette was
-    // freed.
-    const winner = await queryOne<{ ticker: string; colour_slot: number; owned: number }>(
-      `SELECT t.ticker, t.colour_slot, c.owned
-         FROM token_pixel_counts c
-         JOIN war_tokens t ON t.id = c.war_token_id
-        WHERE c.war_id = $1 AND c.owned > 0
-        ORDER BY c.owned DESC
-        LIMIT 1`,
-      [finished.id],
-    );
+    // The winner is whoever holds the most pixels at the end, read through
+    // `finalStandings` rather than through a fourth copy of that query.
+    //
+    // IT WAS A FOURTH COPY. `/api/leaderboard` had one, the result page needed
+    // one, and this page had its own — three renderings of "who is winning"
+    // that a tie or a status filter could have made disagree, on three screens
+    // showing the same war. The ordering and the tie-break now live in one
+    // place, with the reason written beside them, and `/wars/[slug]` reads the
+    // identical answer this does.
+    const winner = winnerOf(await finalStandings(finished.id));
 
     result = {
       slug: finished.slug,
@@ -134,7 +180,7 @@ export default async function Page() {
       height: finished.height,
       endedAt: (finished.endedAt ?? finished.endsAt).toISOString(),
       winner: winner
-        ? { ticker: winner.ticker, colourSlot: winner.colour_slot, owned: winner.owned }
+        ? { ticker: winner.ticker, colourSlot: winner.colourSlot, owned: winner.owned }
         : null,
     };
   }
