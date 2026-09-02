@@ -7,7 +7,7 @@ description: Close a batch — prove it works before it gets merged.
 A batch is not closed because the work feels finished. It is closed when every claim
 below has output sitting next to it.
 
-Four rules govern this whole file:
+Five rules govern this whole file:
 
 - **Paste real output.** Never summarise it, never retype it from memory, never describe
   it ("tests pass"). The output is the evidence; a description of the output is not.
@@ -32,6 +32,14 @@ Four rules govern this whole file:
 
   `set -o pipefail` fixes the status too and is not the rule here: the redirect also
   produces the artifact the evidence rule above requires, so one habit satisfies both.
+- **A check that decides something answers, or says it could not.** Never `2>/dev/null` on
+  it and never `wc`, `grep` or `tail` after it — both turn a command that FAILED into a
+  confident zero. Measured 2026-09-02 in `kolscanhispano`: `git log @{u}..HEAD 2>/dev/null
+  | wc -l` printed `0` for a branch that had **no upstream at all**, was read as "nothing
+  to push", and the push published a local working branch to a shared remote. Verify the
+  command can answer first — `git rev-parse --abbrev-ref @{u}` — then ask it, unpiped, and
+  report a failure as *I do not know* rather than as zero. `~/.claude/GATES.md` has the
+  incident.
 
 ## 1. What changed
 
