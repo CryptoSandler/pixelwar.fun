@@ -122,30 +122,33 @@ tells the two apart. It is written down so it does not have to be rediscovered;
 adopting it would mean promising that a war with a single clear never gets a
 replay, and that promise has not been made.
 
-## `pixel_events` has no retention, and this is the pending decision
+## `pixel_events` retention, and the revive horizon that unblocked it
 
-**Nothing prunes `pixel_events`. Not the reconcile sweep, not a migration, not
-a job — verified by grep across `src/`, not assumed.** The spec says it is
-"append-only and never pruned while a war is live" and is silent on afterwards,
-which is how it ended up with no owner at all.
+**DECIDED AND IMPLEMENTED 2026-09-01.** This section was a proposal with a
+blocker attached: `reviveWar` accepted any ended war forever, so "after the
+war can no longer be revived" was not a condition that existed, and pruning
+before it did would have deleted the history of a war somebody might still
+revive — leaving the diff protocol serving a board whose log has holes. The
+horizon was the decision; the prune followed from it in ten lines.
 
-**This section is a proposal with a price, not an intention, and nothing here
-is implemented.**
-
-| Question | Proposed answer |
+| Question | Answer |
 | --- | --- |
-| Owner | The reconcile sweep, `/api/cron/reconcile`, beside `pruneOathNonces` and `pruneTokenSnapshots` — the two prunes it already runs, for the reason its own comment gives: *"a table that only grows is a slow leak"*. |
-| What is pruned | `pixel_events` for a war that has ended **and can no longer be revived**. Never for a live war: the diff protocol reads this table. |
-| When | 30 days after `ended_at`, which is also the proposed revive horizon. |
-| What survives | `pixels` — the final board — and `token_pixel_counts`. The result screen reads those, so pruning the log does not cost the finished board or the standings. |
+| Horizon | **30 days after `ended_at`.** `reviveWar` refuses past it with `too_old_to_revive`; the copy is in DESIGN.md §8. |
+| Owner | The reconcile sweep, `/api/cron/reconcile`, beside `pruneOathNonces` and `pruneTokenSnapshots` — for the reason its own comment gives: *"a table that only grows is a slow leak"*. It reports `eventsSwept` like the other two. |
+| What is pruned | `pixel_events` for wars with `status = 'ended'` and `ended_at` past the horizon. Never a live war, and never a revived one: `reviveWar` clears `ended_at`, so the candidate query stops seeing it. |
+| What survives | `pixels` — the final board — and `token_pixel_counts`. The result screen, the share image and the standings read those, so an old war still shows its board and its winner. What is lost is how it got there. |
 
-**The blocker, and it is the reason this is a decision rather than a task.**
-`reviveWar` accepts any ended war, with no horizon, forever. "After the war can
-no longer be revived" is therefore not a condition that exists yet — it has to
-be *created*, and creating it is a product decision: after N days an ended war
-is final and an operator can no longer bring it back. Pruning before that
-horizon exists would delete the history of a war somebody may still revive,
-and the diff protocol would then serve a board whose log has holes.
+**ONE CONSTANT, NOT TWO.** `REVIVE_HORIZON_DAYS` lives in `wars/lifecycle.ts`
+and `prunePixelEvents` imports it. Two numbers that must agree are one number
+with a bug waiting in it, and the failure mode is the quiet kind: prune at 30
+while revive allows 45 and the gap is a fortnight of wars that come back with
+no history. `revive-horizon.test.ts` asserts a war one day inside the horizon
+survives a full sweep AND is still revivable, which is the property neither a
+test of the horizon nor a test of the prune could catch alone.
+
+**Changing the horizon is a one-line change here and in nothing else** — but
+it is a product decision, not a tuning knob, and lengthening it after wars
+have been pruned does not bring anything back.
 
 **The price, with the arithmetic shown.** Measured on the preview branch:
 1,868 rows occupy 835 KB all-in, 447 bytes per row — inflated, because page

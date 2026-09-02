@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { json, NO_STORE } from "../../../../lib/http";
 import { expireStaleOrders } from "../../../../lib/payments/orders";
 import { currentAbuseSignal } from "../../../../lib/paint/abuse";
+import { prunePixelEvents } from "../../../../lib/canvas/diff";
 import { pruneTokenSnapshots } from "../../../../lib/canvas/momentum";
 import { pruneOathNonces } from "../../../../lib/paint/oath";
 import { unmatchedBacklog } from "../../../../lib/payments/orphans";
@@ -167,6 +168,14 @@ async function reconcile(request: Request): Promise<Response> {
   // behind, and nothing else in the system would ever remove them.
   const snapshotsSwept = await pruneTokenSnapshots();
 
+  // The third prune, and the one that could not be written until this batch.
+  // `pixel_events` is the only table here that can fill the database on its
+  // own, and it had no owner because `reviveWar` accepted any ended war
+  // forever — pruning the log of a revivable war leaves `changesSince`
+  // serving a history with holes. The revive horizon exists now, so this
+  // does, and it reads the same constant rather than a second copy of 30.
+  const eventsSwept = await prunePixelEvents();
+
   const backlog = await unmatchedBacklog();
 
   // "Something odd is happening on the board", carried on the same request
@@ -185,6 +194,7 @@ async function reconcile(request: Request): Promise<Response> {
       filed: filed.length,
       noncesSwept,
       snapshotsSwept,
+      eventsSwept,
       // Counts and an age, never ids — this body reaches a CI log retained
       // for ninety days and world-readable on a public repository, and an
       // order id is the handle on somebody's payment.

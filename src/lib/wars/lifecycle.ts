@@ -130,9 +130,28 @@ export async function advanceWar(war: War): Promise<War> {
   return war;
 }
 
+/**
+ * How long an ended war stays revivable.
+ *
+ * THE POINT OF THIS CONSTANT IS THAT TWO THINGS SHARE IT. Before it existed,
+ * `reviveWar` accepted any ended war forever, which meant `pixel_events` could
+ * never be pruned: deleting the history of a war somebody might still revive
+ * leaves the diff protocol serving a board whose log has holes. Creating the
+ * horizon is what made the prune safe, and the prune reads THIS value rather
+ * than its own copy of 30 — two constants that must agree are one constant
+ * with a bug waiting in it. `prunePixelEvents` imports it, and
+ * `revive-horizon.test.ts` asserts they cannot drift.
+ *
+ * Thirty days is a product decision, recorded in `docs/operations.md` where an
+ * operator reads it, not a `CHECK` in the schema. It is long enough that
+ * reviving a war is a real option after a weekend and a holiday, and short
+ * enough that the table this unblocks does not grow without bound.
+ */
+export const REVIVE_HORIZON_DAYS = 30;
+
 export type ReviveResult =
   | { ok: true; war: War }
-  | { ok: false; reason: "not_ended" | "ends_in_the_past" };
+  | { ok: false; reason: "not_ended" | "ends_in_the_past" | "too_old_to_revive" };
 
 /**
  * Brings an ended war back, with a new deadline. The third transition.
@@ -166,6 +185,25 @@ export async function reviveWar(warId: string, endsAt: Date): Promise<ReviveResu
   if (!war) return { ok: false, reason: "not_ended" };
   if (war.status !== "ended") return { ok: false, reason: "not_ended" };
   if (endsAt.getTime() <= Date.now()) return { ok: false, reason: "ends_in_the_past" };
+
+  /*
+   * THE HORIZON, AND IT IS CHECKED HERE RATHER THAN IN THE ROUTE because this
+   * is the transition and a check outside it is a check the next caller skips.
+   *
+   * Refusing is not tidiness. `prunePixelEvents` deletes the history of wars
+   * past this line, so a revive after it would bring back a war whose
+   * `pixel_events` are gone — and the diff protocol reads that table. The war
+   * would come back live with a board that cannot be diffed, which is a worse
+   * outcome than not reviving it.
+   *
+   * `ended_at` and not `ends_at`: the deadline it was aiming at is not when it
+   * stopped, and a war ended early by the kill switch or revived and re-ended
+   * has the two far apart. The same choice `lastFinishedWar` makes.
+   */
+  const endedAt = war.endedAt?.getTime();
+  if (endedAt !== undefined && Date.now() - endedAt > REVIVE_HORIZON_DAYS * 24 * 60 * 60 * 1000) {
+    return { ok: false, reason: "too_old_to_revive" };
+  }
 
   // Guarded on the status it expects, like the other two: two operators
   // reviving at once produce one winner and one no-op.

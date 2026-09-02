@@ -615,6 +615,28 @@ Never imply a pixel is permanent. Overpainting is the game — the leaderboard
 counts pixels **held**, not pixels **placed**, and the copy must never suggest
 otherwise.
 
+### A war older than thirty days cannot be revived, and the copy says what is gone
+
+The operator sentence, verbatim:
+
+> This war ended more than 30 days ago and can no longer be revived. Its board
+> and its result are kept; the pixel history has been cleared.
+
+**Two sentences because a refusal owes an operator two things**: what it cannot
+do, and what that cost. Saying only the first invites the reasonable next
+question — *"so is the war gone?"* — and the answer is no: `pixels` and
+`token_pixel_counts` survive the prune, so the board and the winner are still
+there and still rendered. Only the replayable history goes.
+
+**It names the number rather than saying "too old".** Thirty days is an
+operator-facing policy in [docs/operations.md](docs/operations.md), not a
+constant nobody can find, and a message that withholds it sends somebody
+reading source to learn when they should have acted.
+
+**It does not apologise and does not offer a workaround**, because there is
+none: the events are deleted, not archived. Copy that hedged here would imply
+somebody could be asked to restore them.
+
 ### A refusal the screen never announced is a defect, not a message
 
 **A rule that can refuse a painter must be visible on the screen before it

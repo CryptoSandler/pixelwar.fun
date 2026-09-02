@@ -1,6 +1,6 @@
 import { diffMaxChanges } from "../config";
-import { query, queryOne } from "../db";
-import type { War } from "../wars/lifecycle";
+import { execute, query, queryOne } from "../db";
+import { REVIVE_HORIZON_DAYS, type War } from "../wars/lifecycle";
 import type { CanvasLayer } from "./state";
 
 export type DiffResult =
@@ -65,4 +65,44 @@ export async function changesSince(
   );
 
   return { resync: false, seq, changes: rows.map((row) => [row.idx, row.colour_slot]) };
+}
+
+/**
+ * Drops the event history of wars that can no longer be revived.
+ *
+ * WHY THIS COULD NOT BE WRITTEN UNTIL NOW. `pixel_events` had no retention and
+ * no owner, and it is the only table in this schema that can fill the database
+ * on its own — Neon's per-branch limit here is 512 MB and a busy war is
+ * hundreds of megabytes. It could not simply be pruned, because `reviveWar`
+ * accepted any ended war forever: deleting the log of a war somebody might
+ * revive leaves `changesSince` serving a board whose history has holes, and a
+ * client polling `?since=` would silently miss pixels. The horizon had to
+ * exist first. It does now, so this does.
+ *
+ * IT READS `REVIVE_HORIZON_DAYS` RATHER THAN ITS OWN 30. Two constants that
+ * must agree are one constant with a bug waiting in it, and the failure would
+ * be the quiet kind: prune at 30 while revive allows 45 and the gap is a
+ * fortnight of wars that come back with no history.
+ *
+ * WHAT SURVIVES, deliberately: `pixels` — the final board — and
+ * `token_pixel_counts`. The result screen, the share image and the standings
+ * all read those, so an old war still shows its board and its winner. What is
+ * lost is the ability to replay how it got there, which this project has
+ * decided it will not do anyway (DESIGN.md 5a).
+ *
+ * `status = 'ended'` as well as the age, because `ended_at` is cleared on
+ * revive but a war can also be sitting at `cancelled`, and a cancelled war's
+ * events are not this function's business.
+ */
+export async function prunePixelEvents(): Promise<number> {
+  return execute(
+    `DELETE FROM pixel_events
+      WHERE war_id IN (
+        SELECT id FROM wars
+         WHERE status = 'ended'
+           AND ended_at IS NOT NULL
+           AND ended_at < now() - ($1 || ' days')::interval
+      )`,
+    [String(REVIVE_HORIZON_DAYS)],
+  );
 }

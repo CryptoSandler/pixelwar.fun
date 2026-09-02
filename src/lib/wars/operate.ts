@@ -1,6 +1,6 @@
 import { execute, queryOne } from "../db";
 import { MAX_TOKEN_SLOT } from "./palette";
-import { advanceWar, reviveWar, warById, type War } from "./lifecycle";
+import { advanceWar, REVIVE_HORIZON_DAYS, reviveWar, warById, type War } from "./lifecycle";
 
 /**
  * The operator's clocks.
@@ -43,7 +43,8 @@ export type OperateFailure =
   | "no_such_war"
   | "not_scheduled"
   | "not_live"
-  | "ends_in_the_past";
+  | "ends_in_the_past"
+  | "too_old_to_revive";
 
 export type OperateResult<T> = { ok: true; value: T } | { ok: false; reason: OperateFailure; message: string };
 
@@ -164,6 +165,21 @@ export async function extendWar(warId: string, endsAt: Date): Promise<OperateRes
   if (war.status === "ended") {
     const revived = await reviveWar(warId, endsAt);
     if (!revived.ok) {
+      // Each refusal keeps its own name and its own sentence. The old code
+      // collapsed everything that was not `ends_in_the_past` into
+      // `no_such_war` with "That war could not be revived." — which, once the
+      // horizon existed, would have told an operator that a war they are
+      // looking at does not exist. A reason the screen cannot distinguish is
+      // a reason nobody can act on.
+      if (revived.reason === "too_old_to_revive") {
+        return {
+          ok: false,
+          reason: "too_old_to_revive",
+          message:
+            `This war ended more than ${REVIVE_HORIZON_DAYS} days ago and can no longer be revived. ` +
+            `Its board and its result are kept; the pixel history has been cleared.`,
+        };
+      }
       return {
         ok: false,
         reason: revived.reason === "ends_in_the_past" ? "ends_in_the_past" : "no_such_war",

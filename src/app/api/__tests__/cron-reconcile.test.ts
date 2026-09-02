@@ -124,6 +124,12 @@ describe("POST /api/cron/reconcile", () => {
       // addresses. The only thing it hints at is that a board was busy, which
       // is already public — the board is the product.
       snapshotsSwept: 0,
+      // The third addition, and it got the scrutiny too. A count of
+      // pixel_events rows dropped for wars past the revive horizon. Same
+      // shape of disclosure as the two above: a number, no war ids, no
+      // painter keys. It reveals that some old war had history and now does
+      // not, which is a fact about a board that was public while it ran.
+      eventsSwept: 0,
       backlog: { open: 0, oldestAgeHours: 0, stale: false },
       // Null because no war is live in this test. That it is PRESENT and null
       // rather than absent is the contract reconcile.yml checks with

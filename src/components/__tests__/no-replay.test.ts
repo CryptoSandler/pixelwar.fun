@@ -149,24 +149,41 @@ describe("the spec no longer authorises what it used to", () => {
   });
 });
 
-describe("the retention decision is recorded with a price", () => {
-  it("names an owner, a number, and the blocker that makes it a decision", () => {
+/**
+ * REWRITTEN 2026-09-01, AND THE OLD VERSION DOING ITS JOB IS WHY.
+ *
+ * This block used to assert that `pixel_events` had no retention: that the
+ * document described an unowned table and that `reconcile/route.ts` did NOT
+ * mention `prunePixelEvents`. Its own comment said that if somebody
+ * implemented the prune it should fail and be rewritten with the section,
+ * because a document describing an unowned table while a job quietly owns it
+ * is worse than either state. That is exactly what happened, and the test went
+ * red before the documentation was touched.
+ *
+ * It now asserts the opposite state, and the same way: the section says the
+ * decision is made, and the sweep really calls the prune.
+ */
+describe("the retention decision is implemented and still described", () => {
+  it("names the horizon, the owner and the single constant", () => {
     const collapsed = operations.replace(/\s+/g, " ");
-    expect(operations).toContain("## `pixel_events` has no retention, and this is the pending decision");
+    expect(operations).toContain("## `pixel_events` retention, and the revive horizon that unblocked it");
     expect(collapsed).toContain("The reconcile sweep, `/api/cron/reconcile`");
-    expect(collapsed).toContain("30 days after `ended_at`");
-    // The blocker is what separates a pending decision from an unstarted task.
-    expect(collapsed).toContain("`reviveWar` accepts any ended war, with no horizon, forever.");
+    expect(collapsed).toContain("**30 days after `ended_at`.**");
     expect(collapsed).toContain("branch_logical_size_limit` on this project is 512 MB");
+    // The coupling is the part that rots quietly, so the document has to keep
+    // saying it out loud.
+    expect(collapsed).toContain("**ONE CONSTANT, NOT TWO.**");
   });
 
-  it("still describes a state where nothing prunes the table", () => {
-    // If somebody implements the prune, this test should fail and be rewritten
-    // along with the section — a document that describes an unowned table
-    // while a job quietly owns it is worse than either.
+  it("is actually wired into the sweep, not merely described", () => {
+    // Drive-the-caller, not the callee. `expireStaleOrders` and
+    // `recoverUnclaimedOrders` were both finished, tested and unreachable for
+    // a whole batch because no brief owned the wiring; the test that catches
+    // that asserts the call site exists.
     const source = readFileSync("src/app/api/cron/reconcile/route.ts", "utf8");
     expect(source).toContain("pruneOathNonces");
     expect(source).toContain("pruneTokenSnapshots");
-    expect(source).not.toMatch(/prunePixelEvents/);
+    expect(source).toContain("prunePixelEvents");
+    expect(source).toContain("eventsSwept");
   });
 });
