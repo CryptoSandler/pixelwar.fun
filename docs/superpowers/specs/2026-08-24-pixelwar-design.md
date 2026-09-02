@@ -2,12 +2,52 @@
 
 **Status:** approved in outline, pending review of this document
 **Date:** 2026-08-24
+**Corrected in place:** 2026-09-02 — the money path
+
+---
+
+## Correction, 2026-09-02: this document said USDC for a batch after that stopped being true
+
+**Admission and painter registration are both charged in SOL. The USDC
+checkout — `verifyPayment`, the SPL transfer builder, the mint constants and
+their tests — was DELETED on 2026-08-31, not left dormant.** The removal and
+its reasoning are in [`DECISIONES.md`](../../../DECISIONES.md); the operating
+consequence is in
+[`docs/operations.md`](../../operations.md), under *"Pixelwar charges in SOL,
+on every surface"*.
+
+**Why this correction is written into the document rather than filed beside
+it.** CLAUDE.md's rule is that a verdict is made against the normative
+document OPEN — and that a citation can be stale. This document is the one the
+README links as *Design*, so it is the first thing anybody reads, and for a
+whole batch it described a payment path that no longer existed in the code it
+governs. Every sentence below that named USDC has been corrected where it
+stands, dated, with the superseded reading kept visible where the reasoning
+still matters. **Nothing is deleted:** the argument a decision overturned is
+worth as much as the decision, and a spec with a hole in it teaches the next
+reader nothing about why the hole is there.
+
+### What is still stale in this document, and is NOT corrected here
+
+Named rather than silently left, so the next reader knows these are known
+rather than trusted. Each is a product change this correction's scope — the
+money path — does not cover:
+
+| Sentence in this document | What is actually true | Where it is recorded |
+| --- | --- | --- |
+| "receives one colour out of twenty-four", "one colour each" | The palette is free. Anybody paints in any of the 24 colours; a token's slot is its FLAG, on the scoreboard and in the territory layer, not the colour of its pixels. | `migrations/007`, [`palette.ts`](../../../src/lib/wars/palette.ts), DESIGN.md §2 |
+| "Up to 24 tokens per war" | A per-war `max_tokens`, capped by one byte at 255. 24-or-fewer is an operator POLICY, not a schema constraint — migration 008 removed the `CHECK`. | `migrations/008`, [`docs/operations.md`](../../operations.md) |
+| "a 200×200 canvas" | Board size is per war (`wars.width`, `wars.height`). 200×200 is the default a war may choose to be. | [`docs/operations.md`](../../operations.md), *"Board size is per war"* |
+
+---
 
 r/place for memecoin communities, run as timed wars. A community buys its token
-into a war with one USDC payment and receives one colour out of twenty-four.
-Painting is free. Every pixel is attributed to a token, so the canvas is a
-live scoreboard of which community showed up. The war ends, the canvas freezes,
-and the result is a ranking and a shareable image.
+into a war with one SOL payment and receives one flag colour out of twenty-four.
+Painting takes a one-time registration — one wallet, one small SOL transfer,
+once, for every war there will ever be (DESIGN.md §1a). Every pixel is
+attributed to a token, so the canvas is a live scoreboard of which community
+showed up. The war ends, the canvas freezes, and the result is a ranking and a
+shareable image.
 
 The domain is the brand: pixelwar.fun, and `SITE_URL`.
 
@@ -21,8 +61,9 @@ cooldown. Everything except the canvas dimensions is set per war by an
 operator; there is no default price or duration in code, because a default
 price is a price somebody eventually charges by accident.
 
-Up to 24 tokens per war, one colour each. A token joins by paying the entry
-price in USDC on Solana and choosing a free colour. Registration stays open for
+Up to 24 tokens per war, one flag colour each. A token joins by paying the
+entry price in SOL on Solana — **corrected 2026-09-02, this said USDC** — and
+choosing a free colour. Registration stays open for
 the whole war — before it starts and while it runs — and closes by itself when
 the colours run out or the war ends. There is no minimum: a war starts with
 whatever has paid, and rescheduling an empty one is an operator's decision, not
@@ -42,8 +83,16 @@ the behaviour that makes the canvas worth looking at.
 Copied close to verbatim, with names adapted:
 
 - `lib/db.ts` — pool, `transaction`, `isUniqueViolation`, `violatedConstraint`.
-- `lib/payments/solana.ts` — `verifyPayment`, written against token-balance
-  deltas rather than instruction shape, and returning `SenderInfo` on failure.
+- `lib/payments/solana.ts` — the verifier, returning `SenderInfo` on failure.
+  **Corrected 2026-09-02.** What was inherited was `verifyPayment`, written
+  against TOKEN-balance deltas. That function is deleted; what stands in its
+  place is `verifySolPayment` in `lib/payments/sol-transfer.ts`, written
+  against NATIVE `preBalances`/`postBalances`. The two could not be one
+  function — native balances are positional in the account list and token
+  balances are not — which is why the switch was a rewrite rather than an
+  argument. `PaymentFailure`, `VerifyResult`, `SenderInfo` and
+  `defaultFetchTransaction` survived it and are still shared, so settlement
+  stayed denomination-agnostic instead of forking.
 - `lib/payments/limits.ts` — `clientIp` (reads `x-forwarded-for` from the
   right), `hashIp`, the verification limiter.
 - `lib/admin.ts` — revocable sessions, login lockout counted from the most
@@ -360,20 +409,31 @@ Pasting a signature by hand is a collapsed fallback, not the main path.
    - An order is created with the war's current price copied in and
      `expires_at = now + 30 minutes`.
    - `payerPubkey` is stored when the wallet is connected.
-   - Returns the order, the receiving wallet, the USDC mint and the amount.
+   - Returns the order, the receiving wallet and the amount in lamports.
+     **Corrected 2026-09-02:** there is no mint. The amount is native SOL,
+     stored as `orders.amount_lamports` and priced from
+     `wars.entry_price_sol` (migration 015).
 
-2. **Pay with wallet.** The client builds a USDC transfer to `PAYMENT_WALLET`
-   for the exact amount, the wallet signs and sends it through our RPC proxy
-   (§8), and the signature is posted back.
+2. **Pay with wallet.** The client builds a native `SystemProgram.transfer`
+   to `PAYMENT_WALLET` for the exact amount — **corrected 2026-09-02, this said
+   a USDC transfer** — the wallet signs and sends it through our RPC proxy
+   (§8), and the signature is posted back. The reference-account machinery
+   below is unchanged by the switch: it simply rides a `transfer` now instead
+   of a `transferChecked`.
 
 3. **`POST /api/orders/:id/confirm`** — `{ signature }`. Rate-limited with
-   bidoor's verification limiter. `verifyPayment` must find: the USDC mint, our
-   wallet credited, an amount at least the order's price, a confirmed and
-   non-failed transaction, and a block time inside the order's window plus the
-   clock-skew allowance. Then, and this is the part bidoor does not have:
+   bidoor's verification limiter. **Corrected 2026-09-02**, which changes what
+   is looked for but not what is decided: `verifySolPayment` must find our
+   wallet's NATIVE balance credited by at least the order's price, a confirmed
+   and non-failed transaction, and a block time inside the order's window plus
+   the clock-skew allowance. There is no mint to check — **and its absence is
+   the load-bearing part**, because a bidoor bid is an SPL transfer that moves
+   no native lamports to the same wallet, so each product's verifier reads the
+   other's payments as nothing at all. Then, and this is the part bidoor does
+   not have:
 
    > When the order carries a `payer_pubkey`, the transaction's fee payer or
-   > one of the debited USDC owners must equal it.
+   > one of the debited accounts must equal it.
 
    Without that check, a fixed price plus signature-only binding means anyone
    watching the chain can take a stranger's transfer and claim it against their
@@ -386,7 +446,7 @@ Pasting a signature by hand is a collapsed fallback, not the main path.
    accepted.
 
    **When money reached our wallet and the verdict was still no** — the payer
-   was not the order's wallet, or the amount fell short — the USDC is ours and
+   was not the order's wallet, or the amount fell short — the SOL is ours and
    belongs to somebody. File it in `unmatched_payments` with the sender the
    chain names, and never with a sender a claimant asserts. Dropping it is how
    a payment becomes invisible to the only people who could return it.
@@ -404,7 +464,7 @@ Pasting a signature by hand is a collapsed fallback, not the main path.
    manual work done from `/admin`.
 
 There are no automatic refunds. The rules say what happens when we cancel a
-war, and it is an operator sending USDC back by hand.
+war, and it is an operator sending SOL back by hand.
 
 **Every order carries a reference key.** Solana Pay's convention: a unique,
 unguessable public key attached to the transfer as a read-only account. It is a
@@ -523,8 +583,13 @@ Correctness is unaffected because the sequence is gapless. Not built now.
 
 ## 7. Anti-abuse
 
-Painting is free, so nothing about money limits it. Three layers, none of them
-individually sufficient, which is the honest description.
+**Corrected 2026-09-02.** This said *"painting is free, so nothing about money
+limits it"*, and the first half stopped being true on 2026-08-26: painting
+takes a paid registration (DESIGN.md §1a), and that fee is now the strongest
+anti-sybil layer this product has — thirty painters is thirty funded wallets
+rather than thirty cleared cookies. The three layers below are what stands
+BESIDE it, and they are named individually insufficient because they are: the
+fee raises the price of a new identity, it does not police an old one.
 
 **Painter identity.** On first visit, `GET /api/session` sets `pw_painter`, an
 HttpOnly, Secure, SameSite=Lax cookie holding `<random 16 bytes>.<HMAC>` signed
@@ -564,9 +629,9 @@ tools, and widening `connect-src` past `'self'` weakens the CSP for every page.
 | Method | Why the client needs it |
 | --- | --- |
 | `getLatestBlockhash` | Every transaction needs a recent blockhash |
-| `getAccountInfo` | Check whether the payer's USDC token account exists |
-| `getTokenAccountsByOwner` | Find that account |
-| `getMinimumBalanceForRentExemption` | Only if the destination token account must be created |
+| `getAccountInfo` | Check the payer's own account, and whether the destination exists |
+| `getTokenAccountsByOwner` | Kept, and no BROWSER flow calls it any more. The sworn-oath holdings check uses the same method server-side, going straight to the endpoint rather than through this proxy — see `oath.ts` |
+| `getMinimumBalanceForRentExemption` | The rent-exempt floor a transfer to a fresh account must clear |
 | `sendTransaction` | Submit the signed transfer |
 | `getSignatureStatuses` | Show "confirming…" before we verify server-side |
 
@@ -695,8 +760,9 @@ All copy in English.
 
 The rules page is a table of rule → consequence rather than prose, which is the
 one structural thing worth taking from wplace: a reader can find their own case
-in it. It covers what the entry fee buys, that painting is free and rate
-limited, that overpainting is the game while targeted harassment is not, that
+in it. It covers what the entry fee buys, that painting takes a one-time
+registration and is rate limited — **corrected 2026-09-02, this said painting
+is free** — that overpainting is the game while targeted harassment is not, that
 we clear content that would get the site taken down, that there are no
 automatic refunds, and how a stray payment gets reunited with its order.
 
@@ -759,7 +825,7 @@ Test-driven, and these are the cases that decide whether the product works:
 - **Colour and contract races.** Two orders for the same colour, and two for the
   same token, each resolve to exactly one reservation with the right error on
   the other.
-- **Payment.** Wrong mint, wrong destination, underpayment, unconfirmed,
+- **Payment.** Wrong destination, underpayment, unconfirmed,
   failed, replayed signature, and a signature from a wallet that is not the
   order's `payer_pubkey` — every one rejected, and overpayment accepted.
 - **Late confirmation** after expiry, both when the colour is still free and

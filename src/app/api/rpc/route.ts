@@ -25,8 +25,17 @@ export const dynamic = "force-dynamic";
  *
  * - getLatestBlockhash: every transaction needs a recent blockhash.
  * - getAccountInfo: read an account before building a transfer.
- * - getTokenAccountsByOwner: find it.
- * - getMinimumBalanceForRentExemption: only if a token account must be created.
+ * - getTokenAccountsByOwner: no browser flow calls it since admission moved to
+ *   SOL on 2026-08-31 and the SPL transfer builder was deleted (DECISIONES.md).
+ *   It stays because REMOVING a method from a whitelist is a change that can
+ *   only be tested by the flow it breaks, and the flow that used it is gone —
+ *   so there is nothing left to catch a mistake here. The holdings check in
+ *   `oath.ts` calls the same method SERVER-side, straight to the endpoint, and
+ *   would not notice this list either way.
+ * - getMinimumBalanceForRentExemption: the rent-exempt floor a transfer to an
+ *   account that does not exist yet has to clear. Was "only if a token account
+ *   must be created" until 2026-08-31; the constraint outlived the token
+ *   account, because a native transfer to a fresh address has the same floor.
  * - sendTransaction: submit the signed transfer.
  * - getSignatureStatuses: show "confirming..." before the server verifies.
  *

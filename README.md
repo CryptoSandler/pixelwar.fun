@@ -2,14 +2,25 @@
 
 r/place for memecoin communities, run as timed wars.
 
-A war has a start, an end, and a 200×200 canvas. Up to 24 tokens each hold one
-colour, bought with a one-off USDC entry. Painting is free and needs no account
-— a cooldown keyed to a signed cookie, the caller's address and their subnet is
-what keeps it fair. Every pixel is attributed to a token, so the canvas is a
-live scoreboard of which community turned up. At the deadline the board freezes
-and the result is a ranking and a shareable image.
+A war has a start, an end, and a canvas whose size the war itself chooses.
+Tokens buy in with a one-off SOL admission and each receive a flag colour.
+Painting takes a one-time registration — one wallet, one small SOL transfer,
+once, for every war there will ever be — and after that a cooldown keyed to a
+signed cookie, the caller's address and their subnet is what keeps it fair.
+Anybody may paint in any of the twenty-four colours; every pixel is attributed
+to the token its painter fights for, so the canvas is a live scoreboard of
+which community turned up. At the deadline the board freezes and the result is
+a ranking and a shareable image.
+
+**Both charges are in SOL and there is no USDC anywhere in this product.** The
+USDC checkout was deleted on 2026-08-31 — see [`DECISIONES.md`](DECISIONES.md)
+for what went and [`docs/operations.md`](docs/operations.md) for why the
+denomination is what keeps this product's payments separable from bidoor's on
+a shared receiving wallet.
 
 - Design: [`docs/superpowers/specs/2026-08-24-pixelwar-design.md`](docs/superpowers/specs/2026-08-24-pixelwar-design.md)
+- **Not launched yet**, and what has to be true before it is:
+  [`docs/launch.md`](docs/launch.md)
 - Reference reading: [`docs/references.md`](docs/references.md)
 - Vendored agent skills and how they are audited: [`docs/skills.md`](docs/skills.md)
 
