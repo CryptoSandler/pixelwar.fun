@@ -1,5 +1,6 @@
 import { config } from "dotenv";
 import { Client } from "pg";
+import { takeSuiteLock, type SuiteLock } from "./suite-lock";
 
 /**
  * One test run at a time against this database.
@@ -44,6 +45,21 @@ function directUrl(url: string): string {
 }
 
 export async function setup(): Promise<() => Promise<void>> {
+  /*
+    THE MACHINE-WIDE SUITE LOCK, taken before anything else this file does.
+
+    Every repository on this machine takes the same lock, so a second suite
+    QUEUES instead of competing for the cores. Measured in `milliondollarpage`
+    on 2026-09-02: three runs of one commit took 1269s green, then 2883s with
+    three failures, then 6249s with nine — every failure a dropped Postgres
+    connection, from workers that waited for CPU longer than the database's idle
+    timeout. `suite-lock.ts` carries the whole argument, and it is the same file
+    in all six repositories on purpose.
+
+    The advisory lock below is not this: that one serialises runs of THIS suite
+    against THIS database and reaches a second machine, which a file cannot.
+  */
+  const suiteLock: SuiteLock = await takeSuiteLock();
   const test = process.env.TEST_DATABASE_URL?.trim();
   if (!test) {
     throw new Error(
@@ -112,5 +128,8 @@ export async function setup(): Promise<() => Promise<void>> {
   return async () => {
     await client.query("SELECT pg_advisory_unlock($1)", [SUITE_LOCK_KEY]).catch(() => {});
     await client.end().catch(() => {});
+    // Last, and it would release itself anyway: closing the descriptor is what
+    // frees the machine lock, and so is this process dying.
+    suiteLock.release();
   };
 }
