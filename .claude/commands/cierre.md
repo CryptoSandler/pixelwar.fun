@@ -202,6 +202,26 @@ in every one, and four of them silently carried an unrelated section that had be
 uncommitted in every working tree. The commits were right about the path and wrong about
 the contents. `~/.claude/GATES.md` has it.
 
+**The message goes in through a file, never through `-m` with a shell in it.** Backticks
+are command substitution and `$word` is a variable, so `git commit -m` hands the message to
+the shell before git ever sees it: the substitution runs, its output is kept, and what is
+left becomes the commit. Nothing errors in a way anyone reads. Measured 2026-09-02 in
+`drakes`, commit `8c71186`: ``No `system`: two themes`` was published as `No : two themes`,
+with `command not found: system` printed above a wall of push output and skimmed as noise.
+**The tell is a missing word in a message that is already pushed**, and by then the fix
+costs a force-push over published history. The quotes on the delimiter are the point — an
+unquoted `EOF` interpolates exactly the way `-m` does:
+
+```bash
+git commit -F - <<'EOF'
+Subject line
+
+Body with `backticks` and $variables, untouched.
+EOF
+```
+
+`-m` is still fine for a short subject with no backtick, no `$` and no `!`.
+
 Commits are authored by `CryptoSandler` and carry **no trailers** — no `Co-Authored-By`,
 no `Generated with`. Check before pushing:
 
