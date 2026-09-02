@@ -7,7 +7,7 @@ description: Close a batch — prove it works before it gets merged.
 A batch is not closed because the work feels finished. It is closed when every claim
 below has output sitting next to it.
 
-Three rules govern this whole file:
+Four rules govern this whole file:
 
 - **Paste real output.** Never summarise it, never retype it from memory, never describe
   it ("tests pass"). The output is the evidence; a description of the output is not.
@@ -20,6 +20,18 @@ Three rules govern this whole file:
   already over — is a citation nobody can follow. One subdirectory per repository, with a
   `README.md` naming what each artifact is. Build output and private keys are not evidence.
   `~/.claude/GATES.md` has the incident.
+- **No pipe in a gate.** `npm test | tail -20` reports **`tail`'s** exit status, not the
+  suite's, so a red run comes back `0` and any wrapper that reads the code announces a
+  success. Measured 2026-09-01 in `kolscanhispano`: `npm test 2>&1 | tail -18` printed
+  `Test Files  1 failed | 57 passed (58)` while the runner reported *completed (exit code
+  0)*. The failure was caught by reading the summary; trusting the status would have merged
+  it. Every gate is redirected, its status captured on the same line, and the log read
+  afterwards — never `|`, never `| tee`, never `| grep`:
+
+      cmd > "$EV/<name>.log" 2>&1; echo "EXIT: $?"
+
+  `set -o pipefail` fixes the status too and is not the rule here: the redirect also
+  produces the artifact the evidence rule above requires, so one habit satisfies both.
 
 ## 1. What changed
 
@@ -39,10 +51,23 @@ cheapest bug you will ever catch.
 Run all three, in this order, and paste each one's full output.
 
 ```bash
-npm test
-npm run lint
-npm run build
+EV=~/proyectos/evidencia/pixelwar/$(date -u +%Y-%m-%d)-$(git branch --show-current); mkdir -p "$EV"
+
+npm test      > "$EV/npm-test.log"  2>&1; echo "TEST  EXIT: $?"
+npm run lint  > "$EV/npm-lint.log"  2>&1; echo "LINT  EXIT: $?"
+npm run build > "$EV/npm-build.log" 2>&1; echo "BUILD EXIT: $?"
 ```
+
+Read the logs after the three statuses, not through a pipe on the command itself — see the
+fourth rule at the top of this file.
+
+**`EV` is assigned ONCE, at the top of the close, and every command after it uses the
+variable.** Never re-evaluate `date -u` later in the batch. Crossing midnight UTC mid-close
+on 2026-09-01 in `milliondollarpage` sent a build and a suite into a directory dated the
+next day that did not exist: both reported a non-zero exit, and the exit was the shell
+failing to redirect rather than either tool failing. A close that re-derives its own
+evidence path can report a failure it did not have, and can scatter one batch across two
+directories.
 
 `npm test` needs `TEST_DATABASE_URL` set and the test database reachable — `vitest.env.ts`
 asserts a sentinel marker before any test file is allowed to touch anything, so a missing
