@@ -41,6 +41,21 @@ Five rules govern this whole file:
   report a failure as *I do not know* rather than as zero. `~/.claude/GATES.md` has the
   incident.
 
+  **And the failure has to change control flow, not text.** Writing that precondition as
+  `echo "up: $(git rev-parse --abbrev-ref @{u} 2>/dev/null || echo 'NONE — stopping')"` prints
+  `NONE — stopping` and **does not stop**: inside `$( )` the `||` composes the *value*, not
+  the flow. Measured 2026-09-02 while writing this very guard, in `outbid-tokens`; the push
+  went ahead and was correct only by luck, because the check beside it used an explicit
+  `origin/main`. The tell is the word "stopping" followed by more output.
+
+      up=$(git rev-parse --abbrev-ref @{u} 2>/dev/null) || { echo "no upstream"; exit 1; }
+      [ -n "$up" ] || { echo "no upstream"; exit 1; }
+
+  **A repository with no upstream is configured on the spot**, not routed around:
+  `git branch --set-upstream-to=origin/main main`, then verify it prints `origin/main`.
+  Substituting an explicit ref forever leaves one repository where a documented check can
+  never answer, which is the condition this rule exists to refuse.
+
 ## 1. What changed
 
 ```bash
