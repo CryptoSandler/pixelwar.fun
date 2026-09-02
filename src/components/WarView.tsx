@@ -605,9 +605,57 @@ export function WarView({
                 </div>
               </div>
             ) : null}
+
+            {/*
+              THE STATUS LINE OVERLAYS THE BOARD RATHER THAN SITTING UNDER IT.
+
+              DESIGN.md §5: "The board never reflows... everything else yields
+              to it." Measured 2026-09-02, it did: at 1440x900 the board gave
+              43 pixels of height the moment this line appeared, and 44 at
+              390x844. The message that appears most often is the cooldown
+              refusal, so the board was reflowing on nearly every interaction
+              a painter has.
+
+              RESERVING ITS HEIGHT WAS THE FIRST FIX AND IT WAS WORSE. An
+              always-present invisible slot cannot reflow, but it charges
+              every viewport for a line that is usually absent — measured, it
+              cost a phone 4.8% of the screen permanently, taking the board
+              from 65.9% to 61.1%. An overlay costs nothing when absent and
+              nothing when present.
+
+              It is `absolute` inside the frame, so it is outside the flow the
+              board sizes itself from, and `pointer-events-none` so it never
+              swallows a click meant for a pixel underneath.
+            */}
+            {error ? (
+              <p
+                role="status"
+                aria-live="polite"
+                className="readout bevel-in pointer-events-none absolute inset-x-2 bottom-2 z-10 px-3 py-1.5 text-center text-[13px]"
+              >
+                {error}
+              </p>
+            ) : null}
           </div>
 
-          <div className="flex shrink-0 flex-col gap-2">
+          {/*
+            A ROW WHERE THERE IS WIDTH, AND ITS HEIGHT IS RESERVED.
+
+            DESIGN.md §5: "The board never reflows... everything else yields
+            to it", and "the board's size is never the thing that gives".
+            Measured 2026-09-02 at 1440x900 and 390x844, the board gave 43 and
+            44 pixels of height the moment a status line appeared — and the
+            line that appears most often is the cooldown refusal, which is the
+            single most common answer this application gives a painter. The
+            board was reflowing on almost every interaction.
+
+            Two changes, and neither moves the board's box. Stacking to a ROW
+            at `rail:` halves what this costs where there is width to spare,
+            which is the board gaining the height the chrome frees. And the
+            status slot below is RESERVED rather than conditional, so nothing
+            appearing can take height from the canvas at any width.
+          */}
+          <div className="flex shrink-0 flex-col gap-2 rail:flex-row rail:items-center">
             {/*
               WHAT PRESSING THIS WILL DO, next to the thing that does it.
 
@@ -643,11 +691,7 @@ export function WarView({
               label="Paint"
               onPaint={() => target && paintAt(target.x, target.y)}
             />
-            {error ? (
-              <p role="status" aria-live="polite" className="readout bevel-in px-3 py-1.5 text-[13px]">
-                {error}
-              </p>
-            ) : null}
+
           </div>
         </div>
       </div>

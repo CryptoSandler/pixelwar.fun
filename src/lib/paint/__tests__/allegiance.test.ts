@@ -38,7 +38,7 @@ const KEYS = { ipHash: "ip-a", subnetKey: "subnet-a" };
 
 describe("the first pixel commits a painter", () => {
   it("records the side and reports it back", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const alpha = await makeToken(war.id, 3);
 
     const painted = await paintPixel({
@@ -50,7 +50,7 @@ describe("the first pixel commits a painter", () => {
   });
 
   it("refuses a later pixel for another token, and names the side", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const alpha = await makeToken(war.id, 3);
     const beta = await makeToken(war.id, 9);
 
@@ -74,7 +74,7 @@ describe("the first pixel commits a painter", () => {
   });
 
   it("leaves no pixel behind when it refuses", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const alpha = await makeToken(war.id, 3);
     const beta = await makeToken(war.id, 9);
 
@@ -89,7 +89,7 @@ describe("the first pixel commits a painter", () => {
   });
 
   it("lets the same painter keep painting for their own side", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const alpha = await makeToken(war.id, 3);
 
     await paintPixel({ war, x: 0, y: 0, tokenId: alpha, colourSlot: 7, painterKey: "p4", ...KEYS });
@@ -104,8 +104,8 @@ describe("the first pixel commits a painter", () => {
   });
 
   it("is per war, not per painter", { timeout: 30_000 }, async () => {
-    const first = await makeWar({ width: 8, height: 8 });
-    const second = await makeWar({ width: 8, height: 8 });
+    const first = await makeWar({ width: 100, height: 100 });
+    const second = await makeWar({ width: 100, height: 100 });
     const alphaFirst = await makeToken(first.id, 3);
     const betaSecond = await makeToken(second.id, 9);
 
@@ -125,7 +125,7 @@ describe("the first pixel commits a painter", () => {
     // the unique index report it as an error on the paint that did nothing
     // wrong. One of these two commits the allegiance; the other either agrees
     // with it or is refused — never crashes.
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const alpha = await makeToken(war.id, 3);
     const beta = await makeToken(war.id, 9);
 
@@ -147,7 +147,7 @@ describe("the first pixel commits a painter", () => {
 
 describe("army counts", () => {
   it("counts painters per token, and sworn separately", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const alpha = await makeToken(war.id, 3);
     const beta = await makeToken(war.id, 9);
 
@@ -163,7 +163,7 @@ describe("army counts", () => {
   });
 
   it("is empty for a war nobody has painted in", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     expect((await armyCounts(war.id)).size).toBe(0);
   });
 });

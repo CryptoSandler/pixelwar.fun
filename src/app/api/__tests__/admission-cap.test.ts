@@ -49,7 +49,7 @@ describe("POST /api/admin/wars/[id]/cap", () => {
   });
 
   it("accepts a cap the palette could never have expressed", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
 
     const response = await post(war.id, { maxTokens: 60 });
 
@@ -58,7 +58,7 @@ describe("POST /api/admin/wars/[id]/cap", () => {
   });
 
   it("refuses a cap past what one byte can name", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
 
     // 255 is the ceiling and it is arithmetic: the territory layer names an
     // owner in one byte and reserves 0 for unpainted.
@@ -69,7 +69,7 @@ describe("POST /api/admin/wars/[id]/cap", () => {
   });
 
   it("lowers the cap without evicting anybody already seated", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     await makeToken(war.id, 1);
     await makeToken(war.id, 2);
     await makeToken(war.id, 3);
@@ -94,7 +94,7 @@ describe("POST /api/admin/wars/[id]/cap", () => {
   });
 
   it("refuses when the admin guard refuses", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     guard.ok = false;
 
     const response = await post(war.id, { maxTokens: 60 });

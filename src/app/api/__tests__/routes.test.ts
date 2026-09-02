@@ -103,7 +103,7 @@ describe("GET /api/canvas", () => {
   // build real fixtures get their own ceiling rather than raising the suite
   // default for every test in the file.
   it("returns the board as bytes with the sequence in a header", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 7);
 
     const painted = await paintRoute(
@@ -113,12 +113,15 @@ describe("GET /api/canvas", () => {
 
     const response = await canvasRoute(get(`/api/canvas?war=${war.slug}`));
     expect(response.headers.get("content-type")).toBe("application/octet-stream");
-    expect(response.headers.get("x-canvas-width")).toBe("8");
+    // The header reports the WAR's width, so the expectation reads it from
+    // the war. "8" and 64 were the fixture's old board written out again, and
+    // an assertion that restates a fixture cannot notice the fixture changing.
+    expect(response.headers.get("x-canvas-width")).toBe(String(war.width));
     expect(response.headers.get("x-canvas-seq")).toBe("1");
 
     const bytes = new Uint8Array(await response.arrayBuffer());
-    expect(bytes).toHaveLength(64);
-    expect(bytes[9]).toBe(7);
+    expect(bytes).toHaveLength(war.width * war.height);
+    expect(bytes[1 * war.width + 1]).toBe(7);
   });
 
   it("404s for a war that does not exist", async () => {
@@ -128,7 +131,7 @@ describe("GET /api/canvas", () => {
 
 describe("GET /api/diff", () => {
   it("returns changes after the given sequence", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
     await paintRoute(
       post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }, await painter()),
@@ -145,7 +148,7 @@ describe("GET /api/diff", () => {
   });
 
   it("serves owners rather than colours on the token layer", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
     await paintRoute(
       post("/api/paint", { warSlug: war.slug, x: 0, y: 0, tokenId: token, colourSlot: PAINT_COLOUR }, await painter()),
@@ -173,7 +176,7 @@ describe("GET /api/diff", () => {
 
 describe("POST /api/paint", () => {
   it("paints and answers with the new sequence", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 2);
 
     const response = await paintRoute(
@@ -182,7 +185,9 @@ describe("POST /api/paint", () => {
     expect(response.status).toBe(200);
     // The colour that comes back is the one the caller ASKED for, not the
     // one its token happens to hold (2). That difference is the whole change.
-    expect(await response.json()).toMatchObject({ seq: 1, idx: 35, colourSlot: PAINT_COLOUR });
+    expect(await response.json()).toMatchObject({
+      seq: 1, idx: 4 * war.width + 3, colourSlot: PAINT_COLOUR,
+    });
   });
 
   it("answers 429 with Retry-After inside the cooldown", { timeout: 20_000 }, async () => {
@@ -292,7 +297,7 @@ describe("GET /api/leaderboard", () => {
   // default on a real network hop, so this test gets its own timeout rather
   // than raising the suite default for everything else.
   it("ranks tokens by pixels currently owned", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const red = await makeToken(war.id, 1);
     const blue = await makeToken(war.id, 13);
 

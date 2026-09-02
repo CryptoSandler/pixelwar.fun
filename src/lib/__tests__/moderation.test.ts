@@ -45,7 +45,7 @@ const KEYS = { painterKey: "painter-mod", ipHash: "ip-mod", subnetKey: "subnet-m
 
 describe("bans", () => {
   it("stops a paint that would otherwise land", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
 
     const before = await paintPixel({ war, x: 0, y: 0, tokenId: token, colourSlot: 5, ...KEYS });
@@ -70,7 +70,7 @@ describe("bans", () => {
   });
 
   it("expires, rather than lasting forever by default", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     await banKey({
       keyType: "ip",
       key: "ip-expired",
@@ -144,7 +144,7 @@ describe("bans", () => {
 
 describe("pixel inspection", () => {
   it("names the current painter and admits it cannot name the earlier ones", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const alpha = await makeToken(war.id, 3);
     const beta = await makeToken(war.id, 9);
 
@@ -163,7 +163,7 @@ describe("pixel inspection", () => {
   });
 
   it("reports an unpainted cell as empty rather than as missing", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const found = await inspectPixel(war.id, 4, 4, 8);
 
     expect(found.current).toBeNull();
@@ -174,21 +174,29 @@ describe("pixel inspection", () => {
 
 describe("revert", () => {
   it("clears a rectangle and takes the counts down with it", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
-    // A 2x2 block at (1,1)..(2,2), plus one pixel outside it that must survive.
-    await paintRaw(war.id, 9, token, 5, 1);
-    await paintRaw(war.id, 10, token, 5, 2);
-    await paintRaw(war.id, 17, token, 5, 3);
-    await paintRaw(war.id, 18, token, 5, 4);
-    await paintRaw(war.id, 63, token, 5, 5);
+    // A 2x2 block at (1,1)..(2,2), plus one pixel outside it that must
+    // survive. The indices are COMPUTED from the war's width: 9, 10, 17, 18
+    // and 63 were that same arithmetic against the fixture's old 8-wide
+    // board, and on any other width they name different pixels entirely —
+    // which is exactly how this test failed when the board grew.
+    const at = (x: number, y: number) => y * war.width + x;
+    await paintRaw(war.id, at(1, 1), token, 5, 1);
+    await paintRaw(war.id, at(2, 1), token, 5, 2);
+    await paintRaw(war.id, at(1, 2), token, 5, 3);
+    await paintRaw(war.id, at(2, 2), token, 5, 4);
+    const survivor = at(7, 7);
+    await paintRaw(war.id, survivor, token, 5, 5);
     await execute(`UPDATE token_pixel_counts SET owned = 5, placed = 5 WHERE war_id = $1`, [war.id]);
 
-    const result = await revertRegion({ warId: war.id, width: 8, height: 8, x0: 1, y0: 1, x1: 2, y1: 2 });
+    const result = await revertRegion({
+      warId: war.id, width: war.width, height: war.height, x0: 1, y0: 1, x1: 2, y1: 2,
+    });
 
     expect(result).toMatchObject({ ok: true, cleared: 4 });
     const left = await query<{ idx: number }>(`SELECT idx FROM pixels WHERE war_id = $1`, [war.id]);
-    expect(left.map((r) => r.idx)).toEqual([63]);
+    expect(left.map((r) => r.idx)).toEqual([survivor]);
 
     const counts = await queryOne<{ owned: number; placed: number }>(
       `SELECT owned, placed FROM token_pixel_counts WHERE war_id = $1`,
@@ -204,12 +212,12 @@ describe("revert", () => {
     // monotonic and gapless because a client holds a sequence and asks for
     // everything after it. A revert that reset it, or that left holes, would
     // strand every open tab.
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
     await paintRaw(war.id, 0, token, 5, 1);
     await paintRaw(war.id, 1, token, 5, 2);
 
-    const result = await revertRegion({ warId: war.id, width: 8, height: 8, x0: 0, y0: 0, x1: 1, y1: 0 });
+    const result = await revertRegion({ warId: war.id, width: 100, height: 100, x0: 0, y0: 0, x1: 1, y1: 0 });
     expect(result.ok).toBe(true);
 
     const head = await queryOne<{ last_seq: string }>(`SELECT last_seq FROM wars WHERE id = $1`, [war.id]);
@@ -234,10 +242,15 @@ describe("revert", () => {
   });
 
   it("refuses a region off the board and one that is too large", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
 
-    expect(await revertRegion({ warId: war.id, width: 8, height: 8, x0: 0, y0: 0, x1: 99, y1: 0 }))
-      .toMatchObject({ ok: false, reason: "out_of_bounds" });
+    // x1 is the first column that does NOT exist. Naming it as `war.width`
+    // rather than a literal is what keeps this off the board at any size.
+    expect(
+      await revertRegion({
+        warId: war.id, width: war.width, height: war.height, x0: 0, y0: 0, x1: war.width, y1: 0,
+      }),
+    ).toMatchObject({ ok: false, reason: "out_of_bounds" });
 
     const big = Math.ceil(Math.sqrt(MAX_REVERT_CELLS)) + 10;
     expect(
@@ -246,15 +259,15 @@ describe("revert", () => {
   });
 
   it("is a no-op on an already empty region", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
-    const result = await revertRegion({ warId: war.id, width: 8, height: 8, x0: 0, y0: 0, x1: 3, y1: 3 });
+    const war = await makeWar({ width: 100, height: 100 });
+    const result = await revertRegion({ warId: war.id, width: 100, height: 100, x0: 0, y0: 0, x1: 3, y1: 3 });
     expect(result).toMatchObject({ ok: true, cleared: 0 });
   });
 });
 
 describe("the kill switch", () => {
   it("ends a live war and stops the next paint dead", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
 
     expect(await paintPixel({ war, x: 0, y: 0, tokenId: token, colourSlot: 5, ...KEYS })).toMatchObject({ ok: true });
@@ -277,7 +290,7 @@ describe("the kill switch", () => {
   });
 
   it("moves the clock with the status, so the screen cannot argue with itself", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     await endWarNow(war.id);
 
     const ended = await warById(war.id);
@@ -289,7 +302,7 @@ describe("the kill switch", () => {
   });
 
   it("refuses a war that is not live", { timeout: 30_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, status: "scheduled" });
+    const war = await makeWar({ width: 100, height: 100, status: "scheduled" });
     expect(await endWarNow(war.id)).toBe(false);
 
     const untouched = await warById(war.id);

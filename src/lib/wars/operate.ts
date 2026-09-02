@@ -18,6 +18,24 @@ import { advanceWar, REVIVE_HORIZON_DAYS, reviveWar, warById, type War } from ".
  * at a terminal. That is the difference between a product and a demo.
  */
 
+/**
+ * How big a board may be, a side.
+ *
+ * MIRRORED BY A CHECK IN MIGRATION 018, deliberately. The constraint is what
+ * makes the bound true of every row however it was written — a seed script, a
+ * psql session, a future route. These constants are what let the application
+ * refuse in words before Postgres refuses in its own.
+ *
+ * The floor is legibility: below 100 a side there is not enough board for a
+ * community to draw something it recognises. The ceiling is arithmetic about
+ * bytes rather than taste — `/api/canvas` serves one byte per pixel, so a
+ * 1000×1000 board is a megabyte per spectator per poll, twenty-five times what
+ * 200×200 costs. See `docs/operations.md`.
+ */
+export const MIN_BOARD_SIDE = 100;
+export const MAX_BOARD_SIDE = 1000;
+export const DEFAULT_BOARD_SIDE = 200;
+
 export type CreateWarInput = {
   slug: string;
   title: string;
@@ -73,15 +91,27 @@ export async function createWar(input: CreateWarInput): Promise<OperateResult<Wa
     return { ok: false, reason: "bad_window", message: "A war has to end after it starts." };
   }
   const maxTokens = input.maxTokens ?? 24;
+  const width = input.width ?? DEFAULT_BOARD_SIDE;
+  const height = input.height ?? DEFAULT_BOARD_SIDE;
+  const sideOk = (n: number) =>
+    Number.isInteger(n) && n >= MIN_BOARD_SIDE && n <= MAX_BOARD_SIDE;
   if (
     input.entryPriceLamports <= 0n ||
     !Number.isInteger(input.cooldownSeconds) || input.cooldownSeconds < 1 || input.cooldownSeconds > 3600 ||
-    !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > MAX_TOKEN_SLOT
+    !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > MAX_TOKEN_SLOT ||
+    // Checked HERE as well as by the CHECK migration 018 adds, and neither is
+    // redundant: the constraint is what makes the bound true of every row
+    // whatever writes it, and this is what turns a violation into a named
+    // refusal an operator can read instead of a 500 carrying Postgres's own
+    // sentence about a constraint they have never heard of.
+    !sideOk(width) || !sideOk(height)
   ) {
     return {
       ok: false,
       reason: "bad_numbers",
-      message: `Entry price above zero, cooldown 1–3600 seconds, cap 1–${MAX_TOKEN_SLOT}.`,
+      message:
+        `Entry price above zero, cooldown 1–3600 seconds, cap 1–${MAX_TOKEN_SLOT}, ` +
+        `board ${MIN_BOARD_SIDE}–${MAX_BOARD_SIDE} a side.`,
     };
   }
 
@@ -97,7 +127,7 @@ export async function createWar(input: CreateWarInput): Promise<OperateResult<Wa
      VALUES ($1, $2, $3, 'scheduled', $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       id, slug, input.title.trim() || slug,
-      input.width ?? 200, input.height ?? 200, maxTokens,
+      width, height, maxTokens,
       // A placeholder for a column that is still NOT NULL and still refuses
       // zero. Nothing prices anything off it; see migration 015.
       1,

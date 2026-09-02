@@ -131,7 +131,7 @@ async function orderFixture(options: {
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
                        entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1,$1,'Fixture war',$2,8,8,$3,25,25000000,30, now() - interval '1 hour',
+     VALUES ($1,$1,'Fixture war',$2,100, 100,$3,25,25000000,30, now() - interval '1 hour',
              now() + ($4 || ' minutes')::interval)`,
     [warId, options.warStatus ?? "live", options.maxTokens ?? 24, options.warEndsAt ?? "60"],
   );

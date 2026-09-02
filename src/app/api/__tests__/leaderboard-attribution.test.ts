@@ -42,7 +42,7 @@ describe("leaderboard attribution under a free palette", () => {
     "credits the painting token, not the token whose flag colour was used",
     { timeout: 30_000 },
     async () => {
-      const war = await makeWar({ width: 8, height: 8 });
+      const war = await makeWar({ width: 100, height: 100 });
       const alpha = await makeToken(war.id, 3);
       const beta = await makeToken(war.id, 9);
 
@@ -70,7 +70,7 @@ describe("leaderboard attribution under a free palette", () => {
     "keeps two tokens apart even when they paint the identical colour",
     { timeout: 30_000 },
     async () => {
-      const war = await makeWar({ width: 8, height: 8 });
+      const war = await makeWar({ width: 100, height: 100 });
       const alpha = await makeToken(war.id, 3);
       const beta = await makeToken(war.id, 9);
 
@@ -101,7 +101,7 @@ describe("leaderboard attribution under a free palette", () => {
     "moves ownership when a pixel is overpainted by another token in any colour",
     { timeout: 30_000 },
     async () => {
-      const war = await makeWar({ width: 8, height: 8 });
+      const war = await makeWar({ width: 100, height: 100 });
       const alpha = await makeToken(war.id, 3);
       const beta = await makeToken(war.id, 9);
 

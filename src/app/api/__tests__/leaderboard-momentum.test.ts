@@ -36,7 +36,7 @@ let red: string;
 let blue: string;
 
 beforeEach(async () => {
-  war = await makeWar({ width: 8, height: 8 });
+  war = await makeWar({ width: 100, height: 100 });
   red = await makeToken(war.id, 1);
   blue = await makeToken(war.id, 2);
   await execute(`UPDATE war_tokens SET logo_url = $2 WHERE id = $1`, [red, LOGO]);

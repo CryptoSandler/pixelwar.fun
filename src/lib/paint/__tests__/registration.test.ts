@@ -271,7 +271,7 @@ describe("a payment signature is not a credential", () => {
     expect((await query(`SELECT 1 FROM painter_wallets`)).length).toBe(0);
 
     // And the attacker cannot paint with it.
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 5);
     expect(
       await paintPixel({
@@ -304,7 +304,7 @@ describe("a payment signature is not a credential", () => {
 
 describe("the paint gate", () => {
   it("refuses a painter with no registered wallet", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 5);
 
     const result = await paintPixel({
@@ -320,7 +320,7 @@ describe("the paint gate", () => {
   });
 
   it("lets the same painter paint once registered", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 5);
     const input = {
       war, x: 1, y: 1, tokenId: token, colourSlot: 9,
@@ -338,7 +338,7 @@ describe("the paint gate", () => {
     // The registration fee is the sybil price, so a ban has to bite the thing
     // that was paid for. Otherwise a ban is a ceremony: clear the cookie,
     // re-link the same wallet, carry on.
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 5);
     const wallet = await registerPainter("banned-painter");
     await banKey({ keyType: "wallet", key: wallet, reason: null, actor: "admin", expiresAt: null });

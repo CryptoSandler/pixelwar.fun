@@ -32,7 +32,7 @@ async function war(): Promise<string> {
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
                        entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, 24, 25, 25000000, 30, $2, $3)`,
+     VALUES ($1, $1, 'Fixture war', 'live', 100, 100, 24, 25, 25000000, 30, $2, $3)`,
     [id, new Date(Date.now() - 3_600_000), new Date(Date.now() + 3_600_000)],
   );
   return id;

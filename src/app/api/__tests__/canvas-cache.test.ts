@@ -24,7 +24,7 @@ const { GET: canvasRoute } = await import("../canvas/route");
  */
 describe("the cache ceiling on an ended war", () => {
   async function boardResponse(status: "live" | "ended") {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
     await paintRaw(war.id, 0, token, 5, 1);
     if (status === "ended") {

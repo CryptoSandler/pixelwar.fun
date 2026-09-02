@@ -268,6 +268,45 @@ reflows: it is a fixed-ratio square and everything else yields to it. Below
 960px the rail collapses to a sheet over the board rather than squeezing it —
 **the board's size is never the thing that gives.**
 
+### The chrome budget, measured
+
+**Measured 2026-09-02** with `scripts/board-share.mjs`, against a live war, as
+a share of the viewport. `board-share.test.ts` guards the mechanisms; the
+script re-derives the numbers.
+
+| Viewport | Board before | **Board after** | Header | Rail | Paint bar |
+| --- | --- | --- | --- | --- | --- |
+| 390×844 | 65.9% | **65.9%** | 7.2% | sheet | 10.1% |
+| 1440×900 | 57.5% | **61.3%** | 6.6% | 18.2% | 4.2% |
+| 1920×1080 | 65.2% | **68.6%** | 5.5% | 13.8% | 3.7% |
+| 2560×1440 | 73.2% | **75.9%** | 4.1% | 10.5% | 2.9% |
+
+**The board must not fall below its "after" figure at any of these
+viewports.** 1440×900 is the tightest and is the one to watch: it is the only
+common desktop size where the 280px rail is a large fraction of the width.
+
+**THE DEFECT THIS FOUND, AND IT IS THE REASON THE SECTION EXISTS.** The rule
+above — "the board never reflows" — was false in the most ordinary case.
+Measured, the board **gave 43px of height at 1440×900 and 44px at 390×844 the
+moment a status line appeared**, and the status line that appears most often
+is the cooldown refusal: the single most common answer this application gives
+a painter. The board was reflowing on nearly every interaction.
+
+**The status line is therefore an overlay inside the board frame**, absolute
+and `pointer-events-none`, not a block beneath it. It costs no height when
+absent and none when present.
+
+**Reserving its height was tried first and was worse**, which is worth
+recording because it is the obvious fix. An always-present invisible slot
+cannot reflow, but it charges every viewport for a line that is usually
+absent: measured, it took a phone from 65.9% to **61.1%**, permanently, to
+prevent a shift that only sometimes happened.
+
+**Where there is width to spare the paint bar is a ROW, not a column**, which
+is the board gaining the height the chrome frees. That is why the desktop
+figures rise while the phone's stays put — a phone has no spare width, so
+nothing there changes.
+
 **Reference renders:** [c-cabinet.png](docs/design/c-cabinet.png) is this
 direction. [a-instrument.png](docs/design/a-instrument.png) and
 [b-workshop.png](docs/design/b-workshop.png) are the two rejected alternatives,

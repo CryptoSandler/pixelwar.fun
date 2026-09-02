@@ -58,7 +58,7 @@ async function sworn(warId: string, warSlug: string, tokenId: string, painterKey
 
 describe("banning a wallet", () => {
   it("stops a sworn painter from painting", { timeout: 40_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const token = await makeToken(war.id, 3);
     const keys = { ipHash: "ip-wb1", subnetKey: "sn-wb1" };
 
@@ -80,7 +80,7 @@ describe("banning a wallet", () => {
   });
 
   it("does not stop a painter who never swore that wallet", { timeout: 40_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const token = await makeToken(war.id, 3);
     const stranger = wallet();
 
@@ -99,7 +99,7 @@ describe("banning a wallet", () => {
   it("will not let a banned wallet swear itself back in", { timeout: 40_000 }, async () => {
     // Without this the ban is a ceremony: banning removes the badge, the
     // offender re-swears the same wallet and gets it back.
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const token = await makeToken(war.id, 3);
     const w = wallet();
 
@@ -122,7 +122,7 @@ describe("banning a wallet", () => {
   });
 
   it("lets it back in once the ban expires", { timeout: 40_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const token = await makeToken(war.id, 3);
     const w = wallet();
     await banKey({
@@ -141,7 +141,7 @@ describe("banning a wallet", () => {
   });
 
   it("hands the operator the wallet when inspecting a sworn painter's pixel", { timeout: 40_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const token = await makeToken(war.id, 3);
     await paintPixel({
       war, x: 2, y: 0, tokenId: token, colourSlot: 5,
@@ -157,7 +157,7 @@ describe("banning a wallet", () => {
   });
 
   it("reports no wallet for a recruit", { timeout: 40_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 1 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 1 });
     const token = await makeToken(war.id, 3);
     await paintPixel({
       war, x: 4, y: 0, tokenId: token, colourSlot: 5,

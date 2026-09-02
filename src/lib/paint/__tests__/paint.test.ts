@@ -50,18 +50,22 @@ describe("paintPixel", () => {
   // slower hop. This and the other slow tests in the file get their own
   // ceiling rather than raising the suite default for everything in it.
   it("paints, allocates sequence 1, and reports the cooldown", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8, cooldownSeconds: 30 });
+    const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 30 });
     const token = await makeToken(war.id, 5);
 
     const result = await paintPixel({ war, x: 2, y: 3, tokenId: token, ...KEYS });
 
-    expect(result).toMatchObject({ ok: true, seq: 1, idx: 26, colourSlot: PAINT_COLOUR });
+    // `idx` is `y * width + x`; 26 was that arithmetic done against the
+    // fixture's old 8-wide board and frozen as a literal.
+    expect(result).toMatchObject({
+      ok: true, seq: 1, idx: 3 * war.width + 2, colourSlot: PAINT_COLOUR,
+    });
     if (!result.ok) throw new Error("unreachable");
     expect(Date.parse(result.cooldownUntil)).toBeGreaterThan(Date.now());
   });
 
   it("records the pixel, the event, and the count together", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 5);
     await paintPixel({ war, x: 0, y: 0, tokenId: token, ...KEYS });
 
@@ -79,7 +83,7 @@ describe("paintPixel", () => {
   });
 
   it("moves ownership when one token paints over another", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const red = await makeToken(war.id, 1);
     const blue = await makeToken(war.id, 13);
 
@@ -185,7 +189,7 @@ describe("paintPixel", () => {
   );
 
   it("hands out a gapless sequence under concurrency", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 32, height: 32 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 5);
 
     // The eight painters below are made up on the spot, so they are not in
@@ -235,10 +239,15 @@ describe("paintPixel", () => {
   });
 
   it("refuses coordinates outside the board", async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 5);
 
-    for (const [x, y] of [[-1, 0], [0, -1], [8, 0], [0, 8], [1.5, 0]]) {
+    // The off-board coordinates are the war's own edges, not the literals 8
+    // and 8 — which were the fixture's old width written out again, and which
+    // became perfectly valid pixels the moment the board grew.
+    for (const [x, y] of [
+      [-1, 0], [0, -1], [war.width, 0], [0, war.height], [1.5, 0],
+    ]) {
       const result = await paintPixel({ war, x, y, tokenId: token, ...KEYS });
       expect(result).toMatchObject({ ok: false, reason: "out_of_bounds" });
     }
@@ -315,7 +324,7 @@ describe("paintPixel", () => {
       process.env.PAINT_SUBNET_WINDOW_SECONDS = "120";
 
       try {
-        const war = await makeWar({ width: 32, height: 32, cooldownSeconds: 5 });
+        const war = await makeWar({ width: 100, height: 100, cooldownSeconds: 5 });
         const token = await makeToken(war.id, 5);
 
         for (let i = 0; i < 5; i++) await registerPainter(`painter-${i}`);

@@ -90,7 +90,7 @@ describe("verifyWalletSignature", () => {
 
 describe("swearing", () => {
   async function setup() {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 3);
     const challenge = await issueOathChallenge({ warId: war.id, warSlug: war.slug, ticker: "T3" });
     return { war, token, challenge };
@@ -156,7 +156,7 @@ describe("swearing", () => {
 
   it("refuses a nonce issued for another war", { timeout: 30_000 }, async () => {
     const first = await setup();
-    const second = await makeWar({ width: 8, height: 8 });
+    const second = await makeWar({ width: 100, height: 100 });
     const otherToken = await makeToken(second.id, 9);
     const w = wallet();
 

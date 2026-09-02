@@ -151,7 +151,7 @@ describe("POST /api/register/link", () => {
 
 describe("POST /api/paint without a registration", () => {
   it("answers 402 and names the reason the screen acts on", { timeout: 20_000 }, async () => {
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 4);
 
     const response = await paintRoute(
@@ -165,7 +165,7 @@ describe("POST /api/paint without a registration", () => {
   it("answers 200 for the same request from a registered painter", { timeout: 20_000 }, async () => {
     // The control. Without it the 402 above would pass just as happily
     // against a route that refused every paint.
-    const war = await makeWar({ width: 8, height: 8 });
+    const war = await makeWar({ width: 100, height: 100 });
     const token = await makeToken(war.id, 4);
     const { cookie } = await registeredPainter();
 

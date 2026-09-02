@@ -173,6 +173,46 @@ which means it refuses paint. **What it costs to decide:** one product call on
 the revive horizon, after which the prune is ten lines beside two that already
 exist.
 
+## Board size is per war, and it does NOT move the write ceiling
+
+**A war's board is `wars.width` × `wars.height`, between 100 and 1000 a side,
+default 200. Changing it changes bandwidth and nothing else that matters.**
+
+**THE WRITE CEILING IS PER WAR, NOT PER PIXEL, AND A BIGGER BOARD DOES NOT
+RAISE IT.** Every paint takes one row lock on the `wars` row and holds it for
+five more round trips, so throughput is `1 / (5 × round-trip time)` — see "The
+write ceiling" below. Nothing in that sentence mentions area. A 1000×1000 war
+and a 200×200 war have the same ceiling, and it is the same lock. **The
+temptation this exists to refuse is "the board is bigger, so it can take more
+painters".** It cannot. What a bigger board buys is room for more art, not
+more paint per second; a war that outgrows its ceiling needs a second war, not
+a wider board, and that is the horizontal scaling the ceiling section
+describes.
+
+**WHAT DOES CHANGE IS BANDWIDTH, AND IT IS QUADRATIC IN THE SIDE.**
+`/api/canvas` serves one byte per pixel, to every spectator, on every poll:
+
+| Board | Bytes per canvas fetch | Against 200×200 |
+| --- | --- | --- |
+| 200×200 | 40 KB | 1× |
+| 400×400 | 160 KB | 4× |
+| 1000×1000 | 1 MB | **25×** |
+
+And there is a second-order effect worth knowing before choosing 1000.
+`DIFF_MAX_CHANGES` is 8000, and past it a client is told to resync — to refetch
+the whole board. A bigger board takes more paint per minute, so it crosses that
+threshold more often, **and each crossing costs 25× more**. The cost is worse
+than the area suggests.
+
+**Why the bound is a CHECK and the token cap is not.** The token cap comes from
+the length of a colour list, which is taste, and lives here as a rule an
+operator can break. These are not taste: below 100 a side there is not enough
+board to draw something recognisable, and above 1000 a single response is a
+megabyte per spectator per poll — a denial of service an operator performs on
+themselves. A ceiling that is arithmetic about bytes belongs in the schema.
+Migration 018 has it; `createWar` refuses out-of-range sides by name first, so
+an operator reads a sentence rather than a Postgres constraint error.
+
 ## Ban terms: how long is a ban, by default
 
 **The admin panel offers a fixed term (24 hours) and never writes a ban with

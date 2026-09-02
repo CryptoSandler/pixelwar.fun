@@ -82,7 +82,7 @@ async function makeWar(overrides: Partial<{ maxTokens: number; entryPriceUsd: nu
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
                         entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', 'live', 8, 8, $2, $3, 25000000, 30,
+     VALUES ($1, $1, 'Fixture war', 'live', 100, 100, $2, $3, 25000000, 30,
              now() - interval '1 hour', now() + interval '1 hour')`,
     [id, overrides.maxTokens ?? 24, overrides.entryPriceUsd ?? 25],
   );

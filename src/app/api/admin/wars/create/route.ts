@@ -26,7 +26,7 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: "Body must be JSON" }, { status: 400, headers: NO_STORE });
   }
 
-  const { slug, title, entryPriceSol, cooldownSeconds, startsAt, endsAt, maxTokens } =
+  const { slug, title, entryPriceSol, cooldownSeconds, startsAt, endsAt, maxTokens, width, height } =
     (body ?? {}) as Record<string, unknown>;
 
   if (
@@ -67,6 +67,14 @@ export async function POST(request: Request): Promise<Response> {
     startsAt: opens,
     endsAt: closes,
     maxTokens: typeof maxTokens === "number" ? maxTokens : undefined,
+    // Board size, optional and defaulted by `createWar`. Passed through
+    // rather than validated here, for the reason the paint route gives about
+    // `colourSlot`: the bound belongs at the boundary that touches the
+    // database, and a second copy of it here is a second thing to keep in
+    // step. `createWar` refuses out-of-range sides by name, and migration
+    // 018's CHECK is what makes the bound true of rows this route never saw.
+    width: typeof width === "number" ? width : undefined,
+    height: typeof height === "number" ? height : undefined,
   });
 
   if (!result.ok) {

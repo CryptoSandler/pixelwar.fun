@@ -4,6 +4,7 @@ import { base58Encode } from "../../base58";
 import { issuePainter, PAINTER_COOKIE } from "../../paint/painter";
 import { warById } from "../../wars/lifecycle";
 import type { War } from "../../wars/lifecycle";
+import { MIN_BOARD_SIDE } from "../../wars/operate";
 
 export async function makeWar(overrides: Partial<{ width: number; height: number; cooldownSeconds: number; status: string; startsAt: Date; endsAt: Date }> = {}): Promise<War> {
   const id = randomUUID();
@@ -13,8 +14,14 @@ export async function makeWar(overrides: Partial<{ width: number; height: number
     [
       id,
       overrides.status ?? "live",
-      overrides.width ?? 8,
-      overrides.height ?? 8,
+      // MIN_BOARD_SIDE, not 8. Migration 018 bounds a board to 100-1000 a
+      // side, and fixtures are rows like any other. The old 8x8 was chosen so
+      // coordinate assertions stayed readable, and every one of them uses
+      // coordinates well inside 100 — so the floor costs those tests nothing
+      // and `canvasBytes` allocates 10,000 bytes instead of 64, which is
+      // nothing either.
+      overrides.width ?? MIN_BOARD_SIDE,
+      overrides.height ?? MIN_BOARD_SIDE,
       overrides.cooldownSeconds ?? 30,
       overrides.startsAt ?? new Date(Date.now() - 3_600_000),
       overrides.endsAt ?? new Date(Date.now() + 3_600_000),

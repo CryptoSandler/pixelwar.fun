@@ -49,7 +49,7 @@ async function makeWar(
   await execute(
     `INSERT INTO wars (id, slug, title, status, width, height, max_tokens,
                         entry_price_usd, entry_price_sol, cooldown_seconds, starts_at, ends_at)
-     VALUES ($1, $1, 'Fixture war', $2, 8, 8, $3, 25, 25000000, 30, $4, $5)`,
+     VALUES ($1, $1, 'Fixture war', $2, 100, 100, $3, 25, 25000000, 30, $4, $5)`,
     [
       id,
       overrides.status ?? "live",
