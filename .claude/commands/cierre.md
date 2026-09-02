@@ -318,11 +318,13 @@ forgettable:
 - **The project skips the build itself**, for whoever forgets — every project on the team
   carries an Ignored Build Step set 2026-09-02:
 
-      git diff --quiet HEAD^ HEAD -- ":(exclude)docs" ":(exclude).claude"
+      git diff --quiet HEAD^ HEAD -- ":(exclude)docs" ":(exclude).claude" ":(exclude,glob)*.md"
 
-  Exit 0 skips. A missing `HEAD^` builds, which is the safe direction. It covers `docs/` and
-  `.claude/` only: a root-level `DESIGN.md` or `DECISIONES.md` still builds, and `[vercel
-  skip]` is what covers those.
+  Exit 0 skips. A missing `HEAD^` builds, which is the safe direction. `,glob` is
+  load-bearing: without it `*` matches `/` and the pattern would exclude every `.md` at every
+  depth instead of the repository's root-level ones. Verified — `9c1518c` (DECISIONES.md +
+  docs/padron.md) SKIP, `.claude/`-only SKIP, a commit touching `src/` BUILD. A `.md` living
+  under `src/` or `e2e/` still builds; `[vercel skip]` covers that by hand.
 - **One push per batch, never one per commit.** Ten commits pushed together are one
   deployment; pushed one at a time they are ten. Group the commits, run the gates, push once
   at the end.
